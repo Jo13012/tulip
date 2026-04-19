@@ -281,14 +281,17 @@ function SessionDetail({ id }: { id: string }) {
           <div className="px-4 py-2.5 border-b border-white/[0.05] bg-white/[0.015]">
             <span className="text-[9px] font-semibold uppercase tracking-widest text-white/20">Recent Logs</span>
           </div>
-          <div className="max-h-56 overflow-y-auto font-mono text-[10px] p-3 space-y-0.5">
-            {s.logs.slice(-80).reverse().map((l: any, i: number) => (
+          <div className="max-h-96 overflow-y-auto font-mono text-[10px] p-3 space-y-0.5">
+            {s.logs.slice(-200).reverse().map((l: any, i: number) => (
               <div key={i} className={`flex gap-2 ${
                 l.level === 'ERROR'   ? 'text-red-400' :
                 l.level === 'WARN'    ? 'text-amber-400' :
                 l.level === 'SUCCESS' ? 'text-emerald-400' : 'text-white/30'
               }`}>
                 <span className="text-white/15 flex-shrink-0 w-16">{l.timestamp?.slice(11, 19)}</span>
+                {l.repeat > 1 && (
+                  <span className="flex-shrink-0 text-white/20 bg-white/[0.06] px-1 rounded">×{l.repeat}</span>
+                )}
                 <span className="break-all">{l.message}</span>
               </div>
             ))}
