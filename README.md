@@ -679,35 +679,42 @@ sudo journalctl -u polymarket-rust -f
 
 ---
 
-## 6. Deploying Updates (with live users)
+## 6. Deploying Updates
 
-### Push code
+### Local → GitHub
 
 ```bash
-# Local: develop on dev
+# Work on dev
 git checkout dev
-# ... make changes, test locally ...
 git add -A && git commit -m "feat: xxx"
 git push origin dev
 
-# Merge to main when ready
+# When ready for prod
 git checkout main
 git merge dev
 git push origin main
 ```
 
-### Pull on VPS
+### Send secrets to VPS (only when keys change)
+
+```bash
+scp backend/.env.prod     polybot@YOUR_VPS_IP:~/tulip/backend/.env
+scp frontend/.env.prod    polybot@YOUR_VPS_IP:~/tulip/frontend/.env
+scp polymarket_rust_service/.env.prod  polybot@YOUR_VPS_IP:~/tulip/polymarket_rust_service/.env
+```
+
+### Pull and restart on VPS
 
 ```bash
 ssh polybot@YOUR_VPS_IP
-cd ~/polybot/multi_user_bot
+cd ~/tulip
 git pull origin main
 ```
 
 Then restart only what changed:
 
 ```bash
-# Backend Python change
+# Backend change
 sudo systemctl restart polybot-backend
 
 # Rust change
@@ -715,20 +722,19 @@ cd polymarket_rust_service && cargo build --release && cd ..
 sudo systemctl restart polymarket-rust
 
 # Frontend change
-cd frontend && npm run build && cd ..
+cd frontend && npm run build
 # Nginx serves new dist/ immediately — no restart needed
 ```
 
 ### With live sessions running
 
-Backend restart = **automatic session recovery** (recovery service reloads all `status=running` sessions from DB). Downtime ~3–5s.
+Backend restart = **automatic session recovery** (~3–5s downtime).
 
-Checklist before restart:
 1. Check active sessions: `GET /api/v1/admin/sessions`
-2. Optional: set `global_pause=true` via admin panel before restart
+2. Optional: `global_pause=true` via admin panel
 3. `sudo systemctl restart polybot-backend`
-4. After restart: check `health_state` of sessions via admin panel
-5. If a session stays `degraded`: `POST /api/v1/admin/sessions/{id}/recovery/retry`
+4. Check `health_state` of sessions after restart
+5. If session stays `degraded`: `POST /api/v1/admin/sessions/{id}/recovery/retry`
 6. Re-enable: `global_pause=false`
 
 ---
