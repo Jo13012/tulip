@@ -21,14 +21,12 @@ async def list_sessions(db: DbSession, admin: AdminUser, limit: int = 50, offset
     from app.db.models import SessionSnapshot
     from sqlalchemy import func as _func
 
-    sessions_q, snap_q = await asyncio.gather(
-        db.execute(select(DBSession).order_by(DBSession.created_at.desc()).limit(limit).offset(offset)),
-        db.execute(
-            select(SessionSnapshot.session_id, _func.max(SessionSnapshot.total_volume).label("max_vol"))
-            .group_by(SessionSnapshot.session_id)
-        ),
+    sessions_q = await db.execute(select(DBSession).order_by(DBSession.created_at.desc()).limit(limit).offset(offset))
+    sessions = sessions_q.scalars().all()
+    snap_q = await db.execute(
+        select(SessionSnapshot.session_id, _func.max(SessionSnapshot.total_volume).label("max_vol"))
+        .group_by(SessionSnapshot.session_id)
     )
-    sessions  = sessions_q.scalars().all()
     snap_vols = {row.session_id: float(row.max_vol or 0) for row in snap_q.all()}
 
     # Single registry snapshot — one lock acquisition
@@ -59,20 +57,18 @@ async def list_sessions(db: DbSession, admin: AdminUser, limit: int = 50, offset
 
 @router.get("/{session_id}")
 async def get_session(session_id: str, db: DbSession, admin: AdminUser):
-    session, slots_q, mh_q = await asyncio.gather(
-        db.get(DBSession, session_id),
-        db.execute(select(SessionSlot).where(SessionSlot.session_id == session_id)),
-        db.execute(
-            select(SessionSlotMarketHistory)
-            .join(SessionSlot)
-            .where(SessionSlot.session_id == session_id)
-            .order_by(SessionSlotMarketHistory.started_at.desc())
-        ),
-    )
+    session = await db.get(DBSession, session_id)
     if not session:
         raise HTTPException(404)
 
+    slots_q = await db.execute(select(SessionSlot).where(SessionSlot.session_id == session_id))
     slots = slots_q.scalars().all()
+    mh_q = await db.execute(
+        select(SessionSlotMarketHistory)
+        .join(SessionSlot)
+        .where(SessionSlot.session_id == session_id)
+        .order_by(SessionSlotMarketHistory.started_at.desc())
+    )
     all_mh = mh_q.scalars().all()
 
     # Group market history by slot id

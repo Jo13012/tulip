@@ -492,7 +492,7 @@ function Step3Funding({
         <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg border border-amber-400/20 bg-amber-500/5">
           <span className="text-[10px] text-amber-400/50 mt-0.5 flex-shrink-0">⚠</span>
           <p className="text-[10px] text-amber-300/60 leading-relaxed">
-            Minimum deposit: <strong>$20 USDC</strong> + {feeWalletEthWarn.toFixed(4)} ETH for gas.
+            Minimum deposit: <strong>$20 USDC</strong> + {feeWalletEthMin.toFixed(4)} ETH for gas.
           </p>
         </div>
 

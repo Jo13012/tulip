@@ -94,7 +94,7 @@ function useMarketImages(conditionIds: (string | null)[]): Record<string, string
     const missing = ids.filter(id => !(id in imgs))
     if (!missing.length) return
 
-    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8010'
+    const API_BASE = import.meta.env.VITE_API_URL
     Promise.all(
       missing.map(id =>
         fetch(`${API_BASE}/api/v1/user/strategy/market-image?conditionId=${encodeURIComponent(id)}`)

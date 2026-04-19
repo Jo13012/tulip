@@ -4,6 +4,7 @@
  * Tabs: Run | History | Profile | Settings
  */
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import { useAppStore } from '../store'
 import { api } from '../utils/api'
@@ -232,9 +233,9 @@ export default function UserDashboard({ user, onSignOut }: Props) {
         </div>
         <div className="flex items-center gap-3">
           {user.is_admin && (
-            <a href="/admin" className="text-[11px] text-white/25 hover:text-brand transition-colors">
+            <Link to="/admin" className="text-[11px] text-white/25 hover:text-brand transition-colors">
               admin {'->'}
-            </a>
+            </Link>
           )}
           <UserMenu
             user={user}

@@ -1,4 +1,4 @@
-const BASE = import.meta.env.VITE_API_URL || 'http://localhost:8010'
+const BASE = import.meta.env.VITE_API_URL
 
 let _getToken: () => Promise<string | null> = async () => null
 
