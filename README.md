@@ -66,7 +66,7 @@ backend/.venv/
 *.key
 ```
 
-Copy the `.env.example` files to `.env` and fill in secrets locally.
+Secrets are local only — never committed. Edit `.env` (dev) and `.env.prod` (prod) directly.
 
 ---
 
@@ -391,7 +391,7 @@ python -m venv .venv
 source .venv/bin/activate
 
 pip install -r requirements.txt
-cp .env.example .env
+# Fill in .env directly
 # Fill in .env (see variables below)
 uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload
 ```
@@ -437,7 +437,7 @@ BRIDGE_MIN_USDC=5.0
 
 ```bash
 cd polymarket_rust_service
-cp .env.example .env
+# Fill in .env directly
 # Fill in .env
 cargo run
 # First build: several minutes
@@ -459,7 +459,7 @@ PRIVY_APP_SECRET=
 ```bash
 cd frontend
 npm install
-cp .env.example .env
+# Fill in .env directly
 npm run dev
 ```
 
@@ -558,7 +558,7 @@ git checkout main
 
 ```bash
 cd ~/tulip/polymarket_rust_service
-cp .env.example .env
+# Fill in .env directly
 # Fill in .env with prod values
 cargo build --release
 ```
@@ -570,7 +570,7 @@ cd ~/tulip/backend
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
+# Fill in .env directly
 # Fill in .env with prod values (DATABASE_URL, all Privy keys, etc.)
 ```
 
@@ -579,7 +579,7 @@ cp .env.example .env
 ```bash
 cd ~/tulip/frontend
 npm install
-cp .env.example .env
+# Fill in .env directly
 # Fill in .env with prod values (VITE_API_URL=https://VOTRE_DOMAINE, etc.)
 npm run build
 # Output: dist/
@@ -641,7 +641,7 @@ sudo nano /etc/nginx/sites-available/tulip
 ```nginx
 server {
     listen 80;
-    server_name YOUR_DOMAIN;
+    server_name 95.179.180.246;
 
     root /home/tulip/tulip/frontend/dist;
     index index.html;
@@ -673,13 +673,13 @@ sudo nginx -t
 sudo systemctl reload nginx
 
 # SSL (Let's Encrypt)
-sudo certbot --nginx -d YOUR_DOMAIN
+sudo certbot --nginx -d 95.179.180.246
 ```
 
 ### 5.10 Verify
 
 ```bash
-curl https://YOUR_DOMAIN/api/v1/health
+curl https://95.179.180.246/api/v1/health
 sudo journalctl -u tulip-backend -f
 sudo journalctl -u polymarket-rust -f
 ```
@@ -705,15 +705,15 @@ git push origin main
 ### Send secrets to VPS (only when keys change)
 
 ```bash
-scp backend/.env.prod     tulip@YOUR_VPS_IP:~/tulip/backend/.env
-scp frontend/.env.prod    tulip@YOUR_VPS_IP:~/tulip/frontend/.env
-scp polymarket_rust_service/.env.prod  tulip@YOUR_VPS_IP:~/tulip/polymarket_rust_service/.env
+scp backend/.env.prod     tulip@95.179.180.246:~/tulip/backend/.env
+scp frontend/.env.prod    tulip@95.179.180.246:~/tulip/frontend/.env
+scp polymarket_rust_service/.env.prod  tulip@95.179.180.246:~/tulip/polymarket_rust_service/.env
 ```
 
 ### Pull and restart on VPS
 
 ```bash
-ssh tulip@YOUR_VPS_IP
+ssh tulip@95.179.180.246
 cd ~/tulip
 git pull origin main
 ```
