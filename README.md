@@ -1,4 +1,4 @@
-# Polybot — Multi-User Bot
+# Tulip — Multi-User Bot
 
 Prediction market maker bot — per-user sessions, slot-based strategy, admin controls.
 
@@ -13,11 +13,11 @@ multi_user_bot/
 └── polymarket_rust_service/   Rust/Axum CLOB engine  (port 8020)
 ```
 
-| Service        | Port | Role                                      |
-| -------------- | ---- | ----------------------------------------- |
-| Frontend       | 3010 | User + admin UI                           |
-| Python backend | 8010 | Auth, sessions, DB, orchestration         |
-| Rust service   | 8020 | Polymarket CLOB logic + order signing     |
+| Service        | Port | Role                                  |
+| -------------- | ---- | ------------------------------------- |
+| Frontend       | 3010 | User + admin UI                       |
+| Python backend | 8010 | Auth, sessions, DB, orchestration     |
+| Rust service   | 8020 | Polymarket CLOB logic + order signing |
 
 Auth: Privy only. Private keys never stored — all signing via Privy Server Wallets.
 
@@ -25,10 +25,10 @@ Auth: Privy only. Private keys never stored — all signing via Privy Server Wal
 
 ## Branch strategy
 
-| Branch | Purpose                                      |
-| ------ | -------------------------------------------- |
-| `main` | Production — deployed on Vultr VPS           |
-| `dev`  | Development — tested locally before merging  |
+| Branch   | Purpose                                      |
+| -------- | -------------------------------------------- |
+| `main` | Production — deployed on Vultr VPS          |
+| `dev`  | Development — tested locally before merging |
 
 Never push directly to `main`. Merge `dev → main` only when ready to deploy.
 
@@ -86,8 +86,8 @@ Copy the `.env.example` files to `.env` and fill in secrets locally.
 
 ## 2. Database — SQL Editor (Supabase or self-hosted Postgres)
 
-Create a project at [supabase.com](https://supabase.com), then paste in **SQL Editor → New query → Run**.  
-For self-hosted Postgres: `psql -U polybot -d polybot_prod -f schema.sql`
+Create a project at [supabase.com](https://supabase.com), then paste in **SQL Editor → New query → Run**.
+For self-hosted Postgres: `psql -U tulip -d tulip_prod -f schema.sql`
 
 ```sql
 -- ============================================================
@@ -356,7 +356,7 @@ CREATE INDEX IF NOT EXISTS ix_audit_entity ON audit_logs (entity_type, entity_id
 CREATE INDEX IF NOT EXISTS ix_audit_actor  ON audit_logs (actor_id);
 ```
 
-Get `DATABASE_URL` from Supabase → **Project Settings → Database → Connection string → URI**.  
+Get `DATABASE_URL` from Supabase → **Project Settings → Database → Connection string → URI**.
 Use port **6543** (session pooler) for asyncpg: `postgresql+asyncpg://...@...supabase.com:6543/postgres?ssl=require`
 
 ---
@@ -365,18 +365,18 @@ Use port **6543** (session pooler) for asyncpg: `postgresql+asyncpg://...@...sup
 
 ### Prerequisites
 
-| Tool          | Version     | Notes                                                    |
-| ------------- | ----------- | -------------------------------------------------------- |
-| Python        | 3.11+       | python.org                                               |
-| Node.js       | 18+         | nodejs.org                                               |
-| Rust + cargo  | stable      | rustup.rs — `stable-x86_64-pc-windows-msvc` on Windows  |
-| PostgreSQL    | 14+         | Supabase (recommended) or local                          |
+| Tool         | Version | Notes                                                    |
+| ------------ | ------- | -------------------------------------------------------- |
+| Python       | 3.11+   | python.org                                               |
+| Node.js      | 18+     | nodejs.org                                               |
+| Rust + cargo | stable  | rustup.rs —`stable-x86_64-pc-windows-msvc` on Windows |
+| PostgreSQL   | 14+     | Supabase (recommended) or local                          |
 
 ### Clone and branch setup
 
 ```bash
-git clone https://github.com/YOUR_USER/polybot.git
-cd polybot/multi_user_bot
+git clone https://github.com/Jo13012/tulip.git
+cd tulip
 git checkout dev   # always develop on dev
 ```
 
@@ -397,6 +397,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload
 ```
 
 `backend/.env` variables:
+
 ```env
 DATABASE_URL=postgresql+asyncpg://...
 HTTP_PORT=8010
@@ -443,6 +444,7 @@ cargo run
 ```
 
 `polymarket_rust_service/.env` variables:
+
 ```env
 POLY_RUST_HOST=127.0.0.1
 POLY_RUST_PORT=8020
@@ -462,6 +464,7 @@ npm run dev
 ```
 
 `frontend/.env` variables:
+
 ```env
 VITE_API_URL=http://localhost:8010
 VITE_WS_URL=ws://localhost:8010
@@ -511,9 +514,9 @@ apt update && apt upgrade -y
 apt install -y git curl build-essential postgresql postgresql-contrib nginx certbot python3-certbot-nginx python3.11 python3.11-venv
 
 # Dedicated user
-adduser polybot
-usermod -aG sudo polybot
-su - polybot
+adduser tulip
+usermod -aG sudo tulip
+su - tulip
 ```
 
 ### 5.2 Rust toolchain
@@ -528,23 +531,25 @@ source ~/.cargo/env
 ```bash
 sudo -u postgres psql
 ```
+
 ```sql
-CREATE USER polybot WITH PASSWORD 'STRONG_PASS_HERE';
-CREATE DATABASE polybot_prod OWNER polybot;
-GRANT ALL PRIVILEGES ON DATABASE polybot_prod TO polybot;
+CREATE USER tulip WITH PASSWORD 'STRONG_PASS_HERE';
+CREATE DATABASE tulip_prod OWNER tulip;
+GRANT ALL PRIVILEGES ON DATABASE tulip_prod TO tulip;
 \q
 ```
+
 ```bash
 # Run schema
-psql -U polybot -d polybot_prod < schema.sql
+psql -U tulip -d tulip_prod < schema.sql
 ```
 
 ### 5.4 Clone repo
 
 ```bash
 cd ~
-git clone https://github.com/YOUR_USER/polybot.git
-cd polybot/multi_user_bot
+git clone https://github.com/Jo13012/tulip.git
+cd tulip
 # prod always runs main
 git checkout main
 ```
@@ -552,7 +557,7 @@ git checkout main
 ### 5.5 Build Rust service
 
 ```bash
-cd ~/polybot/multi_user_bot/polymarket_rust_service
+cd ~/tulip/polymarket_rust_service
 cp .env.example .env
 # Fill in .env with prod values
 cargo build --release
@@ -561,7 +566,7 @@ cargo build --release
 ### 5.6 Backend
 
 ```bash
-cd ~/polybot/multi_user_bot/backend
+cd ~/tulip/backend
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -572,7 +577,7 @@ cp .env.example .env
 ### 5.7 Frontend — build static
 
 ```bash
-cd ~/polybot/multi_user_bot/frontend
+cd ~/tulip/frontend
 npm install
 cp .env.example .env
 # Fill in .env with prod values (VITE_API_URL=https://VOTRE_DOMAINE, etc.)
@@ -583,36 +588,38 @@ npm run build
 ### 5.8 Systemd services
 
 **`/etc/systemd/system/polymarket-rust.service`:**
+
 ```ini
 [Unit]
 Description=Polymarket Rust Service
 After=network.target
 
 [Service]
-User=polybot
-WorkingDirectory=/home/polybot/polybot/multi_user_bot/polymarket_rust_service
-ExecStart=/home/polybot/polybot/multi_user_bot/polymarket_rust_service/target/release/polymarket_rust_service
+User=tulip
+WorkingDirectory=/home/tulip/tulip/polymarket_rust_service
+ExecStart=/home/tulip/tulip/polymarket_rust_service/target/release/polymarket_rust_service
 Restart=always
 RestartSec=5
-EnvironmentFile=/home/polybot/polybot/multi_user_bot/polymarket_rust_service/.env
+EnvironmentFile=/home/tulip/tulip/polymarket_rust_service/.env
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-**`/etc/systemd/system/polybot-backend.service`:**
+**`/etc/systemd/system/tulip-backend.service`:**
+
 ```ini
 [Unit]
-Description=Polybot FastAPI Backend
+Description=Tulip FastAPI Backend
 After=network.target postgresql.service polymarket-rust.service
 
 [Service]
-User=polybot
-WorkingDirectory=/home/polybot/polybot/multi_user_bot/backend
-ExecStart=/home/polybot/polybot/multi_user_bot/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8010 --workers 1
+User=tulip
+WorkingDirectory=/home/tulip/tulip/backend
+ExecStart=/home/tulip/tulip/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8010 --workers 1
 Restart=always
 RestartSec=5
-EnvironmentFile=/home/polybot/polybot/multi_user_bot/backend/.env
+EnvironmentFile=/home/tulip/tulip/backend/.env
 
 [Install]
 WantedBy=multi-user.target
@@ -620,15 +627,15 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable polymarket-rust polybot-backend
-sudo systemctl start polymarket-rust polybot-backend
-sudo systemctl status polymarket-rust polybot-backend
+sudo systemctl enable polymarket-rust tulip-backend
+sudo systemctl start polymarket-rust tulip-backend
+sudo systemctl status polymarket-rust tulip-backend
 ```
 
 ### 5.9 Nginx
 
 ```bash
-sudo nano /etc/nginx/sites-available/polybot
+sudo nano /etc/nginx/sites-available/tulip
 ```
 
 ```nginx
@@ -636,7 +643,7 @@ server {
     listen 80;
     server_name YOUR_DOMAIN;
 
-    root /home/polybot/polybot/multi_user_bot/frontend/dist;
+    root /home/tulip/tulip/frontend/dist;
     index index.html;
 
     location / {
@@ -661,7 +668,7 @@ server {
 ```
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/polybot /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/tulip /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl reload nginx
 
@@ -673,7 +680,7 @@ sudo certbot --nginx -d YOUR_DOMAIN
 
 ```bash
 curl https://YOUR_DOMAIN/api/v1/health
-sudo journalctl -u polybot-backend -f
+sudo journalctl -u tulip-backend -f
 sudo journalctl -u polymarket-rust -f
 ```
 
@@ -698,15 +705,15 @@ git push origin main
 ### Send secrets to VPS (only when keys change)
 
 ```bash
-scp backend/.env.prod     polybot@YOUR_VPS_IP:~/tulip/backend/.env
-scp frontend/.env.prod    polybot@YOUR_VPS_IP:~/tulip/frontend/.env
-scp polymarket_rust_service/.env.prod  polybot@YOUR_VPS_IP:~/tulip/polymarket_rust_service/.env
+scp backend/.env.prod     tulip@YOUR_VPS_IP:~/tulip/backend/.env
+scp frontend/.env.prod    tulip@YOUR_VPS_IP:~/tulip/frontend/.env
+scp polymarket_rust_service/.env.prod  tulip@YOUR_VPS_IP:~/tulip/polymarket_rust_service/.env
 ```
 
 ### Pull and restart on VPS
 
 ```bash
-ssh polybot@YOUR_VPS_IP
+ssh tulip@YOUR_VPS_IP
 cd ~/tulip
 git pull origin main
 ```
@@ -715,7 +722,7 @@ Then restart only what changed:
 
 ```bash
 # Backend change
-sudo systemctl restart polybot-backend
+sudo systemctl restart tulip-backend
 
 # Rust change
 cd polymarket_rust_service && cargo build --release && cd ..
@@ -732,7 +739,7 @@ Backend restart = **automatic session recovery** (~3–5s downtime).
 
 1. Check active sessions: `GET /api/v1/admin/sessions`
 2. Optional: `global_pause=true` via admin panel
-3. `sudo systemctl restart polybot-backend`
+3. `sudo systemctl restart tulip-backend`
 4. Check `health_state` of sessions after restart
 5. If session stays `degraded`: `POST /api/v1/admin/sessions/{id}/recovery/retry`
 6. Re-enable: `global_pause=false`
