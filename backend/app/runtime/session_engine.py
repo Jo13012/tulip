@@ -421,11 +421,34 @@ class SessionEngine:
                 except Exception:
                     pass
             else:
-                # No external callback — write snapshot directly
                 try:
                     await self._write_final_snapshot()
                 except Exception:
                     pass
+            # Persist per-slot stats so recovery can restore them after restart
+            await self._persist_slot_stats()
+
+    async def _persist_slot_stats(self):
+        if not self._db_factory:
+            return
+        try:
+            from app.db.models import SessionSlot as DBSessionSlot
+            async with self._db_factory() as db:
+                for slot_id, slot in self._slot_runtimes.items():
+                    await db.execute(
+                        sa_update(DBSessionSlot)
+                        .where(DBSessionSlot.id == slot_id)
+                        .values(
+                            volume=round(slot._volume, 6),
+                            realized_pnl=round(slot._realized_pnl, 6),
+                            unrealized_pnl=round(slot._unrealized_pnl, 6),
+                            paid_fees=round(slot._paid_fees, 6),
+                            deployed_capital=round(slot.deployed_capital, 6),
+                        )
+                    )
+                await db.commit()
+        except Exception as e:
+            await self._log_session("WARN", f"_persist_slot_stats failed: {e}")
 
     # ── Slot callbacks ────────────────────────────────────────────────────────
 

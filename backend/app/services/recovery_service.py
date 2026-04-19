@@ -203,9 +203,13 @@ class RecoveryService:
         await session_registry.add(session_id, engine)
         await engine.start()
 
-        # Restore original started_at so uptime is correct after recovery
+        # Restore uptime: patch both started_at (wall clock) and _start_time (monotonic)
+        # so uptime_s is continuous across the restart.
         if session.started_at:
             engine.started_at = session.started_at
+            elapsed = (datetime.now(timezone.utc) - session.started_at).total_seconds()
+            import time as _time
+            engine._start_time = _time.monotonic() - max(0.0, elapsed)
 
         # Recover each slot
         for db_slot in db_slots:
@@ -269,12 +273,16 @@ class RecoveryService:
             await engine.add_slot(db_slot.id, db_slot.strategy_slot_id, None, 0.0)
             return
 
-        # Add slot (starts market loop)
+        # Add slot — but freeze entries until lots are injected to prevent
+        # the market loop from placing duplicate orders on its first pass.
         await engine.add_slot(db_slot.id, db_slot.strategy_slot_id, config, allocated)
 
         slot_runtime = engine.get_slot_runtime(db_slot.id)
         if not slot_runtime:
             return
+
+        # Freeze new entries during reconciliation
+        slot_runtime._stop_new_entries = True
 
         # ── Step 1: Reconcile DB lots against live exchange state ─────────────
         # live_orders keyed by order_id: includes all open orders on Poly right now.
@@ -517,7 +525,12 @@ class RecoveryService:
             slot_runtime._buy_orders[price] = oid
             slot_runtime._pending_buy_capital[oid] = size_usdc
 
-        # Re-enable entries (will be overridden by soft_stop() if session was stopping)
+        # Restore in-memory stats from DB so volume/pnl don't reset to 0
+        slot_runtime._volume       = float(db_slot.volume or 0.0)
+        slot_runtime._realized_pnl = float(db_slot.realized_pnl or 0.0)
+        slot_runtime._paid_fees    = float(db_slot.paid_fees or 0.0)
+
+        # Re-enable entries now that lots are injected
         slot_runtime._stop_new_entries = False
 
     async def _hard_stop_session(
