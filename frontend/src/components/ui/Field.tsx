@@ -49,9 +49,14 @@ export function AddressField({ value }: { value: string }) {
     })
   }
 
+  const short = value.slice(0, 6) + '…' + value.slice(-4)
+
   return (
     <div className="flex items-center gap-2 min-w-0 flex-1">
-      <span className="text-[11px] font-mono text-white/40 break-all leading-relaxed min-w-0 flex-1">{value}</span>
+      <span className="text-[11px] font-mono text-white/40 min-w-0 flex-1 truncate">
+        <span className="hidden sm:inline">{value}</span>
+        <span className="sm:hidden">{short}</span>
+      </span>
       <button
         onClick={copy}
         title="Copy"
