@@ -127,9 +127,11 @@ class SessionEngine:
         self._snapshot_task: Optional[asyncio.Task] = None
         self._last_arb_balance_check = 0.0  # monotonic timestamp of last Arbitrum balance RPC
 
-        # In-memory session log (ring buffer, 2000 entries)
+        # In-memory session log (ring buffer, 5000 entries)
         self._log_buffer: list[dict] = []
-        self._log_max = 2000
+        self._log_max = 5000
+        # Dedup: track last message per (level, session_slot_id) to collapse repeats
+        self._log_last: dict[str, tuple[str, int]] = {}  # key → (msg, count)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -627,11 +629,24 @@ class SessionEngine:
     # ── Log / broadcast helpers ───────────────────────────────────────────────
 
     async def _log_session(self, level: str, msg: str, session_slot_id: str = ""):
+        # Dedup: collapse repeated identical messages into "×N" suffix
+        dedup_key = f"{level}:{session_slot_id}"
+        prev_msg, prev_count = self._log_last.get(dedup_key, ("", 0))
+        if msg == prev_msg:
+            # Same message — update count on last entry instead of appending
+            self._log_last[dedup_key] = (msg, prev_count + 1)
+            if self._log_buffer:
+                self._log_buffer[-1]["repeat"] = prev_count + 1
+            return
+        # New message — flush any pending repeat count label, then append
+        self._log_last[dedup_key] = (msg, 1)
+
         entry = {
             "level": level,
             "message": msg,
             "session_slot_id": session_slot_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "repeat": 1,
         }
         self._log_buffer.append(entry)
         if len(self._log_buffer) > self._log_max:

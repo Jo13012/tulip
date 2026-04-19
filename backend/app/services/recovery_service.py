@@ -237,21 +237,13 @@ class RecoveryService:
         live_orders: dict,
         client: ExecutionClient,
     ):
-        """Reconstruct slot runtime from DB + live exchange state.
+        sid = db_slot.id[:8]
 
-        Reconciliation handles all events that may have occurred during downtime:
-          - BUY maker filled while down → create lot, post TP
-          - TP SELL filled while down  → close lot in DB, skip injection
-          - BUY order gone from Poly   → discard from tracking (no capital lock)
-          - Partial TP fill while down → adjust tokens/size before injecting
-          - 'selling' lot already sold → phantom-close and skip injection
-        """
         async with async_session_factory() as db:
             sv = None
             if db_slot.current_strategy_slot_version_id:
                 sv = await db.get(StrategySlotVersion, db_slot.current_strategy_slot_version_id)
 
-            # Load open/selling lots from DB
             lots_q = await db.execute(
                 select(DBLot).where(
                     DBLot.session_slot_id == db_slot.id,
@@ -261,6 +253,7 @@ class RecoveryService:
             db_lots = lots_q.scalars().all()
 
         if not sv or not sv.polymarket_url:
+            log.info("[recovery] slot=%s no market config → idle", sid)
             await engine.add_slot(db_slot.id, db_slot.strategy_slot_id, None, 0.0)
             return
 
@@ -270,41 +263,54 @@ class RecoveryService:
         config = await _build_slot_market_config(sv, lot_size)
 
         if not config:
+            log.info("[recovery] slot=%s config build failed → idle", sid)
             await engine.add_slot(db_slot.id, db_slot.strategy_slot_id, None, 0.0)
             return
 
-        # Add slot — but freeze entries until lots are injected to prevent
-        # the market loop from placing duplicate orders on its first pass.
-        await engine.add_slot(db_slot.id, db_slot.strategy_slot_id, config, allocated)
+        # token_id this slot trades — used to filter live_orders
+        slot_token_id = config.active_token_id
 
+        # ── What Poly sees for this slot's token ─────────────────────────────
+        # Filter live_orders to only orders for this slot's token_id
+        slot_live_orders = {
+            oid: o for oid, o in live_orders.items()
+            if o.get("asset_id") == slot_token_id or o.get("token_id") == slot_token_id
+        }
+        live_sell_oids: set[str] = {
+            oid for oid, o in slot_live_orders.items()
+            if (o.get("side") or "").upper() == "SELL"
+        }
+        live_buy_oids: set[str] = {
+            oid for oid, o in slot_live_orders.items()
+            if (o.get("side") or "").upper() == "BUY"
+        }
+
+        log.info(
+            "[recovery] slot=%s market=%s token=%s | DB lots=%d | Poly BUY orders=%d SELL orders=%d",
+            sid, sv.polymarket_url.split("/")[-1][:30], slot_token_id[:12] if slot_token_id else "?",
+            len(db_lots), len(live_buy_oids), len(live_sell_oids),
+        )
+
+        # Add slot — freeze entries until lots are injected
+        await engine.add_slot(db_slot.id, db_slot.strategy_slot_id, config, allocated)
         slot_runtime = engine.get_slot_runtime(db_slot.id)
         if not slot_runtime:
             return
-
-        # Freeze new entries during reconciliation
         slot_runtime._stop_new_entries = True
-
-        # ── Step 1: Reconcile DB lots against live exchange state ─────────────
-        # live_orders keyed by order_id: includes all open orders on Poly right now.
-        # Any lot whose exit_order_id is NOT in live_orders may have been filled.
-        # Any lot whose entry_order_id is NOT in live_orders may have been filled.
-
-        # Build a set of live sell order ids for quick lookup
-        live_sell_oids: set[str] = {
-            oid for oid, o in live_orders.items()
-            if (o.get("side") or "").upper() == "SELL"
-        }
 
         lots_to_inject: list[RuntimeLot] = []
 
+        # ── Step 1: Reconcile DB lots ─────────────────────────────────────────
         for db_lot in db_lots:
             exit_oid  = db_lot.exit_order_id
-            entry_oid = db_lot.entry_order_id
+            log.info(
+                "[recovery] slot=%s  DB lot=%s status=%s tokens=%.4f entry=%.4f tp=%.4f exit_oid=%s",
+                sid, db_lot.lot_id[:8], db_lot.status,
+                db_lot.tokens, db_lot.entry_price, db_lot.target_sell_price,
+                exit_oid[:14] if exit_oid else "None",
+            )
 
-            # ── Case A: lot has a sell order that's no longer live ─────────────
-            # Could be: filled, phantom-filled, or just never placed properly.
             if exit_oid and exit_oid not in live_sell_oids:
-                # Check actual order status to distinguish filled vs cancelled
                 order_info = await client.get_order_status(exit_oid)
                 status_raw = (order_info.get("status") or "").upper()
                 tokens_matched = 0.0
@@ -315,94 +321,69 @@ class RecoveryService:
                 except (TypeError, ValueError):
                     pass
 
+                log.info(
+                    "[recovery] slot=%s  lot=%s exit_oid not live → Poly status=%s matched=%.4f",
+                    sid, db_lot.lot_id[:8], status_raw, tokens_matched,
+                )
+
                 if tokens_matched >= db_lot.tokens * 0.99 or status_raw in ("MATCHED", "FILLED"):
-                    # TP sell was filled while down → close lot in DB, skip injection
                     actual_sell = db_lot.target_sell_price
                     pnl = round((actual_sell - db_lot.entry_price) * db_lot.tokens, 6)
                     async with async_session_factory() as db:
                         await db.execute(
-                            update(DBLot)
-                            .where(DBLot.lot_id == db_lot.lot_id)
-                            .values(
-                                status="closed",
-                                sell_price=actual_sell,
-                                pnl=pnl,
-                                timestamp_exit=datetime.now(timezone.utc),
-                            )
+                            update(DBLot).where(DBLot.lot_id == db_lot.lot_id)
+                            .values(status="closed", sell_price=actual_sell, pnl=pnl,
+                                    timestamp_exit=datetime.now(timezone.utc))
                         )
                         await db.commit()
-                    log.info(
-                        "[recovery] slot=%s lot=%s TP filled while down → closed (pnl=%.4f)",
-                        db_slot.id[:8], db_lot.lot_id[:8], pnl,
-                    )
-                    continue  # don't inject
+                    log.info("[recovery] slot=%s  lot=%s → CLOSED (TP filled while down, pnl=%.4f)", sid, db_lot.lot_id[:8], pnl)
+                    continue
 
                 elif tokens_matched > 0.01:
-                    # Partial fill → adjust tokens before injecting
                     remaining_tokens = max(0.0, round(db_lot.tokens - tokens_matched, 6))
                     remaining_size   = round(remaining_tokens * db_lot.entry_price, 6)
                     partial_pnl      = round((db_lot.target_sell_price - db_lot.entry_price) * tokens_matched, 6)
                     async with async_session_factory() as db:
                         await db.execute(
-                            update(DBLot)
-                            .where(DBLot.lot_id == db_lot.lot_id)
-                            .values(
-                                tokens=remaining_tokens,
-                                size_usdc=remaining_size,
-                                pnl=round(db_lot.pnl + partial_pnl, 6),
-                                exit_order_id=None,  # sell order is gone, will repost
-                            )
+                            update(DBLot).where(DBLot.lot_id == db_lot.lot_id)
+                            .values(tokens=remaining_tokens, size_usdc=remaining_size,
+                                    pnl=round(db_lot.pnl + partial_pnl, 6), exit_order_id=None)
                         )
                         await db.commit()
-                    # Rebuild db_lot fields for injection
-                    db_lot.tokens      = remaining_tokens
-                    db_lot.size_usdc   = remaining_size
+                    db_lot.tokens = remaining_tokens
+                    db_lot.size_usdc = remaining_size
                     db_lot.exit_order_id = None
-                    log.info(
-                        "[recovery] slot=%s lot=%s partial TP fill while down → tokens=%.4f remaining",
-                        db_slot.id[:8], db_lot.lot_id[:8], remaining_tokens,
-                    )
+                    log.info("[recovery] slot=%s  lot=%s → PARTIAL TP (%.4f tokens remaining)", sid, db_lot.lot_id[:8], remaining_tokens)
 
                 else:
-                    # Sell order cancelled/gone with no fill → clear exit_order_id, will repost TP
                     async with async_session_factory() as db:
                         await db.execute(
-                            update(DBLot)
-                            .where(DBLot.lot_id == db_lot.lot_id)
-                            .values(exit_order_id=None)
+                            update(DBLot).where(DBLot.lot_id == db_lot.lot_id).values(exit_order_id=None)
                         )
                         await db.commit()
                     db_lot.exit_order_id = None
+                    log.info("[recovery] slot=%s  lot=%s → exit_oid cleared (cancelled, no fill)", sid, db_lot.lot_id[:8])
 
-            # ── Case B: 'selling' lot with no exit_order_id ────────────────────
-            # Status was 'selling' when we went down but sell hadn't been posted yet,
-            # or phantom case. Check real token balance to decide.
             elif db_lot.status == "selling" and not exit_oid:
-                live_tokens = await client.get_token_balance(config.active_token_id)
+                live_tokens = await client.get_token_balance(slot_token_id)
+                log.info(
+                    "[recovery] slot=%s  lot=%s status=selling no exit_oid → Poly token balance=%.4f (need %.4f)",
+                    sid, db_lot.lot_id[:8], live_tokens or 0, db_lot.tokens,
+                )
                 if live_tokens is not None and live_tokens < db_lot.tokens * 0.5:
-                    # Tokens are gone — phantom close
                     pnl = round((db_lot.target_sell_price - db_lot.entry_price) * db_lot.tokens, 6)
                     async with async_session_factory() as db:
                         await db.execute(
-                            update(DBLot)
-                            .where(DBLot.lot_id == db_lot.lot_id)
-                            .values(
-                                status="closed",
-                                sell_price=db_lot.target_sell_price,
-                                pnl=pnl,
-                                timestamp_exit=datetime.now(timezone.utc),
-                            )
+                            update(DBLot).where(DBLot.lot_id == db_lot.lot_id)
+                            .values(status="closed", sell_price=db_lot.target_sell_price,
+                                    pnl=pnl, timestamp_exit=datetime.now(timezone.utc))
                         )
                         await db.commit()
-                    log.info(
-                        "[recovery] slot=%s lot=%s phantom close (tokens gone) pnl=%.4f",
-                        db_slot.id[:8], db_lot.lot_id[:8], pnl,
-                    )
+                    log.info("[recovery] slot=%s  lot=%s → PHANTOM CLOSE (tokens gone, pnl=%.4f)", sid, db_lot.lot_id[:8], pnl)
                     continue
 
-            # ── Lot survived reconciliation → inject into runtime ──────────────
             if db_lot.tokens < 0.001:
-                # Sub-dust lot, skip
+                log.info("[recovery] slot=%s  lot=%s → SKIP (dust %.6f tokens)", sid, db_lot.lot_id[:8], db_lot.tokens)
                 continue
 
             rt_lot = RuntimeLot(
@@ -414,29 +395,27 @@ class RecoveryService:
                 tokens=db_lot.tokens,
                 entry_order_id=db_lot.entry_order_id,
                 exit_order_id=db_lot.exit_order_id,
-                status=LotStatus.OPEN,  # normalize: recovering lots are either open or will repost
+                status=LotStatus.OPEN,
                 pnl=db_lot.pnl,
                 sell_price=db_lot.sell_price,
             )
             lots_to_inject.append(rt_lot)
+            log.info("[recovery] slot=%s  lot=%s → INJECT (tokens=%.4f, exit_oid=%s)",
+                     sid, db_lot.lot_id[:8], db_lot.tokens,
+                     db_lot.exit_order_id[:14] if db_lot.exit_order_id else "None")
 
-        # ── Step 2: Detect BUY orders filled while down → create new lots ─────
-        # These are buys that were live, got filled, but no lot was ever written to DB.
-        known_entry_oids: set[str] = {
-            dl.entry_order_id for dl in db_lots if dl.entry_order_id
-        }
-        # Also include injected lots so we don't double-create
+        # ── Step 2: BUY orders on Poly for this token not tracked in DB ───────
+        # CRITICAL: only process orders whose token_id matches this slot.
+        # live_orders is account-wide — without this filter, every slot gets every order.
+        known_entry_oids: set[str] = {dl.entry_order_id for dl in db_lots if dl.entry_order_id}
         known_entry_oids |= {l.entry_order_id for l in lots_to_inject if l.entry_order_id}
 
-        for oid, order in live_orders.items():
-            # Only BUY orders not already tracked by a DB lot
+        for oid, order in slot_live_orders.items():
             if (order.get("side") or "").upper() != "BUY":
                 continue
             if oid in known_entry_oids:
                 continue
 
-            # This buy order is live on Poly but has no matching lot in DB
-            # It was in-flight when we crashed — check fill status
             try:
                 price_str = order.get("price")
                 if not price_str:
@@ -445,13 +424,15 @@ class RecoveryService:
                 matched_str = order.get("size_matched") or order.get("matched_amount") or "0"
                 matched_tokens = float(matched_str)
 
+                log.info(
+                    "[recovery] slot=%s  untracked BUY oid=%s price=%.4f matched=%.4f status=%s",
+                    sid, oid[:14], price, matched_tokens, (order.get("status") or "?").upper(),
+                )
+
                 if matched_tokens >= 0.01:
-                    # Partial or full fill happened while down → synthesize lot(s)
                     tick = real_tick(config.tick_size)
                     tp_price = norm(price + tick)
                     usdc_cost = round(matched_tokens * price, 6)
-
-                    # Check if fully matched (no longer live)
                     status_raw = (order.get("status") or "").upper()
                     is_fully_filled = status_raw in ("MATCHED", "FILLED")
 
@@ -466,20 +447,15 @@ class RecoveryService:
                         timestamp_entry=datetime.now(timezone.utc).isoformat(),
                     )
                     lots_to_inject.append(lot)
-                    log.info(
-                        "[recovery] slot=%s new lot from filled BUY oid=%s tokens=%.4f price=%.4f",
-                        db_slot.id[:8], oid[:14], matched_tokens, price,
-                    )
+                    log.info("[recovery] slot=%s  → INJECT new lot from filled BUY oid=%s tokens=%.4f", sid, oid[:14], matched_tokens)
 
                     if not is_fully_filled:
-                        # Still live (partial) — register in buy_orders tracking
                         remaining_size = round(
                             (float(order.get("original_size") or matched_tokens) - matched_tokens) * price, 6
                         )
                         slot_runtime._buy_orders[price] = oid
                         slot_runtime._pending_buy_capital[oid] = max(0.0, remaining_size)
                 else:
-                    # Still live, unfilled → register in buy_orders as normal
                     orig_size_str = order.get("original_size") or order.get("size") or "0"
                     try:
                         size_usdc = float(orig_size_str) * price
@@ -487,21 +463,20 @@ class RecoveryService:
                         size_usdc = 0.0
                     slot_runtime._buy_orders[price] = oid
                     slot_runtime._pending_buy_capital[oid] = size_usdc
+                    log.info("[recovery] slot=%s  → register live BUY oid=%s price=%.4f size=%.4f", sid, oid[:14], price, size_usdc)
 
             except Exception as e:
-                log.warning("[recovery] slot=%s error reconciling buy oid=%s: %s", db_slot.id[:8], oid[:14], e)
+                log.warning("[recovery] slot=%s error reconciling buy oid=%s: %s", sid, oid[:14], e)
 
-        # ── Step 3: Inject reconciled lots + restore sell order tracking ───────
+        # ── Step 3: Inject lots + restore sell tracking ───────────────────────
         async with slot_runtime._lots_lock:
             for rt_lot in lots_to_inject:
                 slot_runtime._lots.append(rt_lot)
-                # If lot had an active sell order that's still live, restore tracking
                 if rt_lot.exit_order_id and rt_lot.exit_order_id in live_sell_oids:
                     slot_runtime._sell_orders[rt_lot.lot_id] = rt_lot.exit_order_id
 
-        # ── Step 4: Register remaining live BUY orders not yet in tracking ────
-        # (for orders that had no fills and aren't already registered from step 2)
-        for oid, order in live_orders.items():
+        # ── Step 4: Register any remaining live BUY orders for this token ─────
+        for oid, order in slot_live_orders.items():
             if (order.get("side") or "").upper() != "BUY":
                 continue
             price_str = order.get("price")
@@ -512,25 +487,29 @@ class RecoveryService:
             except (ValueError, TypeError):
                 continue
             if price in slot_runtime._buy_orders:
-                continue  # already registered
+                continue
             orig_size_str = order.get("original_size") or order.get("size") or "0"
             matched_str   = order.get("size_matched") or "0"
             try:
-                orig_tokens  = float(orig_size_str)
-                matched_tok  = float(matched_str)
-                remaining    = max(0.0, orig_tokens - matched_tok)
-                size_usdc    = round(remaining * price, 6)
+                orig_tokens = float(orig_size_str)
+                matched_tok = float(matched_str)
+                size_usdc   = round(max(0.0, orig_tokens - matched_tok) * price, 6)
             except (ValueError, TypeError):
                 size_usdc = 0.0
             slot_runtime._buy_orders[price] = oid
             slot_runtime._pending_buy_capital[oid] = size_usdc
 
-        # Restore in-memory stats from DB so volume/pnl don't reset to 0
+        log.info(
+            "[recovery] slot=%s DONE → injected %d lots, buy_orders=%d, sell_orders=%d",
+            sid, len(lots_to_inject), len(slot_runtime._buy_orders), len(slot_runtime._sell_orders),
+        )
+
+        # Restore in-memory stats from DB
         slot_runtime._volume       = float(db_slot.volume or 0.0)
         slot_runtime._realized_pnl = float(db_slot.realized_pnl or 0.0)
         slot_runtime._paid_fees    = float(db_slot.paid_fees or 0.0)
 
-        # Re-enable entries now that lots are injected
+        # Re-enable entries
         slot_runtime._stop_new_entries = False
 
     async def _hard_stop_session(
