@@ -470,6 +470,7 @@ class SessionEngine:
                 await self.soft_stop()
         # Increment lifetime trading_volume (buy-side notional)
         await self._increment_user_volume(lot.size, pnl=None)
+        await self._increment_slot_volume(session_slot_id, lot.size, pnl=None)
         if self._on_lot_event:
             await self._on_lot_event("opened", lot, None)
 
@@ -489,8 +490,28 @@ class SessionEngine:
                 await self.soft_stop()
         # Increment lifetime trading_volume (sell-side notional) + bot_pnl
         await self._increment_user_volume(lot.size, pnl=pnl)
+        await self._increment_slot_volume(session_slot_id, lot.size, pnl=pnl)
         if self._on_lot_event:
             await self._on_lot_event("closed", lot, pnl)
+
+    async def _increment_slot_volume(self, session_slot_id: str, size: float, pnl: Optional[float]):
+        """Atomically increment SessionSlot volume/pnl in DB on every fill — no 5-min gap."""
+        if not self._db_factory:
+            return
+        try:
+            from app.db.models import SessionSlot as DBSessionSlot
+            values: dict = {"volume": DBSessionSlot.volume + size}
+            if pnl is not None:
+                values["realized_pnl"] = DBSessionSlot.realized_pnl + pnl
+            async with self._db_factory() as db:
+                await db.execute(
+                    sa_update(DBSessionSlot)
+                    .where(DBSessionSlot.id == session_slot_id)
+                    .values(**values)
+                )
+                await db.commit()
+        except Exception:
+            pass  # non-critical — snapshot loop covers it
 
     async def _increment_user_volume(self, size: float, pnl: Optional[float]):
         """

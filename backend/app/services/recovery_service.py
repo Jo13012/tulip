@@ -499,6 +499,46 @@ class RecoveryService:
             slot_runtime._buy_orders[price] = oid
             slot_runtime._pending_buy_capital[oid] = size_usdc
 
+        # ── Step 5: Orphan token check ────────────────────────────────────────
+        # open_orders() only returns OPEN (unfilled) orders — fully matched BUY
+        # orders disappear from the list. If a BUY filled while we were down,
+        # we won't see it in live_orders at all. Detect via real token balance:
+        # if Poly holds more tokens than our tracked lots account for, synthesize
+        # a recovery lot so we post the TP.
+        try:
+            live_balance = await client.get_token_balance(slot_token_id)
+            tracked_tokens = sum(l.tokens for l in lots_to_inject)
+            log.info(
+                "[recovery] slot=%s orphan check: Poly balance=%.4f tracked_lots_tokens=%.4f",
+                sid, live_balance or 0.0, tracked_tokens,
+            )
+            if live_balance and live_balance > tracked_tokens + 0.5:
+                orphan_tokens = round(live_balance - tracked_tokens, 4)
+                # Use price_max as a conservative entry estimate
+                est_price = config.price_max or 0.99
+                tick = real_tick(config.tick_size)
+                tp_price = norm(est_price + tick)
+                orphan_size = round(orphan_tokens * est_price, 6)
+                orphan_lot = RuntimeLot(
+                    session_slot_id=db_slot.id,
+                    entry_price=est_price,
+                    target_sell_price=tp_price,
+                    size=orphan_size,
+                    tokens=orphan_tokens,
+                    entry_order_id=None,
+                    status=LotStatus.OPEN,
+                    timestamp_entry=datetime.now(timezone.utc).isoformat(),
+                )
+                lots_to_inject.append(orphan_lot)
+                async with slot_runtime._lots_lock:
+                    slot_runtime._lots.append(orphan_lot)
+                log.info(
+                    "[recovery] slot=%s ORPHAN LOT created tokens=%.4f est_entry=%.4f tp=%.4f",
+                    sid, orphan_tokens, est_price, tp_price,
+                )
+        except Exception as e:
+            log.warning("[recovery] slot=%s orphan check failed: %s", sid, e)
+
         log.info(
             "[recovery] slot=%s DONE → injected %d lots, buy_orders=%d, sell_orders=%d",
             sid, len(lots_to_inject), len(slot_runtime._buy_orders), len(slot_runtime._sell_orders),
