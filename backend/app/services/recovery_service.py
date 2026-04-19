@@ -252,11 +252,14 @@ class RecoveryService:
         """
         sid = db_slot.id[:8]
 
-        # ── Load config ───────────────────────────────────────────────────────
+        # ── Load config + replacement queue from DB ───────────────────────────
         async with async_session_factory() as db:
             sv = None
+            replacement_sv = None
             if db_slot.current_strategy_slot_version_id:
                 sv = await db.get(StrategySlotVersion, db_slot.current_strategy_slot_version_id)
+            if db_slot.replacement_strategy_slot_version_id:
+                replacement_sv = await db.get(StrategySlotVersion, db_slot.replacement_strategy_slot_version_id)
             lots_q = await db.execute(
                 select(DBLot).where(
                     DBLot.session_slot_id == db_slot.id,
@@ -507,9 +510,23 @@ class RecoveryService:
         slot_runtime._realized_pnl = float(db_slot.realized_pnl or 0.0)
         slot_runtime._paid_fees    = float(db_slot.paid_fees or 0.0)
 
+        # ── G. Restore queued replacement if one was pending ─────────────────
+        if replacement_sv:
+            try:
+                replacement_config = await _build_slot_market_config(replacement_sv, lot_size)
+                if replacement_config:
+                    slot_runtime._pending_replacement = replacement_config
+                    from app.runtime.runtime_models import SlotState as _SlotState
+                    slot_runtime._state = _SlotState.REPLACEMENT_QUEUED
+                    log.info("[recovery] slot=%s replacement queued restored → %s",
+                             sid, replacement_sv.polymarket_url.split("/")[-1][:30] if replacement_sv.polymarket_url else "?")
+            except Exception as e:
+                log.warning("[recovery] slot=%s failed to restore replacement queue: %s", sid, e)
+
         log.info(
-            "[recovery] slot=%s DONE → %d lots injected | buy_orders=%d sell_orders=%d",
+            "[recovery] slot=%s DONE → %d lots injected | buy_orders=%d sell_orders=%d | replacement=%s",
             sid, len(lots_to_inject), len(slot_runtime._buy_orders), len(slot_runtime._sell_orders),
+            "yes" if replacement_sv else "no",
         )
 
         # Unfreeze
