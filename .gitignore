@@ -1,6 +1,6 @@
 # ─── Secrets — NEVER commit ───────────────────────────────
 **/.env
-!**/.env.example
+**/.env.example
 
 # ─── Python ───────────────────────────────────────────────
 __pycache__/
