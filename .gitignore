@@ -1,0 +1,41 @@
+# ─── Secrets — NEVER commit ───────────────────────────────
+**/.env
+!**/.env.example
+
+# ─── Python ───────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+backend/venv/
+backend/.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+
+# ─── Node ─────────────────────────────────────────────────
+**/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# ─── Rust ─────────────────────────────────────────────────
+polymarket_rust_service/target/
+
+# ─── OS / Editor ──────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ─── Logs ─────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── Certs / Keys ─────────────────────────────────────────
+*.pem
+*.key
+*.p8
