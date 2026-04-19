@@ -26,9 +26,9 @@ export function Section({ title, action, children }: {
 
 export function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-4 px-4 py-3 min-h-[48px]">
-      <span className="text-[11px] text-white/40 flex-shrink-0 w-28">{label}</span>
-      <div className="flex items-center gap-2 min-w-0">
+    <div className="flex items-start gap-3 px-4 py-3 min-h-[48px]">
+      <span className="text-[11px] text-white/40 flex-shrink-0 w-24 pt-0.5">{label}</span>
+      <div className="flex flex-wrap items-center gap-2 min-w-0 flex-1">
         {children}
       </div>
     </div>
@@ -50,8 +50,8 @@ export function AddressField({ value }: { value: string }) {
   }
 
   return (
-    <div className="flex items-center gap-2 min-w-0">
-      <span className="text-[11px] font-mono text-white/40 break-all leading-relaxed">{value}</span>
+    <div className="flex items-center gap-2 min-w-0 flex-1">
+      <span className="text-[11px] font-mono text-white/40 break-all leading-relaxed min-w-0 flex-1">{value}</span>
       <button
         onClick={copy}
         title="Copy"

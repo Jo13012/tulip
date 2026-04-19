@@ -11,6 +11,7 @@ Supabase PgBouncer (transaction mode) compatibility:
   - pool_pre_ping=True                  → discard stale connections
 """
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 from app.core.config import settings
 
 _base = settings.DATABASE_URL
@@ -19,11 +20,7 @@ _url = f"{_base}{_sep}prepared_statement_cache_size=0"
 
 engine = create_async_engine(
     _url,
-    pool_size=10,
-    max_overflow=20,
-    pool_pre_ping=True,
-    pool_recycle=300,
-    pool_reset_on_return="rollback",
+    poolclass=NullPool,
     connect_args={
         "statement_cache_size": 0,
         "prepared_statement_name_func": lambda: "",
