@@ -90,6 +90,19 @@ Create a project at [supabase.com](https://supabase.com), then paste in **SQL Ed
 For self-hosted Postgres: `psql -U tulip -d tulip_prod -f schema.sql`
 
 ```sql
+
+
+
+
+
+
+
+
+
+
+
+
+
 -- ============================================================
 -- multi_user_bot — full schema
 -- ============================================================
@@ -595,12 +608,12 @@ Description=Polymarket Rust Service
 After=network.target
 
 [Service]
-User=tulip
-WorkingDirectory=/home/tulip/tulip/polymarket_rust_service
-ExecStart=/home/tulip/tulip/polymarket_rust_service/target/release/polymarket_rust_service
+User=root
+WorkingDirectory=/root/tulip/polymarket_rust_service
+ExecStart=/root/tulip/polymarket_rust_service/target/release/polymarket_rust_service
 Restart=always
 RestartSec=5
-EnvironmentFile=/home/tulip/tulip/polymarket_rust_service/.env
+EnvironmentFile=/root/tulip/polymarket_rust_service/.env
 
 [Install]
 WantedBy=multi-user.target
@@ -614,12 +627,12 @@ Description=Tulip FastAPI Backend
 After=network.target postgresql.service polymarket-rust.service
 
 [Service]
-User=tulip
-WorkingDirectory=/home/tulip/tulip/backend
-ExecStart=/home/tulip/tulip/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8010 --workers 1
+User=root
+WorkingDirectory=/root/tulip/backend
+ExecStart=/root/tulip/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8010 --workers 1
 Restart=always
 RestartSec=5
-EnvironmentFile=/home/tulip/tulip/backend/.env
+EnvironmentFile=/root/tulip/backend/.env
 
 [Install]
 WantedBy=multi-user.target
