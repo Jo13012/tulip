@@ -20,12 +20,14 @@ _url = f"{_base}{_sep}prepared_statement_cache_size=0"
 engine = create_async_engine(
     _url,
     pool_size=10,
-    max_overflow=10,
+    max_overflow=20,
     pool_pre_ping=True,
-    pool_recycle=1800,
+    pool_recycle=300,
+    pool_reset_on_return="rollback",
     connect_args={
         "statement_cache_size": 0,
         "prepared_statement_name_func": lambda: "",
+        "server_settings": {"jit": "off"},
     },
     echo=False,
 )
