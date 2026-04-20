@@ -252,7 +252,7 @@ class RecoveryService:
              → split across all DB open lots without exit_oid, one each
              → if more orphans than DB lots, create a synthetic lot
              → threshold: 0.01 tokens (not 0.5 — avoid losing small positions)
-          E. Live BUY orders → register unfilled portion
+          E. Live BUY orders → register unfilled portiona
              → partial fill: inject lot only if NOT already in DB (avoid double)
              → partial fill already in DB: inject directly from DB lot
           F. DB lots not injected → fetch order status to determine fate
