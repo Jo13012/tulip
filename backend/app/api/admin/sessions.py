@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.core.deps import AdminUser, DbSession
-from app.db.models import Session as DBSession, SessionSlot, SessionSlotMarketHistory, AuditLog
+from app.db.models import Session as DBSession, SessionSlot, SessionSlotMarketHistory, AuditLog, User
 from app.runtime.session_registry import session_registry
 from app.runtime.session_manager import session_manager
 from app.services.recovery_service import recovery_service
@@ -23,6 +23,11 @@ async def list_sessions(db: DbSession, admin: AdminUser, limit: int = 50, offset
 
     sessions_q = await db.execute(select(DBSession).order_by(DBSession.created_at.desc()).limit(limit).offset(offset))
     sessions = sessions_q.scalars().all()
+
+    user_ids = list({s.user_id for s in sessions if s.user_id})
+    users_q = await db.execute(select(User).where(User.id.in_(user_ids)))
+    users_by_id = {u.id: u for u in users_q.scalars().all()}
+
     snap_q = await db.execute(
         select(SessionSnapshot.session_id, _func.max(SessionSnapshot.total_volume).label("max_vol"))
         .group_by(SessionSnapshot.session_id)
@@ -39,9 +44,11 @@ async def list_sessions(db: DbSession, admin: AdminUser, limit: int = 50, offset
             total_volume = engine.total_volume or 0.0
         else:
             total_volume = snap_vols.get(s.id, 0.0)
+        u = users_by_id.get(s.user_id)
         result.append({
             "session_id":    s.id,
             "user_id":       s.user_id,
+            "username":      u.display_name if u and u.display_name else None,
             "status":        s.status,
             "health_state":  s.health_state,
             "gross_capital": s.session_gross_capital,
@@ -146,3 +153,55 @@ async def retry_recovery(session_id: str, admin: AdminUser):
     import asyncio
     asyncio.create_task(recovery_service._recover_session(session_id))
     return {"ok": True, "message": "Recovery queued"}
+
+
+class AdminLaunchSessionRequest(BaseModel):
+    user_id: str
+    wallet_id: str
+    gross_capital: float
+    stop_mode: str               # "days" | "volume"
+    stop_days: int | None = None
+    target_volume: float | None = None
+    session_sl_pct: float = 20.0
+
+
+@router.post("/launch-for-user")
+async def admin_launch_for_user(body: AdminLaunchSessionRequest, admin: AdminUser, db: DbSession):
+    from sqlalchemy import select as _sel
+    from app.db.models import Strategy as DBStrategy
+
+    # Ensure user has no running session
+    existing_q = await db.execute(
+        _sel(DBSession).where(
+            DBSession.user_id == body.user_id,
+            DBSession.status.in_(["pending", "starting", "running", "recovering"]),
+        ).limit(1)
+    )
+    if existing_q.scalars().first():
+        raise HTTPException(400, "User already has an active session")
+
+    # Resolve global strategy
+    strat_q = await db.execute(_sel(DBStrategy).order_by(DBStrategy.created_at.asc()).limit(1))
+    strat = strat_q.scalars().first()
+    if not strat:
+        raise HTTPException(503, "No published strategy available")
+
+    session = await session_manager.launch_session(
+        user_id=body.user_id,
+        wallet_id=body.wallet_id,
+        strategy_id=strat.id,
+        gross_capital=body.gross_capital,
+        stop_mode=body.stop_mode,
+        stop_days=body.stop_days,
+        target_volume=body.target_volume,
+        session_sl_pct=body.session_sl_pct,
+    )
+
+    db.add(AuditLog(
+        actor_id=admin["sub"], actor_role="admin",
+        action="session.admin_launch", entity_type="session", entity_id=session.id,
+        detail=f"admin launched for user {body.user_id} capital={body.gross_capital}",
+    ))
+    await db.commit()
+
+    return {"session_id": session.id, "status": session.status}

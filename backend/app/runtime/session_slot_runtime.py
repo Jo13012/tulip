@@ -105,6 +105,7 @@ class SessionSlotRuntime:
         self._volume:        float = 0.0
         self._realized_pnl:  float = 0.0
         self._unrealized_pnl: float = 0.0
+        self._last_mid_price: float = 0.0
         self._paid_fees:     float = 0.0
         self._trade_count:   int   = 0   # closed round-trip trades
         self._order_count:   int   = 0   # every buy fill + sell fill (incl. partials)
@@ -199,6 +200,7 @@ class SessionSlotRuntime:
                 "lot_id": l.lot_id,
                 "entry_price": l.entry_price,
                 "target_sell_price": l.target_sell_price,
+                "current_price": self._last_mid_price,
                 "size": l.size,
                 "tokens": l.tokens,
                 "status": l.status.value if hasattr(l.status, "value") else l.status,
@@ -1129,6 +1131,7 @@ class SessionSlotRuntime:
         return None
 
     def _update_unrealized(self, mid_price: float):
+        self._last_mid_price = mid_price
         upnl = sum(
             (mid_price - l.entry_price) * l.tokens
             for l in self._lots

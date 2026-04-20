@@ -112,6 +112,7 @@ export const api = {
   admin: {
     // ── Global strategy (single global strategy model) ──────────────────────
     getGlobalStrategy:      () => request('/api/v1/admin/strategy/global'),
+    getSlotVolumeStats:     () => request('/api/v1/admin/strategy/global/slot-volume'),
     getPublishedSlots:      () => request('/api/v1/admin/strategy/global-published-slots'),
     updateStrategy:     (data: object) => request('/api/v1/admin/strategy/global', { method: 'PATCH', body: JSON.stringify(data) }),
     publishVersion:     (data: object) => request('/api/v1/admin/strategy/global/publish', { method: 'POST', body: JSON.stringify(data) }),
@@ -157,5 +158,13 @@ export const api = {
       request(`/api/v1/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
     stopUserSession: (userId: string, mode: 'soft' | 'hard') =>
       request(`/api/v1/admin/users/${userId}/stop-session`, { method: 'POST', body: JSON.stringify({ mode }) }),
+    launchForUser: (data: {
+      user_id: string; wallet_id: string; gross_capital: number;
+      stop_mode: string; stop_days?: number | null; target_volume?: number | null; session_sl_pct: number
+    }) => request('/api/v1/admin/sessions/launch-for-user', { method: 'POST', body: JSON.stringify(data) }),
+    getUserPolyState: (userId: string) =>
+      request(`/api/v1/admin/users/${userId}/poly-state`),
+    nuclearClose: (userId: string, body: { cancel_orders: boolean; sell_token_ids: string[] }) =>
+      request(`/api/v1/admin/users/${userId}/nuclear-close`, { method: 'POST', body: JSON.stringify(body) }),
   },
 }

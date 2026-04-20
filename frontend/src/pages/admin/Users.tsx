@@ -7,6 +7,176 @@ import { api } from '../../utils/api'
 import { fmtStoredBps, fmtStoredBpsPct, fmtUsd } from '../../utils/format'
 import { useAppStore } from '../../store'
 
+// ── Nuclear Close Modal ───────────────────────────────────────────────────────
+
+interface PolyOrder {
+  order_id: string
+  token_id: string
+  side: string
+  price: number
+  size_remaining: number
+}
+interface PolyPosition {
+  token_id: string
+  question: string
+  balance: number
+  mid: number
+  value_usd: number
+}
+
+function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+  const [loading, setLoading]           = useState(true)
+  const [executing, setExecuting]       = useState(false)
+  const [orders, setOrders]             = useState<PolyOrder[]>([])
+  const [positions, setPositions]       = useState<PolyPosition[]>([])
+  const [totalValueUsd, setTotalValueUsd] = useState(0)
+  const [cancelOrders, setCancelOrders] = useState(true)
+  const [selectedTokens, setSelectedTokens] = useState<Set<string>>(new Set())
+  const [result, setResult]             = useState<any>(null)
+  const addToast = useAppStore(s => s.addToast)
+
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const d: any = await api.admin.getUserPolyState(user.id)
+        setOrders(d.open_orders || [])
+        setPositions(d.positions || [])
+        setTotalValueUsd(d.total_value_usd || 0)
+        setSelectedTokens(new Set((d.positions || []).map((p: PolyPosition) => p.token_id)))
+      } catch (e: any) {
+        addToast({ type: 'error', message: e.message })
+        onClose()
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [])
+
+  function toggleToken(tid: string) {
+    setSelectedTokens(prev => {
+      const next = new Set(prev)
+      next.has(tid) ? next.delete(tid) : next.add(tid)
+      return next
+    })
+  }
+
+  async function execute() {
+    if (!cancelOrders && selectedTokens.size === 0) return
+    setExecuting(true)
+    try {
+      const res: any = await api.admin.nuclearClose(user.id, {
+        cancel_orders: cancelOrders,
+        sell_token_ids: Array.from(selectedTokens),
+      })
+      setResult(res)
+      addToast({ type: 'success', message: `Done: ${res.cancelled_orders?.length ?? 0} cancelled, ${res.sold_positions?.length ?? 0} sold` })
+    } catch (e: any) {
+      addToast({ type: 'error', message: e.message })
+    } finally {
+      setExecuting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
+      <div
+        className="bg-[#0d0e10] border border-white/[0.08] rounded-2xl w-full max-w-lg mx-4 p-5 space-y-4 max-h-[80vh] overflow-y-auto"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-semibold text-red-400">Nuclear Close</p>
+            <p className="text-[10px] text-white/30">{user.display_name || user.id}</p>
+          </div>
+          <button className="text-white/30 hover:text-white/70 text-sm" onClick={onClose}>✕</button>
+        </div>
+
+        {loading ? (
+          <p className="text-[11px] text-white/30 text-center py-6">Fetching Poly state…</p>
+        ) : result ? (
+          <div className="space-y-2">
+            <p className="text-[11px] text-emerald-400 font-semibold">Executed</p>
+            <p className="text-[10px] text-white/50">Cancelled: {result.cancelled_orders?.length ?? 0} orders</p>
+            <p className="text-[10px] text-white/50">Sold: {result.sold_positions?.length ?? 0} positions</p>
+            {result.errors?.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-[10px] text-red-400">Errors:</p>
+                {result.errors.map((e: string, i: number) => (
+                  <p key={i} className="text-[10px] text-red-400/70 font-mono break-all">{e}</p>
+                ))}
+              </div>
+            )}
+            <button className="mt-2 text-[11px] text-white/40 hover:text-white/70" onClick={onClose}>Close</button>
+          </div>
+        ) : (
+          <>
+            {/* Cancel orders toggle */}
+            <div
+              className="flex items-center justify-between px-3 py-2.5 rounded-xl border border-white/[0.07] bg-white/[0.02] cursor-pointer"
+              onClick={() => setCancelOrders(v => !v)}
+            >
+              <div>
+                <p className="text-[11px] text-white/70 font-semibold">Cancel all open orders</p>
+                <p className="text-[10px] text-white/30">{orders.length} open order{orders.length !== 1 ? 's' : ''} on Poly</p>
+              </div>
+              <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${cancelOrders ? 'bg-red-500/80 border-red-500' : 'border-white/20'}`}>
+                {cancelOrders && <span className="text-[9px] text-white font-bold">✓</span>}
+              </div>
+            </div>
+
+            {/* Positions */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] text-white/30 font-semibold uppercase tracking-wider">Positions to sell (taker)</p>
+                {positions.length > 0 && (
+                  <p className="text-[11px] font-semibold text-white/60">
+                    Total: <span className="text-white/80">${totalValueUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </p>
+                )}
+              </div>
+              {positions.length === 0 ? (
+                <p className="text-[10px] text-white/20 px-1">No token positions found on Poly</p>
+              ) : positions.map(pos => (
+                <div
+                  key={pos.token_id}
+                  className="flex items-center justify-between px-3 py-2 rounded-xl border border-white/[0.07] bg-white/[0.02] cursor-pointer"
+                  onClick={() => toggleToken(pos.token_id)}
+                >
+                  <div className="flex-1 min-w-0 pr-3">
+                    <p className="text-[11px] text-white/70 leading-snug truncate">
+                      {pos.question || pos.token_id.slice(0, 24) + '…'}
+                    </p>
+                    <p className="text-[10px] text-white/30 mt-0.5">
+                      {pos.balance.toFixed(2)} tok
+                      {pos.mid > 0 && <> · <span className="text-white/50">${pos.value_usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> @ {(pos.mid * 100).toFixed(1)}¢</>}
+                    </p>
+                  </div>
+                  <div className={`flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedTokens.has(pos.token_id) ? 'bg-red-500/80 border-red-500' : 'border-white/20'}`}>
+                    {selectedTokens.has(pos.token_id) && <span className="text-[9px] text-white font-bold">✓</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Warning + confirm */}
+            <div className="px-3 py-2.5 rounded-xl bg-red-500/5 border border-red-500/20">
+              <p className="text-[10px] text-red-400/80">This executes directly on Polymarket. Sell orders are placed at current best bid (taker). Cannot be undone.</p>
+            </div>
+
+            <button
+              className="w-full py-2.5 rounded-xl bg-red-500/20 border border-red-500/30 text-red-400 text-[11px] font-semibold hover:bg-red-500/30 transition-colors disabled:opacity-40"
+              onClick={execute}
+              disabled={executing || (!cancelOrders && selectedTokens.size === 0)}
+            >
+              {executing ? 'Executing…' : 'Execute Nuclear Close'}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function truncAddr(addr: string | null): string {
   if (!addr) return '—'
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`
@@ -127,6 +297,7 @@ export default function AdminUsers() {
   const [loading, setLoading]     = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [stopping, setStopping]   = useState<string | null>(null)
+  const [nuclearUser, setNuclearUser] = useState<AdminUser | null>(null)
   const addToast = useAppStore(s => s.addToast)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -278,8 +449,8 @@ export default function AdminUsers() {
 
                 {/* Stop controls */}
                 <td className="px-3 py-2.5">
-                  {u.active_session_id && (
-                    <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {u.active_session_id && (<>
                       <button
                         className="text-[10px] px-2 py-0.5 rounded bg-white/[0.06] text-white/40 hover:text-white/70 hover:bg-white/10 transition-colors disabled:opacity-30"
                         onClick={() => handleStop(u.id, 'soft')}
@@ -294,8 +465,15 @@ export default function AdminUsers() {
                       >
                         hard stop
                       </button>
-                    </div>
-                  )}
+                    </>)}
+                    <button
+                      className="text-[10px] px-2 py-0.5 rounded bg-red-900/30 text-red-400/50 hover:text-red-300 hover:bg-red-900/50 border border-red-500/20 transition-colors"
+                      onClick={() => setNuclearUser(u)}
+                      title="Cancel orders and/or taker-sell positions directly on Polymarket"
+                    >
+                      ☢ nuclear
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -306,6 +484,10 @@ export default function AdminUsers() {
           <div className="text-center py-8 text-white/20 text-xs">No users found.</div>
         )}
       </div>
+
+      {nuclearUser && (
+        <NuclearModal user={nuclearUser} onClose={() => setNuclearUser(null)} />
+      )}
     </div>
   )
 }

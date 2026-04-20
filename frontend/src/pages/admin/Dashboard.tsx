@@ -527,7 +527,10 @@ function VersionsTab({ strat }: { strat: StrategyData | null }) {
             </div>
             {strat.versions.map(v => (
               <div key={v.version_id} className="grid grid-cols-5 gap-2 px-4 py-2.5 border-t border-white/[0.04] hover:bg-white/[0.02] min-w-[400px]">
-                <div className="text-[11px] font-mono text-brand">{v.version_label || v.version_id.slice(0, 8)}</div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-mono text-brand">{v.version_label || v.version_id.slice(0, 8)}</span>
+                  {v.is_current && <span className="text-[8px] font-semibold px-1 py-0.5 rounded bg-emerald-500/15 text-emerald-400 uppercase tracking-widest">live</span>}
+                </div>
                 <div className="text-[11px] font-mono text-white/40">{v.session_count}</div>
                 <div className="text-[11px] font-mono text-white/50 tabular-nums">{fmtUsd(v.total_volume, 0)}</div>
                 <div className={`text-[11px] font-mono font-semibold tabular-nums ${pnlColor(v.total_pnl)}`}>{fmtUsd(v.total_pnl)}</div>

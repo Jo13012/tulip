@@ -6,6 +6,7 @@ import { api } from '../../utils/api'
 import { fmtUsd, pnlColor, fmtStoredBps, fmtStoredBpsPct } from '../../utils/format'
 import { XPModal } from './XPModal'
 import { BridgeHistoryModal } from './BridgeHistoryModal'
+import { FundingModal } from './OnboardingModal'
 import { Section, Row, AddressField, GhostButton } from '../ui/Field'
 
 interface Props { user: AppUser }
@@ -39,7 +40,9 @@ export function ProfileTab({ user }: Props) {
   const [loading, setLoading] = useState(!cached)
   const [xpOpen, setXpOpen]             = useState(false)
   const [bridgeHistoryOpen, setBridgeHistoryOpen] = useState(false)
+  const [fundingModalOpen, setFundingModalOpen] = useState(false)
   const [forcingFunding, setForcingFunding] = useState(false)
+  const [fundTab, setFundTab] = useState<'deposit' | 'withdraw'>('deposit')
 
   useEffect(() => {
     api.getProfile().then((d: any) => {
@@ -154,84 +157,138 @@ export function ProfileTab({ user }: Props) {
 
         </div>
 
-        {/* Right — Deposit */}
+        {/* Right — Deposit / Withdraw */}
         <Section
-          title="Deposit"
-          action={fundingStatus && (
+          title={
+            <div className="flex items-center gap-1">
+              {(['deposit', 'withdraw'] as const).map(t => (
+                <button
+                  key={t}
+                  onClick={() => setFundTab(t)}
+                  className={`px-2.5 py-0.5 rounded-md text-[11px] font-semibold capitalize transition-colors ${
+                    fundTab === t ? 'bg-white/[0.08] text-white/80' : 'text-white/30 hover:text-white/55'
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          }
+          action={fundTab === 'deposit' && fundingStatus ? (
             <span className={`text-[10px] font-semibold px-2.5 py-0.5 rounded-full border ${statusColor}`}>
               {statusLabel}
             </span>
-          )}
+          ) : undefined}
         >
-          <div className="px-4 py-3 space-y-3">
-            {[
-              <>Deposit <span className="text-white/65 font-semibold">USDC</span> to your wallet on <span className="text-white/65 font-semibold">Arbitrum</span>.</>,
-              <>Keep a small ETH amount of <span className="text-white/65 font-semibold">ETH</span> for gas{fundingStatus?.fee_wallet_eth_warn_threshold != null && <span className="text-white/30"> ({fundingStatus.fee_wallet_eth_warn_threshold.toFixed(4)} ETH)</span>}.</>,
-              <>We move <span className="text-white/65 font-semibold">USDC</span> to your trading balance automatically.</>,
-              <>We keep a fee reserve on your Arbitrum wallet: <span className="text-white/65 font-semibold">min ${reserveUsdcRequired.toFixed(2)} USDC</span>, or <span className="text-white/65 font-semibold">{Math.round((fundingStatus?.fee_buffer_pct ?? 0.05) * 100)}%</span> of your trading balance (whichever is higher). Covers platform fee transactions.</>,
-              <>Auto-bridge triggers when <span className="text-white/65 font-semibold">${(fundingStatus?.bridge_min_usdc ?? 5).toFixed(0)}+</span> is available above reserve. Session pauses if reserve drops below <span className="text-white/65 font-semibold">${(fundingStatus?.fee_wallet_usdc_stop ?? 0.5).toFixed(2)}</span> — top up your Arbitrum wallet to resume.</>,
-            ].map((text, i) => (
-              <div key={i} className="flex gap-3 items-start">
-                <span className="text-[10px] text-white/20 font-mono mt-0.5 w-3 flex-shrink-0">{i + 1}</span>
-                <p className="text-[11px] text-white/45 leading-relaxed">{text}</p>
-              </div>
-            ))}
-          </div>
-
-          {addr && (
-            <Row label="Deposit to">
-              <AddressField value={addr} />
-            </Row>
-          )}
-
-          {(tradingBal != null || walletUsdc != null || walletEth != null) && (
+          {fundTab === 'deposit' ? (
             <>
-              {tradingBal != null && (
-                <Row label="Trading balance">
-                  <span className="text-[12px] font-mono font-semibold text-white/65">
-                    ${tradingBal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </span>
-                </Row>
-              )}
-              {(walletUsdc != null || walletEth != null) && (
-                <Row label="Wallet balances">
-                  <span className="text-[12px] font-mono font-semibold text-white/65">
-                    {walletUsdc != null
-                      ? `$${walletUsdc.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`
-                      : '—'}
-                    {' · '}
-                    {walletEth != null ? `${walletEth.toFixed(5)} ETH` : '—'}
-                  </span>
-                </Row>
-              )}
-              {fundingStatus != null && (
-                <Row label="Bridge ready">
-                  <span className="text-[12px] font-mono font-semibold text-white/65">
-                    ${bridgeableUsdc.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} available
-                  </span>
-                </Row>
-              )}
-            </>
-          )}
+              <div className="px-4 py-3 space-y-3">
+                {[
+                  <>Deposit <span className="text-white/65 font-semibold">USDC</span> to your wallet on <span className="text-white/65 font-semibold">Arbitrum</span>.</>,
+                  <>Keep a small ETH amount of <span className="text-white/65 font-semibold">ETH</span> for gas{fundingStatus?.fee_wallet_eth_warn_threshold != null && <span className="text-white/30"> ({fundingStatus.fee_wallet_eth_warn_threshold.toFixed(4)} ETH)</span>}.</>,
+                  <>We move <span className="text-white/65 font-semibold">USDC</span> to your trading balance automatically.</>,
+                  <>We keep a fee reserve on your Arbitrum wallet: <span className="text-white/65 font-semibold">min ${reserveUsdcRequired.toFixed(2)} USDC</span>, or <span className="text-white/65 font-semibold">{Math.round((fundingStatus?.fee_buffer_pct ?? 0.05) * 100)}%</span> of your trading balance (whichever is higher). Covers platform fee transactions.</>,
+                  <>Auto-bridge triggers when <span className="text-white/65 font-semibold">${(fundingStatus?.bridge_min_usdc ?? 5).toFixed(0)}+</span> is available above reserve. Session pauses if reserve drops below <span className="text-white/65 font-semibold">${(fundingStatus?.fee_wallet_usdc_stop ?? 0.5).toFixed(2)}</span> — top up your Arbitrum wallet to resume.</>,
+                ].map((text, i) => (
+                  <div key={i} className="flex gap-3 items-start">
+                    <span className="text-[10px] text-white/20 font-mono mt-0.5 w-3 flex-shrink-0">{i + 1}</span>
+                    <p className="text-[11px] text-white/45 leading-relaxed">{text}</p>
+                  </div>
+                ))}
+              </div>
 
-          {(fundingStatus?.message || (fundingStatus && !isReady && !(fundingStatus?.needs_usdc || fundingStatus?.needs_eth)) || fundingStatus?.funding_tx_hash) && (
-            <div className="px-4 py-3 space-y-2.5">
-              {fundingStatus?.message && (
-                <p className={`text-[11px] ${needsAction ? 'text-amber-200/70' : 'text-white/30'}`}>
-                  {fundingStatus.message}
+              {addr && (
+                <Row label="Deposit to">
+                  <AddressField value={addr} />
+                </Row>
+              )}
+
+              {(tradingBal != null || walletUsdc != null || walletEth != null) && (
+                <>
+                  {tradingBal != null && (
+                    <Row label="Trading balance">
+                      <span className="text-[12px] font-mono font-semibold text-white/65">
+                        ${tradingBal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </Row>
+                  )}
+                  {(walletUsdc != null || walletEth != null) && (
+                    <Row label="Wallet balances">
+                      <span className="text-[12px] font-mono font-semibold text-white/65">
+                        {walletUsdc != null
+                          ? `$${walletUsdc.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`
+                          : '—'}
+                        {' · '}
+                        {walletEth != null ? `${walletEth.toFixed(5)} ETH` : '—'}
+                      </span>
+                    </Row>
+                  )}
+                  {fundingStatus != null && (
+                    <Row label="Bridge ready">
+                      <span className="text-[12px] font-mono font-semibold text-white/65">
+                        ${bridgeableUsdc.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} available
+                      </span>
+                    </Row>
+                  )}
+                </>
+              )}
+
+              <div className="px-4 py-3 space-y-2.5">
+                {fundingStatus?.message && (
+                  <p className={`text-[11px] ${needsAction ? 'text-amber-200/70' : 'text-white/30'}`}>
+                    {fundingStatus.message}
+                  </p>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <GhostButton onClick={() => setFundingModalOpen(true)}>
+                    Bridge
+                  </GhostButton>
+                  {fundingStatus && !isReady && !(fundingStatus?.needs_usdc || fundingStatus?.needs_eth) && (
+                    <GhostButton
+                      disabled={forcingFunding || !bridgeAvailable || fundingStatus?.funding_state === 'bridging' || fundingStatus?.funding_state === 'preparing'}
+                      onClick={handleForceFunding}
+                    >
+                      {(forcingFunding || fundingStatus?.funding_state === 'bridging' || fundingStatus?.funding_state === 'preparing') ? 'Bridging…' : 'Bridge to Polymarket'}
+                    </GhostButton>
+                  )}
+                  <GhostButton onClick={() => setBridgeHistoryOpen(true)}>
+                    History
+                  </GhostButton>
+                </div>
+              </div>
+            </>
+          ) : (
+            /* Withdraw */
+            <div className="px-4 py-4 space-y-4">
+              <div className="space-y-3">
+                {[
+                  <>Go to <span className="text-white/65 font-semibold">Settings</span> and export your private key.</>,
+                  <>Import it into <span className="text-white/65 font-semibold">Rabby Wallet</span> or any compatible wallet.</>,
+                  <>Connect to{' '}
+                    <a
+                      href="https://polymarket.com/?r=smurf"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-white/65 font-semibold underline underline-offset-2 hover:text-white/90 transition-colors"
+                    >
+                      polymarket.com/?r=smurf
+                    </a>{' '}
+                    with your wallet.</>,
+                  <>Withdraw directly from your Polymarket account.</>,
+                ].map((text, i) => (
+                  <div key={i} className="flex gap-3 items-start">
+                    <span className="text-[10px] text-white/20 font-mono mt-0.5 w-3 flex-shrink-0">{i + 1}</span>
+                    <p className="text-[11px] text-white/45 leading-relaxed">{text}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-start gap-2.5 px-3.5 py-3 rounded-xl border border-amber-400/15 bg-amber-500/[0.04]">
+                <span className="text-[11px] text-amber-400/50 mt-0.5 flex-shrink-0">⚠</span>
+                <p className="text-[10px] text-amber-300/55 leading-relaxed">
+                  We do not store your private key and have no access to your funds at any time. You are the sole person with access to your wallet — we cannot recover funds in the event of a loss. You are entirely responsible for the safekeeping of your private key.
                 </p>
-              )}
-              {fundingStatus && !isReady && !(fundingStatus?.needs_usdc || fundingStatus?.needs_eth) && (
-                <GhostButton
-                  disabled={forcingFunding || !bridgeAvailable || fundingStatus?.funding_state === 'bridging' || fundingStatus?.funding_state === 'preparing'}
-                  onClick={handleForceFunding}
-                >
-                  {(forcingFunding || fundingStatus?.funding_state === 'bridging' || fundingStatus?.funding_state === 'preparing') ? 'Bridging…' : 'Bridge to Polymarket'}
-                </GhostButton>
-              )}
-              <GhostButton onClick={() => setBridgeHistoryOpen(true)}>
-                Bridge History
-              </GhostButton>
+              </div>
             </div>
           )}
         </Section>
@@ -248,6 +305,12 @@ export function ProfileTab({ user }: Props) {
       )}
       {bridgeHistoryOpen && (
         <BridgeHistoryModal onClose={() => setBridgeHistoryOpen(false)} />
+      )}
+      {fundingModalOpen && (
+        <FundingModal
+          user={user}
+          onClose={() => setFundingModalOpen(false)}
+        />
       )}
     </div>
   )

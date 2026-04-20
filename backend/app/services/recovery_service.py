@@ -243,13 +243,25 @@ class RecoveryService:
 
         Algorithm:
           A. Fetch from Poly: live BUY orders, live SELL orders, token balance
+             → if get_open_orders failed, retry once; if still fails, mark degraded
+             → if get_token_balance fails, retry once; if still fails, use sum of sell tokens
           B. Build DB lookup maps: exit_oid→lot, entry_oid→lot
-          C. For each live SELL order → we hold those tokens, reconstruct the lot
-          D. Tokens held but not covered by any live SELL → orphan tokens, post TP
-          E. For each live BUY order → register in buy_orders tracking
-             If partially filled → create lot for the filled portion
-          F. Close DB lots that are no longer reflected in Poly state
+          C. For each live SELL order → reconstruct lot from DB or estimate
+             → account only remaining (unfilled) tokens
+          D. Orphan tokens = balance − tokens_accounted_by_sells
+             → split across all DB open lots without exit_oid, one each
+             → if more orphans than DB lots, create a synthetic lot
+             → threshold: 0.01 tokens (not 0.5 — avoid losing small positions)
+          E. Live BUY orders → register unfilled portion
+             → partial fill: inject lot only if NOT already in DB (avoid double)
+             → partial fill already in DB: inject directly from DB lot
+          F. DB lots not injected → fetch order status to determine fate
+             → FILLED: close in DB, update pnl
+             → PARTIAL: update DB tokens, remaining will be in orphan (D)
+             → CANCELLED/MISSING: tokens are orphaned (D already handled) or truly gone
+             → no exit_oid + not injected + balance confirms gone: close in DB
         """
+        import uuid as _uuid
         sid = db_slot.id[:8]
 
         # ── Load config + replacement queue from DB ───────────────────────────
@@ -287,19 +299,50 @@ class RecoveryService:
         tick     = real_tick(config.tick_size)
 
         # ── A. Fetch Poly state ───────────────────────────────────────────────
-        # Filter account-wide live_orders to this slot's token only
+        # live_orders already fetched account-wide — filter to this token
+        # If the account-wide fetch failed (live_orders={}), we re-fetch per-slot
         slot_orders = {
             oid: o for oid, o in live_orders.items()
             if o.get("asset_id") == token_id
         }
+
+        # If no orders found AND live_orders was empty (fetch failed), retry
+        if not live_orders:
+            log.warning("[recovery] slot=%s live_orders empty — retrying get_open_orders", sid)
+            for attempt in range(2):
+                await asyncio.sleep(2)
+                try:
+                    refetched = await client.get_open_orders()
+                    if refetched:
+                        slot_orders = {
+                            oid: o for oid, o in refetched.items()
+                            if o.get("asset_id") == token_id
+                        }
+                        break
+                except Exception as e:
+                    log.warning("[recovery] slot=%s retry %d get_open_orders failed: %s", sid, attempt + 1, e)
+
         live_sells = {oid: o for oid, o in slot_orders.items() if (o.get("side") or "").upper() == "SELL"}
         live_buys  = {oid: o for oid, o in slot_orders.items() if (o.get("side") or "").upper() == "BUY"}
 
-        token_balance = 0.0
-        try:
-            token_balance = (await client.get_token_balance(token_id)) or 0.0
-        except Exception as e:
-            log.warning("[recovery] slot=%s get_token_balance failed: %s", sid, e)
+        # Fetch token balance with retry
+        token_balance: Optional[float] = None
+        for attempt in range(3):
+            try:
+                token_balance = await client.get_token_balance(token_id)
+                break
+            except Exception as e:
+                log.warning("[recovery] slot=%s get_token_balance attempt %d failed: %s", sid, attempt + 1, e)
+                if attempt < 2:
+                    await asyncio.sleep(2)
+
+        if token_balance is None:
+            # Fallback: sum of remaining tokens from live_sells (conservative)
+            token_balance = sum(
+                max(0.0, float(o.get("original_size") or 0) - float(o.get("size_matched") or 0))
+                for o in live_sells.values()
+            )
+            log.warning("[recovery] slot=%s get_token_balance failed all retries → fallback=%.4f from sells", sid, token_balance)
 
         log.info(
             "[recovery] slot=%s token=%s | Poly: %d sells %d buys balance=%.4f | DB: %d open lots",
@@ -320,42 +363,40 @@ class RecoveryService:
         lots_to_inject: list[RuntimeLot] = []
         tokens_accounted = 0.0
 
-        # ── C. Live SELL orders → we hold tokens, reconstruct lots ───────────
+        # ── C. Live SELL orders → we hold remaining tokens, reconstruct lots ──
         for oid, order in live_sells.items():
             try:
-                sell_tokens = float(order.get("original_size") or 0)
-                sell_matched = float(order.get("size_matched") or 0)
-                remaining_tokens = max(0.0, sell_tokens - sell_matched)
+                sell_tokens   = float(order.get("original_size") or 0)
+                sell_matched  = float(order.get("size_matched") or 0)
+                # Tokens still open in this sell order (not yet filled)
+                remaining_tokens = max(0.0, round(sell_tokens - sell_matched, 6))
                 if remaining_tokens < 0.001:
                     log.info("[recovery] slot=%s SELL oid=%s fully matched → skip", sid, oid[:14])
                     continue
 
-                # Enrich from DB if we know this sell order
                 db_lot = db_by_exit.get(oid)
                 if db_lot:
                     entry_price = db_lot.entry_price
                     tp_price    = db_lot.target_sell_price
                     lot_id      = db_lot.lot_id
-                    pnl         = db_lot.pnl or 0.0
-                    log.info("[recovery] slot=%s SELL oid=%s → matched DB lot=%s tokens=%.4f tp=%.4f",
+                    pnl         = float(db_lot.pnl or 0.0)
+                    log.info("[recovery] slot=%s SELL oid=%s → DB lot=%s tokens=%.4f tp=%.4f",
                              sid, oid[:14], lot_id[:8], remaining_tokens, tp_price)
                 else:
-                    # Unknown sell — estimate entry from sell price - 1 tick
                     sell_price  = float(order.get("price") or config.price_max or 0.99)
                     entry_price = norm(sell_price - tick)
                     tp_price    = norm(sell_price)
-                    lot_id      = None
+                    lot_id      = str(_uuid.uuid4())[:12]
                     pnl         = 0.0
-                    log.info("[recovery] slot=%s SELL oid=%s → unknown in DB, est entry=%.4f tp=%.4f tokens=%.4f",
+                    log.info("[recovery] slot=%s SELL oid=%s → unknown, est entry=%.4f tp=%.4f tokens=%.4f",
                              sid, oid[:14], entry_price, tp_price, remaining_tokens)
 
-                size = round(remaining_tokens * entry_price, 6)
                 rt_lot = RuntimeLot(
                     lot_id=lot_id,
                     session_slot_id=db_slot.id,
                     entry_price=entry_price,
                     target_sell_price=tp_price,
-                    size=size,
+                    size=round(remaining_tokens * entry_price, 6),
                     tokens=remaining_tokens,
                     exit_order_id=oid,
                     status=LotStatus.SELLING,
@@ -365,105 +406,148 @@ class RecoveryService:
                 lots_to_inject.append(rt_lot)
                 slot_runtime._sell_orders[rt_lot.lot_id] = oid
                 tokens_accounted += remaining_tokens
-                log.info("[recovery] slot=%s → INJECT lot (SELLING) tokens=%.4f exit_oid=%s",
+                log.info("[recovery] slot=%s → INJECT SELLING lot tokens=%.4f exit_oid=%s",
                          sid, remaining_tokens, oid[:14])
             except Exception as e:
-                log.warning("[recovery] slot=%s error processing SELL oid=%s: %s", sid, oid[:14], e)
+                log.warning("[recovery] slot=%s error SELL oid=%s: %s", sid, oid[:14], e)
 
         # ── D. Orphan tokens (held but no live SELL covering them) ────────────
-        orphan_tokens = round(token_balance - tokens_accounted, 4)
+        # Use 0.01 threshold — even tiny positions must not be lost
+        orphan_tokens = round(token_balance - tokens_accounted, 6)
         log.info("[recovery] slot=%s tokens_accounted=%.4f balance=%.4f orphan=%.4f",
                  sid, tokens_accounted, token_balance, orphan_tokens)
 
-        if orphan_tokens > 0.5:
-            # Find a DB lot that is open (no exit_oid) to get correct entry price
+        if orphan_tokens > 0.01:
+            # DB open lots without exit_oid — these are OPEN lots (bought but no TP placed yet)
             db_open_no_exit = [l for l in db_lots if not l.exit_order_id and l.tokens > 0.001]
+
             if db_open_no_exit:
-                # Use DB lot details, just update tokens to match reality
-                db_lot = db_open_no_exit[0]
-                entry_price = db_lot.entry_price
-                tp_price    = db_lot.target_sell_price
-                lot_id      = db_lot.lot_id
-                log.info("[recovery] slot=%s orphan → matched DB open lot=%s entry=%.4f tp=%.4f",
-                         sid, lot_id[:8], entry_price, tp_price)
-            else:
-                # No DB lot — estimate from market config
-                entry_price = config.price_max or 0.99
-                tp_price    = norm(entry_price + tick)
-                lot_id      = None
-                log.info("[recovery] slot=%s orphan → no DB lot, est entry=%.4f tp=%.4f",
-                         sid, entry_price, tp_price)
+                # Distribute orphan tokens across DB open lots proportionally to their original tokens
+                total_db_tokens = sum(float(l.tokens) for l in db_open_no_exit)
+                remaining_orphan = orphan_tokens
+                for i, db_lot in enumerate(db_open_no_exit):
+                    if i == len(db_open_no_exit) - 1:
+                        # Last lot gets the remainder (avoid float drift)
+                        lot_tokens = round(max(0.0, remaining_orphan), 6)
+                    else:
+                        weight = float(db_lot.tokens) / total_db_tokens if total_db_tokens > 0 else 1.0 / len(db_open_no_exit)
+                        lot_tokens = round(orphan_tokens * weight, 6)
+                        remaining_orphan -= lot_tokens
 
-            rt_lot = RuntimeLot(
-                lot_id=lot_id,
-                session_slot_id=db_slot.id,
-                entry_price=entry_price,
-                target_sell_price=tp_price,
-                size=round(orphan_tokens * entry_price, 6),
-                tokens=orphan_tokens,
-                exit_order_id=None,
-                status=LotStatus.OPEN,
-                timestamp_entry=datetime.now(timezone.utc).isoformat(),
-            )
-            lots_to_inject.append(rt_lot)
-            log.info("[recovery] slot=%s → INJECT orphan lot tokens=%.4f tp=%.4f", sid, orphan_tokens, tp_price)
-
-        # ── E. Live BUY orders → register in tracking ─────────────────────────
-        for oid, order in live_buys.items():
-            try:
-                price         = round(float(order.get("price") or 0), 4)
-                orig_tokens   = float(order.get("original_size") or 0)
-                matched_tokens = float(order.get("size_matched") or 0)
-                remaining_tokens = max(0.0, orig_tokens - matched_tokens)
-                remaining_usdc   = round(remaining_tokens * price, 6)
-
-                # Register unfilled portion in buy tracking
-                slot_runtime._buy_orders[price] = oid
-                slot_runtime._pending_buy_capital[oid] = remaining_usdc
-                log.info("[recovery] slot=%s BUY oid=%s price=%.4f orig=%.4f matched=%.4f remaining=%.4f",
-                         sid, oid[:14], price, orig_tokens, matched_tokens, remaining_tokens)
-
-                # Partial fill → create lot for the already-filled portion
-                if matched_tokens >= 0.01:
-                    # Check if we already have a lot for this entry_oid
-                    if oid in db_by_entry:
-                        log.info("[recovery] slot=%s BUY oid=%s partial fill already in DB lot=%s",
-                                 sid, oid[:14], db_by_entry[oid].lot_id[:8])
-                        # Already handled via DB lot path — don't double-create
+                    if lot_tokens < 0.001:
                         continue
-                    # Not in DB → create lot for the matched portion
-                    tp_price  = norm(price + tick)
-                    usdc_cost = round(matched_tokens * price, 6)
+
                     rt_lot = RuntimeLot(
+                        lot_id=db_lot.lot_id,
                         session_slot_id=db_slot.id,
-                        entry_price=price,
-                        target_sell_price=tp_price,
-                        size=usdc_cost,
-                        tokens=matched_tokens,
-                        entry_order_id=oid,
+                        entry_price=db_lot.entry_price,
+                        target_sell_price=db_lot.target_sell_price,
+                        size=round(lot_tokens * db_lot.entry_price, 6),
+                        tokens=lot_tokens,
+                        exit_order_id=None,
                         status=LotStatus.OPEN,
                         timestamp_entry=datetime.now(timezone.utc).isoformat(),
                     )
                     lots_to_inject.append(rt_lot)
+                    log.info("[recovery] slot=%s orphan → DB lot=%s tokens=%.4f entry=%.4f tp=%.4f",
+                             sid, db_lot.lot_id[:8], lot_tokens, db_lot.entry_price, db_lot.target_sell_price)
+            else:
+                # No DB lot — synthetic lot from market config
+                entry_price = norm(float(config.price_max or 0.99))
+                tp_price    = norm(entry_price + tick)
+                rt_lot = RuntimeLot(
+                    lot_id=str(_uuid.uuid4())[:12],
+                    session_slot_id=db_slot.id,
+                    entry_price=entry_price,
+                    target_sell_price=tp_price,
+                    size=round(orphan_tokens * entry_price, 6),
+                    tokens=orphan_tokens,
+                    exit_order_id=None,
+                    status=LotStatus.OPEN,
+                    timestamp_entry=datetime.now(timezone.utc).isoformat(),
+                )
+                lots_to_inject.append(rt_lot)
+                log.info("[recovery] slot=%s orphan → synthetic lot tokens=%.4f entry=%.4f tp=%.4f",
+                         sid, orphan_tokens, entry_price, tp_price)
+
+        # ── E. Live BUY orders → register unfilled portion ────────────────────
+        injected_lot_ids = {l.lot_id for l in lots_to_inject if l.lot_id}
+
+        for oid, order in live_buys.items():
+            try:
+                price            = round(float(order.get("price") or 0), 4)
+                orig_tokens      = float(order.get("original_size") or 0)
+                matched_tokens   = float(order.get("size_matched") or 0)
+                remaining_tokens = max(0.0, orig_tokens - matched_tokens)
+                remaining_usdc   = round(remaining_tokens * price, 6)
+
+                # Register unfilled portion in buy tracking
+                if price > 0 and remaining_tokens > 0:
+                    slot_runtime._buy_orders[price] = oid
+                    slot_runtime._pending_buy_capital[oid] = remaining_usdc
+                    log.info("[recovery] slot=%s BUY oid=%s price=%.4f unfilled=%.4f usdc=%.4f",
+                             sid, oid[:14], price, remaining_tokens, remaining_usdc)
+
+                # Partial fill → inject lot for the filled portion
+                if matched_tokens >= 0.01:
+                    db_lot = db_by_entry.get(oid)
+                    if db_lot and db_lot.lot_id in injected_lot_ids:
+                        # Already injected as orphan lot (D covered it)
+                        log.info("[recovery] slot=%s BUY oid=%s partial fill — DB lot already injected", sid, oid[:14])
+                        continue
+                    if db_lot:
+                        # Inject directly from DB lot with matched tokens
+                        rt_lot = RuntimeLot(
+                            lot_id=db_lot.lot_id,
+                            session_slot_id=db_slot.id,
+                            entry_price=db_lot.entry_price,
+                            target_sell_price=db_lot.target_sell_price,
+                            size=round(matched_tokens * db_lot.entry_price, 6),
+                            tokens=matched_tokens,
+                            entry_order_id=oid,
+                            status=LotStatus.OPEN,
+                            timestamp_entry=datetime.now(timezone.utc).isoformat(),
+                        )
+                    else:
+                        # No DB record — synthetic lot
+                        tp_price = norm(price + tick)
+                        rt_lot = RuntimeLot(
+                            session_slot_id=db_slot.id,
+                            entry_price=price,
+                            target_sell_price=tp_price,
+                            size=round(matched_tokens * price, 6),
+                            tokens=matched_tokens,
+                            entry_order_id=oid,
+                            status=LotStatus.OPEN,
+                            timestamp_entry=datetime.now(timezone.utc).isoformat(),
+                        )
+                    lots_to_inject.append(rt_lot)
+                    injected_lot_ids.add(rt_lot.lot_id)
                     log.info("[recovery] slot=%s → INJECT partial BUY lot oid=%s tokens=%.4f",
                              sid, oid[:14], matched_tokens)
 
             except Exception as e:
-                log.warning("[recovery] slot=%s error processing BUY oid=%s: %s", sid, oid[:14], e)
+                log.warning("[recovery] slot=%s error BUY oid=%s: %s", sid, oid[:14], e)
 
-        # ── F. Close DB lots no longer in Poly state ──────────────────────────
-        # Any DB lot whose exit_oid is not in live_sells and whose tokens are
-        # not accounted for in our injected lots = was sold while we were down.
-        injected_lot_ids = {l.lot_id for l in lots_to_inject if l.lot_id}
+        # ── F. DB lots not injected → reconcile fate ──────────────────────────
+        final_injected_ids = {l.lot_id for l in lots_to_inject if l.lot_id}
+
         for db_lot in db_lots:
-            if db_lot.lot_id in injected_lot_ids:
+            if db_lot.lot_id in final_injected_ids:
                 continue
-            # Not injected → Poly no longer has this position
+
             if db_lot.exit_order_id:
-                # Had a sell order → check if it filled
-                order_info   = await client.get_order_status(db_lot.exit_order_id)
-                status_raw   = (order_info.get("status") or "").upper()
-                matched      = float(order_info.get("size_matched") or 0)
+                # Had a sell order — fetch status to determine if filled
+                try:
+                    order_info = await client.get_order_status(db_lot.exit_order_id)
+                except Exception as e:
+                    log.warning("[recovery] slot=%s get_order_status lot=%s failed: %s — leaving open",
+                                sid, db_lot.lot_id[:8], e)
+                    continue  # Can't determine → don't close, leave for next recovery
+
+                status_raw = (order_info.get("status") or "").upper()
+                matched    = float(order_info.get("size_matched") or 0)
+
                 if matched >= db_lot.tokens * 0.99 or status_raw in ("MATCHED", "FILLED"):
                     sell_price = float(order_info.get("price") or db_lot.target_sell_price)
                     pnl = round((sell_price - db_lot.entry_price) * db_lot.tokens, 6)
@@ -474,31 +558,42 @@ class RecoveryService:
                             timestamp_exit=datetime.now(timezone.utc),
                         ))
                         await db.commit()
-                elif matched > 0.01:
-                    # Partial TP fill — remaining tokens should have been caught as orphan above
-                    partial_pnl = round((db_lot.target_sell_price - db_lot.entry_price) * matched, 6)
-                    log.info("[recovery] slot=%s DB lot=%s → PARTIAL TP %.4f tok filled while down", sid, db_lot.lot_id[:8], matched)
+
+                elif matched > 0.001:
+                    # Partial TP — matched portion is sold, remaining tokens were orphaned in D
+                    partial_pnl = round((float(order_info.get("price") or db_lot.target_sell_price) - db_lot.entry_price) * matched, 6)
+                    new_tokens  = round(max(0.0, db_lot.tokens - matched), 6)
+                    log.info("[recovery] slot=%s DB lot=%s → PARTIAL TP %.4f tok filled, %.4f remain", sid, db_lot.lot_id[:8], matched, new_tokens)
                     async with async_session_factory() as db:
                         await db.execute(update(DBLot).where(DBLot.lot_id == db_lot.lot_id).values(
-                            tokens=max(0.0, round(db_lot.tokens - matched, 6)),
-                            pnl=round(db_lot.pnl + partial_pnl, 6),
-                            exit_order_id=None,
+                            tokens=new_tokens,
+                            pnl=round(float(db_lot.pnl or 0) + partial_pnl, 6),
+                            exit_order_id=None,  # Clear so orphan in D takes over
                         ))
                         await db.commit()
+
                 else:
-                    # Sell order cancelled, tokens still held (should be in orphan)
-                    log.info("[recovery] slot=%s DB lot=%s → sell cancelled, tokens remain (orphan covers)", sid, db_lot.lot_id[:8])
+                    # Sell order was cancelled / no fill — tokens remain (orphan D handled them)
+                    log.info("[recovery] slot=%s DB lot=%s → sell cancelled, orphan D covered tokens", sid, db_lot.lot_id[:8])
                     async with async_session_factory() as db:
                         await db.execute(update(DBLot).where(DBLot.lot_id == db_lot.lot_id).values(exit_order_id=None))
                         await db.commit()
+
             else:
-                # No exit_oid and not injected — tokens are gone (already sold or market resolved)
-                log.info("[recovery] slot=%s DB lot=%s → no exit_oid not injected → mark closed (tokens gone)", sid, db_lot.lot_id[:8])
-                async with async_session_factory() as db:
-                    await db.execute(update(DBLot).where(DBLot.lot_id == db_lot.lot_id).values(
-                        status="closed", timestamp_exit=datetime.now(timezone.utc),
-                    ))
-                    await db.commit()
+                # No exit_oid, not injected → tokens confirmed gone on Poly
+                # Only close if token_balance confirms there's nothing left
+                if token_balance < 0.01:
+                    log.info("[recovery] slot=%s DB lot=%s → no exit, no balance, no inject → closed", sid, db_lot.lot_id[:8])
+                    async with async_session_factory() as db:
+                        await db.execute(update(DBLot).where(DBLot.lot_id == db_lot.lot_id).values(
+                            status="closed", timestamp_exit=datetime.now(timezone.utc),
+                        ))
+                        await db.commit()
+                else:
+                    # Balance exists but lot wasn't injected → orphan section (D) should have covered it
+                    # If not, leave open rather than risk closing a live position
+                    log.warning("[recovery] slot=%s DB lot=%s → no exit, not injected, but balance=%.4f — leaving open",
+                                sid, db_lot.lot_id[:8], token_balance)
 
         # ── Inject all lots into runtime ──────────────────────────────────────
         async with slot_runtime._lots_lock:

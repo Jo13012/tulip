@@ -27,6 +27,19 @@ function fmtShortDate(iso: string | null): string {
   return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
+function turnoverSub(s: HistorySession): { total: string; daily: string } | null {
+  if (!s.gross_capital || s.gross_capital === 0) return null
+  const totalX = s.total_volume / s.gross_capital
+  const startMs = s.started_at ? new Date(s.started_at).getTime() : null
+  const endMs   = s.stopped_at ? new Date(s.stopped_at).getTime() : Date.now()
+  const uptimeDays = startMs ? (endMs - startMs) / 86400000 : null
+  const dailyX = uptimeDays && uptimeDays > 0 ? totalX / uptimeDays : null
+  return {
+    total: `${totalX.toFixed(2)}×`,
+    daily: dailyX != null ? `${dailyX.toFixed(2)}×` : '—',
+  }
+}
+
 const HEADERS = ['Finished', 'Capital', 'Objective', 'Volume', 'Gross PnL', 'Fees', 'Net PnL', 'CPM', 'Orders']
 
 export function HistoryTab() {
@@ -114,8 +127,9 @@ export function HistoryTab() {
                   {s.stop_mode === 'days' ? `${s.stop_days}d` : s.target_volume ? `$${(s.target_volume / 1000).toFixed(0)}k` : 'vol'}
                 </span>
               </div>
-              <div className="flex items-center">
+              <div className="flex flex-col justify-center gap-0.5">
                 <span className="text-[11px] font-mono text-white/50">{fmtUsd(s.total_volume, 0)}</span>
+                {(() => { const t = turnoverSub(s); return t ? <span className="text-[9px] font-mono text-white/20">{t.total} · {t.daily} / 24h</span> : null })()}
               </div>
               <div className="flex items-center">
                 <span className={`text-[11px] font-mono font-semibold tabular-nums ${pnlColor(s.realized_pnl)}`}>{fmtUsd(s.realized_pnl)}</span>
@@ -180,6 +194,7 @@ export function HistoryTab() {
                 <div>
                   <div className="text-[8px] text-white/20 uppercase tracking-widest mb-0.5">Volume</div>
                   <div className="text-[10px] font-mono text-white/50 tabular-nums">{fmtUsd(s.total_volume, 0)}</div>
+                  {(() => { const t = turnoverSub(s); return t ? <><div className="text-[8px] font-mono text-white/20">{t.total} total</div><div className="text-[8px] font-mono text-white/20">{t.daily} 24h</div></> : null })()}
                 </div>
                 <div>
                   <div className="text-[8px] text-white/20 uppercase tracking-widest mb-0.5">Gross</div>

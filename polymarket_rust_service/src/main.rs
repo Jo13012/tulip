@@ -320,8 +320,10 @@ async fn client_ensure_sell_allowance(State(state): State<AppState>, Json(body):
 }
 
 async fn client_place_limit_order(State(state): State<AppState>, Json(body): Json<PlaceLimitOrderRequest>) -> AppResult<Json<Value>> {
+    let tick = body.tick_size.as_deref();
+    let neg_risk = body.neg_risk.unwrap_or(false);
     let resp = get_client(&state, &body.client_id)?
-        .place_limit_order(&body.token_id, body.price, body.size, &body.side).await
+        .place_limit_order(&body.token_id, body.price, body.size, &body.side, tick, neg_risk).await
         .map_err(|e| { tracing::error!("place_limit_order failed (detail): {e:#}"); AppError::Internal(format!("place_limit_order failed: {e:#}")) })?;
     Ok(Json(resp))
 }

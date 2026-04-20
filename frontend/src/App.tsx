@@ -7,7 +7,7 @@ import type { AppUser } from './types'
 import { api, initApiAuth } from './utils/api'
 import { ToastContainer } from './components/ui/Toast'
 import { AdminSidebar } from './components/layout/AdminSidebar'
-import { OnboardingModal } from './components/user/OnboardingModal'
+import { OnboardingModal, getFundingSkipKey } from './components/user/OnboardingModal'
 import tulipLogo from './assets/tulip.png'
 
 import UserDashboard   from './pages/UserDashboard'
@@ -353,7 +353,9 @@ if (!ready || bootstrapping) return <LoadingShell />
 
   const displayNameNeedsSetup = !user.display_name ||
     /^0x[0-9a-fA-F]{4}…[0-9a-fA-F]{4}$/.test(user.display_name)
-  const needsOnboarding = !onboardingDone && (!user.onboarding_complete || displayNameNeedsSetup)
+  const fundingSkipped = (() => { try { return !!localStorage.getItem(getFundingSkipKey(user.user_id)) } catch { return false } })()
+  // Show onboarding if: username not set (step 1+2 needed) OR funding not done and not skipped (step 3)
+  const needsOnboarding = !onboardingDone && (displayNameNeedsSetup || (!user.onboarding_complete && !fundingSkipped))
 
   const isAdmin = user.is_admin
 

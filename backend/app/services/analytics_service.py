@@ -183,12 +183,17 @@ class AnalyticsService:
     # ── Strategy version comparison ───────────────────────────────────────────
 
     async def version_performance(self, db: AsyncSession, strategy_id: str) -> list[dict]:
+        from app.runtime.session_registry import session_registry
+
         versions_q = await db.execute(
             select(StrategyVersion)
             .where(StrategyVersion.strategy_id == strategy_id)
             .order_by(StrategyVersion.published_at)
         )
         versions = versions_q.scalars().all()
+
+        # Live engines keyed by session_id
+        live_engines = {e.session_id: e for e in await session_registry.all()}
 
         results = []
         for v in versions:
@@ -203,6 +208,7 @@ class AnalyticsService:
                     "version_id":    v.id,
                     "version_label": v.version_label,
                     "published_at":  v.published_at.isoformat() if v.published_at else None,
+                    "is_current":    False,
                     "session_count": 0,
                     "total_volume":  0.0,
                     "total_pnl":     0.0,
@@ -217,14 +223,34 @@ class AnalyticsService:
             )
             markets = mh_q.scalars().all()
 
+            db_volume = sum((m.volume or 0) for m in markets)
+            db_pnl    = sum((m.realized_pnl or 0) for m in markets)
+            db_fees   = sum((m.fees_paid or 0) for m in markets)
+
+            # Add live engine data for running sessions on this version
+            live_volume = 0.0
+            live_pnl    = 0.0
+            live_fees   = 0.0
+            for sid in session_ids:
+                eng = live_engines.get(sid)
+                if eng:
+                    sm = eng.summary
+                    live_volume += sm.total_volume or 0.0
+                    live_pnl    += sm.realized_pnl or 0.0
+                    live_fees   += sm.paid_fees or 0.0
+
+            # is_current = has at least one live running session
+            is_current = any(sid in live_engines for sid in session_ids)
+
             results.append({
                 "version_id":    v.id,
                 "version_label": v.version_label,
                 "published_at":  v.published_at.isoformat() if v.published_at else None,
+                "is_current":    is_current,
                 "session_count": len(sessions),
-                "total_volume":  round(sum((m.volume or 0) for m in markets), 2),
-                "total_pnl":     round(sum((m.realized_pnl or 0) for m in markets), 2),
-                "total_fees":    round(sum((m.fees_paid or 0) for m in markets), 2),
+                "total_volume":  round(db_volume + live_volume, 2),
+                "total_pnl":     round(db_pnl    + live_pnl,   2),
+                "total_fees":    round(db_fees    + live_fees,  2),
             })
 
         return results

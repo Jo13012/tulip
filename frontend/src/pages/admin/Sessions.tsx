@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { api } from '../../utils/api'
 import { useAppStore } from '../../store'
 import { fmtUsd, fmtDate, fmtDuration, pnlColor, healthColor } from '../../utils/format'
@@ -376,6 +376,200 @@ function SessionDetail({ id }: { id: string }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Admin Launch Session Modal
+// ─────────────────────────────────────────────────────────────────────────────
+
+function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (sessionId: string) => void }) {
+  const addToast = useAppStore(s => s.addToast)
+  const overlayRef = useRef<HTMLDivElement>(null)
+
+  const [users, setUsers]         = useState<any[]>([])
+  const [loadingUsers, setLoadingUsers] = useState(true)
+  const [selectedUser, setSelectedUser] = useState<any | null>(null)
+  const [capital, setCapital]     = useState('')
+  const [stopMode, setStopMode]   = useState<'days' | 'volume'>('days')
+  const [stopDays, setStopDays]   = useState('30')
+  const [targetVol, setTargetVol] = useState('')
+  const [slPct, setSlPct]         = useState('20')
+  const [launching, setLaunching] = useState(false)
+  const [error, setError]         = useState('')
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  useEffect(() => {
+    api.admin.listUsers(200).then((d: any) => {
+      // Only users without active session
+      const eligible = d.filter((u: any) => !u.active_session_id && u.wallet_id)
+      setUsers(eligible)
+    }).catch(() => {}).finally(() => setLoadingUsers(false))
+  }, [])
+
+  async function launch() {
+    if (!selectedUser || !capital) return
+    const gross = parseFloat(capital)
+    if (isNaN(gross) || gross <= 0) { setError('Invalid capital'); return }
+    setLaunching(true)
+    setError('')
+    try {
+      const res: any = await api.admin.launchForUser({
+        user_id:       selectedUser.id,
+        wallet_id:     selectedUser.wallet_id,
+        gross_capital: gross,
+        stop_mode:     stopMode,
+        stop_days:     stopMode === 'days' ? parseInt(stopDays) : null,
+        target_volume: stopMode === 'volume' ? parseFloat(targetVol) : null,
+        session_sl_pct: parseFloat(slPct) || 20,
+      })
+      addToast({ type: 'success', message: `Session launched for ${selectedUser.display_name ?? selectedUser.id.slice(0, 8)}` })
+      onDone(res.session_id)
+    } catch (e: any) {
+      setError(e.message ?? 'Launch failed')
+      setLaunching(false)
+    }
+  }
+
+  const canLaunch = selectedUser && capital && parseFloat(capital) > 0 && !launching
+
+  return (
+    <div
+      ref={overlayRef}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4 py-6"
+      onClick={e => { if (e.target === overlayRef.current) onClose() }}
+    >
+      <div className="bg-[#0f1012] border border-white/[0.08] rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-white/[0.05]">
+          <span className="text-sm font-semibold text-white/80">Launch Session</span>
+          <button className="w-6 h-6 flex items-center justify-center rounded-lg text-white/20 hover:text-white/55 hover:bg-white/[0.06] transition-all" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {/* User picker */}
+          <div>
+            <div className="text-[9px] font-semibold uppercase tracking-widest text-white/20 mb-1.5">User (no active session)</div>
+            {loadingUsers ? (
+              <div className="h-10 bg-white/[0.03] rounded-xl animate-pulse" />
+            ) : users.length === 0 ? (
+              <div className="text-[11px] text-white/30 px-3 py-2.5 border border-white/[0.07] rounded-xl">All users have active sessions</div>
+            ) : (
+              <select
+                className="w-full bg-[#0a0b0d] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white/70 text-[12px] focus:outline-none focus:border-brand/50 transition-all"
+                value={selectedUser?.id ?? ''}
+                onChange={e => {
+                  const u = users.find(u => u.id === e.target.value)
+                  setSelectedUser(u ?? null)
+                  if (u?.trading_balance) setCapital(String(Math.floor(u.trading_balance * 100) / 100))
+                }}
+              >
+                <option value="">Select a user…</option>
+                {users.map((u: any) => (
+                  <option key={u.id} value={u.id}>
+                    {u.display_name ?? u.id.slice(0, 12)} — ${(u.trading_balance ?? 0).toFixed(2)}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {selectedUser && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                {/* Capital */}
+                <div>
+                  <div className="text-[9px] font-semibold uppercase tracking-widest text-white/20 mb-1.5">Capital (USDC)</div>
+                  <input
+                    className="w-full bg-transparent border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white font-mono text-sm placeholder:text-white/15 focus:outline-none focus:border-brand/50 transition-all"
+                    type="number" min="0" step="1" placeholder="100"
+                    value={capital}
+                    onChange={e => setCapital(e.target.value)}
+                  />
+                  {selectedUser.trading_balance != null && (
+                    <div className="text-[9px] text-white/25 mt-1">Balance: ${selectedUser.trading_balance.toFixed(2)}</div>
+                  )}
+                </div>
+                {/* SL */}
+                <div>
+                  <div className="text-[9px] font-semibold uppercase tracking-widest text-white/20 mb-1.5">Session SL %</div>
+                  <input
+                    className="w-full bg-transparent border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white font-mono text-sm placeholder:text-white/15 focus:outline-none focus:border-brand/50 transition-all"
+                    type="number" min="1" max="100" step="1" placeholder="20"
+                    value={slPct}
+                    onChange={e => setSlPct(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* Stop mode */}
+              <div>
+                <div className="text-[9px] font-semibold uppercase tracking-widest text-white/20 mb-1.5">Stop Mode</div>
+                <div className="flex gap-2">
+                  {(['days', 'volume'] as const).map(m => (
+                    <button
+                      key={m}
+                      onClick={() => setStopMode(m)}
+                      className={`flex-1 py-2 rounded-xl text-[11px] font-semibold border transition-colors ${
+                        stopMode === m
+                          ? 'border-brand/40 bg-brand/10 text-brand/80'
+                          : 'border-white/[0.07] text-white/30 hover:border-white/15 hover:text-white/55'
+                      }`}
+                    >
+                      {m === 'days' ? 'By Days' : 'By Volume'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {stopMode === 'days' ? (
+                <div>
+                  <div className="text-[9px] font-semibold uppercase tracking-widest text-white/20 mb-1.5">Duration (days)</div>
+                  <input
+                    className="w-full bg-transparent border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white font-mono text-sm placeholder:text-white/15 focus:outline-none focus:border-brand/50 transition-all"
+                    type="number" min="1" step="1" placeholder="30"
+                    value={stopDays}
+                    onChange={e => setStopDays(e.target.value)}
+                  />
+                </div>
+              ) : (
+                <div>
+                  <div className="text-[9px] font-semibold uppercase tracking-widest text-white/20 mb-1.5">Target Volume (USDC)</div>
+                  <input
+                    className="w-full bg-transparent border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white font-mono text-sm placeholder:text-white/15 focus:outline-none focus:border-brand/50 transition-all"
+                    type="number" min="0" step="100" placeholder="10000"
+                    value={targetVol}
+                    onChange={e => setTargetVol(e.target.value)}
+                  />
+                </div>
+              )}
+            </>
+          )}
+
+          {error && <div className="text-[11px] text-red-400 bg-red-500/5 border border-red-500/15 rounded-xl px-3 py-2">{error}</div>}
+        </div>
+
+        <div className="px-5 pb-5 flex justify-end gap-2">
+          <button
+            className="px-4 py-2 rounded-lg text-[11px] text-white/25 hover:text-white/50 transition-colors"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button
+            disabled={!canLaunch}
+            onClick={launch}
+            className="px-4 py-2 border border-emerald-500/25 rounded-lg text-[11px] text-emerald-400/70 hover:border-emerald-500/50 hover:text-emerald-400 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            {launching ? 'Launching…' : 'Launch Session'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // List sidebar
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -387,10 +581,18 @@ export default function AdminSessions() {
   const [loading, setLoading]   = useState(true)
   const [filter, setFilter]     = useState<SessionFilter>('all')
   const [hideZero, setHideZero] = useState(false)
+  const [launchModal, setLaunchModal] = useState(false)
+
+  const refresh = useCallback(() =>
+    api.admin.listSessions()
+      .then((d: any) => setList(d))
+      .catch(() => {})
+      .finally(() => setLoading(false)),
+  [])
 
   useEffect(() => {
     let first = true
-    const refresh = () =>
+    const doRefresh = () =>
       api.admin.listSessions()
         .then((d: any) => {
           setList(d)
@@ -399,8 +601,8 @@ export default function AdminSessions() {
         .catch(() => {})
         .finally(() => setLoading(false))
 
-    refresh()
-    const iv = setInterval(refresh, 5000)
+    doRefresh()
+    const iv = setInterval(doRefresh, 5000)
     return () => clearInterval(iv)
   }, [])
 
@@ -416,8 +618,14 @@ export default function AdminSessions() {
       <div className="w-full md:w-64 flex-shrink-0 border-b md:border-b-0 md:border-r border-white/[0.06] flex flex-col md:h-full max-h-64 md:max-h-none">
         {/* Header + filters */}
         <div className="border-b border-white/[0.06] bg-white/[0.01] shrink-0">
-          <div className="px-4 py-2.5">
+          <div className="px-4 py-2.5 flex items-center justify-between">
             <span className="text-[9px] font-semibold uppercase tracking-widest text-white/20">Sessions</span>
+            <button
+              onClick={() => setLaunchModal(true)}
+              className="px-2.5 py-1 border border-emerald-500/20 rounded-lg text-[9px] font-semibold text-emerald-400/60 hover:border-emerald-500/40 hover:text-emerald-400 transition-all uppercase tracking-widest"
+            >
+              + Launch
+            </button>
           </div>
           <div className="flex flex-wrap gap-1 px-3 pb-2">
             {(['all', 'running', 'stopping', 'starting'] as SessionFilter[]).map(f => (
@@ -484,7 +692,7 @@ export default function AdminSessions() {
                     'text-white/30'
                   }`}>{s.health_state}</span>
                 </div>
-                <div className="text-[10px] font-mono text-white/30 truncate">{s.session_id.slice(0, 12)}</div>
+                <div className="text-[10px] font-mono text-white/30 truncate">{s.username ?? s.session_id.slice(0, 12)}</div>
                 <div className="text-[9px] text-white/20 mt-0.5">{fmtUsd(s.gross_capital, 0)} · {fmtDate(s.started_at)}</div>
               </button>
             ))
@@ -502,6 +710,17 @@ export default function AdminSessions() {
           </div>
         )}
       </div>
+
+      {launchModal && (
+        <AdminLaunchModal
+          onClose={() => setLaunchModal(false)}
+          onDone={(sessionId) => {
+            setLaunchModal(false)
+            refresh()
+            setTimeout(() => setSelected(sessionId), 500)
+          }}
+        />
+      )}
     </div>
   )
 }

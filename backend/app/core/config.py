@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     # Polymarket
     CLOB_HOST: str = "https://clob.polymarket.com"
     GAMMA_HOST: str = "https://gamma-api.polymarket.com"
+    DATA_API_HOST: str = "https://data-api.polymarket.com"
     CHAIN_ID: int = 137
     POLYMARKET_RUST_URL: str = "http://127.0.0.1:8020"
     POLYMARKET_RELAYER_URL: str = "https://relayer-v2.polymarket.com"

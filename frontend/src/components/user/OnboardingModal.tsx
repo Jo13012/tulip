@@ -386,7 +386,7 @@ function Step2Username({
   )
 }
 
-function Step3Funding({
+export function Step3Funding({
   walletAddress,
   minUsdc,
   minEth,
@@ -404,6 +404,7 @@ function Step3Funding({
   bridgeTxHash,
   bridgeStartedAt,
   onFinish,
+  onSkip,
   feeWalletUsdcMin,
   feeWalletUsdcWarn,
   feeWalletEthMin,
@@ -426,6 +427,7 @@ function Step3Funding({
   bridgeTxHash: string
   bridgeStartedAt: string
   onFinish: () => void
+  onSkip?: () => void
   feeWalletUsdcMin: number
   feeWalletUsdcWarn: number
   feeWalletEthMin: number
@@ -575,14 +577,158 @@ function Step3Funding({
 
       <div className="mt-5 flex justify-between items-center">
         <div className="text-[10px] text-white/20">
-          {tradingUpdated ? 'Ready' : bridgeStarted ? 'Bridging…' : walletFunded ? 'Preparing bridge…' : ''}
+          {tradingUpdated ? 'Ready' : bridgeStarted ? 'Bridging… (~60s)' : walletFunded ? 'Preparing bridge… (~60s)' : ''}
+          {!walletFunded && !bridgeStarted && onSkip && (
+            <button
+              type="button"
+              onClick={onSkip}
+              className="text-[10px] text-white/20 hover:text-white/45 transition-colors underline underline-offset-2"
+            >
+              Skip for now
+            </button>
+          )}
         </div>
         {tradingUpdated && (
           <GhostButton onClick={onFinish}>Continue</GhostButton>
         )}
+        {!tradingUpdated && onSkip && walletFunded && (
+          <button
+            type="button"
+            onClick={onSkip}
+            className="text-[10px] text-white/20 hover:text-white/45 transition-colors"
+          >
+            Skip for now
+          </button>
+        )}
+      </div>
+
+      <div className="mt-4 flex items-center gap-2">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" className="text-[#c4254a]/60 flex-shrink-0">
+          <path d="M20.317 4.492c-1.53-.69-3.17-1.2-4.885-1.49a.075.075 0 0 0-.079.036c-.21.369-.444.85-.608 1.23a18.566 18.566 0 0 0-5.487 0 12.36 12.36 0 0 0-.617-1.23A.077.077 0 0 0 8.562 3c-1.714.29-3.354.8-4.885 1.491a.07.07 0 0 0-.032.027C.533 9.093-.32 13.555.099 17.961a.08.08 0 0 0 .031.055 20.03 20.03 0 0 0 5.993 2.98.078.078 0 0 0 .084-.026c.462-.62.874-1.275 1.226-1.963a.075.075 0 0 0-.041-.104 13.201 13.201 0 0 1-1.872-.878.075.075 0 0 1-.008-.125c.126-.093.252-.19.372-.287a.075.075 0 0 1 .078-.01c3.927 1.764 8.18 1.764 12.061 0a.075.075 0 0 1 .079.009c.12.098.245.195.372.288a.075.075 0 0 1-.006.125c-.598.344-1.22.635-1.873.877a.075.075 0 0 0-.041.105c.36.687.772 1.341 1.225 1.962a.077.077 0 0 0 .084.028 19.963 19.963 0 0 0 6.002-2.981.076.076 0 0 0 .032-.054c.5-5.094-.838-9.52-3.549-13.442a.06.06 0 0 0-.031-.028zM8.02 15.278c-1.182 0-2.157-1.069-2.157-2.38 0-1.312.956-2.38 2.157-2.38 1.21 0 2.176 1.077 2.157 2.38 0 1.312-.956 2.38-2.157 2.38zm7.975 0c-1.183 0-2.157-1.069-2.157-2.38 0-1.312.955-2.38 2.157-2.38 1.21 0 2.176 1.077 2.157 2.38 0 1.312-.946 2.38-2.157 2.38z"/>
+        </svg>
+        <span className="text-[10px] text-white/25">Need support?</span>
+        <a
+          href="https://discord.gg/y2B8kmAA3n"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[10px] font-semibold text-[#c4254a]/60 hover:text-[#c4254a]/90 transition-colors"
+        >
+          Join our Discord →
+        </a>
       </div>
     </div>
   )
+}
+
+export function FundingModal({
+  user,
+  onClose,
+  onDone,
+}: {
+  user: AppUser
+  onClose: () => void
+  onDone?: () => void
+}) {
+  const fundingStatus = useAppStore(s => s.fundingStatus)
+  const setFundingStatus = useAppStore(s => s.setFundingStatus)
+  const addToast = useAppStore(s => s.addToast)
+  const [minUsdc, setMinUsdc] = useState(20)
+  const [minEth, setMinEth] = useState(0.002)
+  const [reserveUsdcMin, setReserveUsdcMin] = useState(2)
+  const [reserveUsdcWarn, setReserveUsdcWarn] = useState(2)
+  const [reserveEthMin, setReserveEthMin] = useState(0.001)
+  const [reserveEthWarn, setReserveEthWarn] = useState(0.0005)
+
+  const overlayRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  useEffect(() => {
+    let mounted = true
+    const load = async () => {
+      try {
+        const status: any = await api.getFundingStatus()
+        if (!mounted) return
+        setFundingStatus(status)
+        if (typeof status?.required_usdc === 'number') setMinUsdc(status.required_usdc)
+        else if (typeof status?.min_usdc === 'number') setMinUsdc(status.min_usdc)
+        if (typeof status?.required_eth === 'number') setMinEth(status.required_eth)
+        else if (typeof status?.min_eth === 'number') setMinEth(status.min_eth)
+        if (typeof status?.fee_wallet_usdc_min === 'number') setReserveUsdcMin(status.fee_wallet_usdc_min)
+        if (typeof status?.fee_wallet_usdc_min_warn === 'number') setReserveUsdcWarn(status.fee_wallet_usdc_min_warn)
+        if (typeof status?.fee_wallet_eth_min === 'number') setReserveEthMin(status.fee_wallet_eth_min)
+        if (typeof status?.fee_wallet_eth_min_warn === 'number') setReserveEthWarn(status.fee_wallet_eth_min_warn)
+      } catch {}
+    }
+    load()
+    const isBridging = fundingStatus?.funding_state === 'bridging' || fundingStatus?.funding_state === 'preparing'
+    const iv = setInterval(load, isBridging ? 3000 : 10000)
+    return () => { mounted = false; clearInterval(iv) }
+  }, [fundingStatus?.funding_state])
+
+  async function handleFixFunding() {
+    try {
+      const status: any = await api.forceFunding()
+      setFundingStatus(status)
+      addToast({ type: 'success', message: 'Fixing funding…' })
+    } catch (e: any) {
+      addToast({ type: 'error', message: e?.message ?? 'Funding fix failed' })
+    }
+  }
+
+  function handleFinish() {
+    try { localStorage.removeItem(getFundingSkipKey(user.user_id)) } catch {}
+    onDone?.()
+    onClose()
+  }
+
+  return (
+    <div
+      ref={overlayRef}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm px-4 py-6"
+      onClick={e => { if (e.target === overlayRef.current) onClose() }}
+    >
+      <div className="w-full max-w-[420px] bg-[#111215] border border-white/[0.08] rounded-2xl p-5 sm:p-6 shadow-2xl flex flex-col max-h-[calc(100vh-3rem)] overflow-hidden">
+        <div className="flex items-center justify-between mb-4">
+          <span className="text-[9px] font-semibold uppercase tracking-widest text-white/20">Fund Account</span>
+          <button className="w-6 h-6 flex items-center justify-center rounded-lg text-white/20 hover:text-white/55 hover:bg-white/[0.06] transition-all" onClick={onClose}>✕</button>
+        </div>
+        <div className="flex-1 flex flex-col overflow-y-auto min-h-0">
+          <Step3Funding
+            walletAddress={user.wallet_address || ''}
+            minUsdc={minUsdc}
+            minEth={minEth}
+            walletFunded={Boolean(fundingStatus?.wallet_funded)}
+            depositTxHash={fundingStatus?.funding_deposit_tx_hash || ''}
+            usdcBalance={Number(fundingStatus?.usdc_balance || 0)}
+            ethBalance={Number(fundingStatus?.eth_balance || 0)}
+            requiredUsdc={Number(fundingStatus?.required_usdc || minUsdc)}
+            requiredEth={Number(fundingStatus?.required_eth || minEth)}
+            tradingBalance={Number(fundingStatus?.trading_balance || 0)}
+            onboardingComplete={Boolean(fundingStatus?.onboarding_complete)}
+            fundingState={fundingStatus?.funding_state || 'idle'}
+            canFixFunding={Boolean(fundingStatus?.wallet_funded)}
+            onFixFunding={handleFixFunding}
+            bridgeTxHash={fundingStatus?.funding_tx_hash || ''}
+            bridgeStartedAt={fundingStatus?.funding_bridge_started_at || ''}
+            onFinish={handleFinish}
+            feeWalletUsdcMin={Number(fundingStatus?.fee_wallet_usdc_min || reserveUsdcMin)}
+            feeWalletUsdcWarn={Number(fundingStatus?.fee_wallet_usdc_min_warn || reserveUsdcWarn)}
+            feeWalletEthMin={Number(fundingStatus?.fee_wallet_eth_min || reserveEthMin)}
+            feeWalletEthWarn={Number(fundingStatus?.fee_wallet_eth_min_warn || reserveEthWarn)}
+          />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export function getFundingSkipKey(userId: string) {
+  return `onboarding_funding_skipped_${userId}`
 }
 
 interface Props {
@@ -694,6 +840,13 @@ export function OnboardingModal({ user, onDone, onUpdateUser, bootstrapping = fa
 
   function handleFinishOnboarding() {
     onUpdateUser({ onboarding_complete: true })
+    try { localStorage.removeItem(getFundingSkipKey(user.user_id)) } catch {}
+    setVisible(false)
+    setTimeout(onDone, 0)
+  }
+
+  function handleSkipFunding() {
+    try { localStorage.setItem(getFundingSkipKey(user.user_id), '1') } catch {}
     setVisible(false)
     setTimeout(onDone, 0)
   }
@@ -748,6 +901,7 @@ export function OnboardingModal({ user, onDone, onUpdateUser, bootstrapping = fa
             bridgeTxHash={fundingStatus?.funding_tx_hash || ''}
             bridgeStartedAt={fundingStatus?.funding_bridge_started_at || ''}
             onFinish={handleFinishOnboarding}
+            onSkip={handleSkipFunding}
             feeWalletUsdcMin={Number(fundingStatus?.fee_wallet_usdc_min || reserveUsdcMin)}
             feeWalletUsdcWarn={Number(fundingStatus?.fee_wallet_usdc_min_warn || reserveUsdcWarn)}
             feeWalletEthMin={Number(fundingStatus?.fee_wallet_eth_min || reserveEthMin)}

@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { api } from '../../utils/api'
 import { useAppStore } from '../../store'
+import { fmtUsd, pnlColor } from '../../utils/format'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -676,7 +677,8 @@ function SlotRow({ slot, onRefresh, published }: { slot: Slot; onRefresh: () => 
 function StrategyDetail({ onRefreshList }: { onRefreshList?: () => void }) {
   const addToast = useAppStore(s => s.addToast)
   const [s, setS]       = useState<Strategy | null>(null)
-  const [tab, setTab]   = useState<'slots' | 'settings' | 'versions'>('slots')
+  const [tab, setTab]   = useState<'slots' | 'volume' | 'settings' | 'versions'>('slots')
+  const [slotVol, setSlotVol] = useState<any[]>([])
   const [pausing, setPausing] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [pubKind, setPubKind]   = useState<'minor' | 'major'>('minor')
@@ -723,6 +725,16 @@ function StrategyDetail({ onRefreshList }: { onRefreshList?: () => void }) {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    if (tab === 'volume') {
+      api.admin.getSlotVolumeStats().then((d: any) => setSlotVol(d ?? [])).catch(() => {})
+      const iv = setInterval(() => {
+        api.admin.getSlotVolumeStats().then((d: any) => setSlotVol(d ?? [])).catch(() => {})
+      }, 5000)
+      return () => clearInterval(iv)
+    }
+  }, [tab])
 
   async function togglePause() {
     setPausing(true)
@@ -897,13 +909,13 @@ function StrategyDetail({ onRefreshList }: { onRefreshList?: () => void }) {
 
       {/* Tabs */}
       <div className="flex border-b border-white/[0.06] gap-1">
-        {(['slots', 'settings', 'versions'] as const).map(t => (
+        {(['slots', 'volume', 'settings', 'versions'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)}
             className={cls('px-4 py-2 text-[11px] font-medium capitalize transition-colors',
               tab === t ? 'text-brand border-b-2 border-brand' : 'text-white/40 hover:text-white/60'
             )}
           >
-            {t === 'slots' ? `Slots (${s.slots.length})` : t === 'versions' ? `History (${s.versions.length})` : 'Settings'}
+            {t === 'slots' ? `Slots (${s.slots.length})` : t === 'versions' ? `History (${s.versions.length})` : t === 'volume' ? 'Volume' : 'Settings'}
           </button>
         ))}
       </div>
@@ -1122,6 +1134,43 @@ function StrategyDetail({ onRefreshList }: { onRefreshList?: () => void }) {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ── VOLUME TAB ── */}
+      {tab === 'volume' && (
+        <div className="panel overflow-hidden">
+          {slotVol.length === 0 ? (
+            <div className="px-4 py-8 text-center text-[11px] text-white/20 animate-pulse">Loading…</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <div className="grid grid-cols-7 gap-2 px-4 py-2 bg-white/[0.015] min-w-[520px]">
+                {['Slot', 'Alloc', 'Volume', '×', '24h Vol', 'PnL', 'Fees'].map(h => (
+                  <div key={h} className="text-[9px] font-semibold uppercase tracking-widest text-white/20">{h}</div>
+                ))}
+              </div>
+              {slotVol.map((sv: any) => {
+                const sessions = s?.slots?.length ?? 0
+                return (
+                  <div key={sv.slot_id} className="grid grid-cols-7 gap-2 px-4 py-2.5 border-t border-white/[0.04] hover:bg-white/[0.02] min-w-[520px]">
+                    <div className="text-[11px] font-mono text-white/60 truncate">{sv.label || sv.slot_id.slice(0, 8)}</div>
+                    <div className="text-[10px] font-mono text-white/30">{sv.alloc_pct}%</div>
+                    <div className="text-[11px] font-mono text-white/50 tabular-nums">{fmtUsd(sv.total_volume, 0)}</div>
+                    <div className="text-[10px] font-mono text-white/30 tabular-nums">
+                      {sv.alloc_pct > 0 && sv.total_volume > 0
+                        ? `${(sv.total_volume / (sv.alloc_pct)).toFixed(1)}×`
+                        : '—'}
+                    </div>
+                    <div className="text-[10px] font-mono text-white/30 tabular-nums">
+                      {sv.daily_volume > 0 ? fmtUsd(sv.daily_volume, 0) : '—'}
+                    </div>
+                    <div className={`text-[11px] font-mono font-semibold tabular-nums ${pnlColor(sv.total_pnl)}`}>{fmtUsd(sv.total_pnl)}</div>
+                    <div className="text-[10px] font-mono text-white/25 tabular-nums">{fmtUsd(sv.total_fees)}</div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
 

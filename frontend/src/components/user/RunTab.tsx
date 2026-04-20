@@ -139,139 +139,159 @@ function MarketThumb({ img, question }: { img: string | null; question: string |
   )
 }
 
-function PositionsList({ slots, loaded }: { slots: RuntimeSlotStats[]; loaded: boolean }) {
-  const allLots = useMemo(() => slots.flatMap(s =>
-    (s.lot_list ?? []).map(l => ({ ...l, question: s.question, condition_id: s.condition_id }))
-  ), [slots])
-  const imgs = useMarketImages(useMemo(() => allLots.map(l => l.condition_id), [allLots]))
+// ── Slot-first collapsed activity (Option A) ──────────────────────────────────
 
-  return (
-    <div className="border-b border-white/[0.03]">
-      <div className="px-5 py-2.5 flex items-center justify-between">
-        <span className="text-[9px] text-white/20 uppercase tracking-widest font-semibold">Positions</span>
-        {loaded && <span className="text-[9px] font-mono text-white/15">{allLots.length}</span>}
-      </div>
-      {!loaded ? (
-        <div className="px-5 pb-3 space-y-2">
-          {[1,2].map(i => <div key={i} className="h-10 rounded-xl bg-white/[0.02] animate-pulse" />)}
-        </div>
-      ) : allLots.length === 0 ? (
-        <div className="px-5 pb-3 text-[10px] font-mono text-white/15">No open positions</div>
-      ) : (
-        <div className="pb-1">
-          {allLots.map(l => (
-            <PositionRow key={l.lot_id} lot={l} img={l.condition_id ? (imgs[l.condition_id] ?? null) : null} />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function PositionRow({ lot, img }: { lot: any; img: string | null }) {
-  const age = fmtAge(lot.timestamp_entry)
-  const isSelling = lot.status === 'SELLING'
-  // PnL % vs entry
-  const entryVal = lot.entry_price * lot.tokens
-  const currentVal = lot.target_sell_price * lot.tokens  // target as "current" proxy
-  const pnlPct = entryVal > 0 ? ((currentVal - entryVal) / entryVal) * 100 : null
-
-  return (
-    <div className="flex items-center gap-3 px-5 py-2 hover:bg-white/[0.015] transition-colors">
-      <MarketThumb img={img} question={lot.question} />
-      <div className="flex-1 min-w-0">
-        <div className="text-[11px] text-white/65 truncate leading-tight">
-          {lot.question ?? '—'}
-        </div>
-        <div className="flex items-center gap-2 mt-0.5">
-          <span className="text-[9px] font-mono text-white/30">{(lot.entry_price * 100).toFixed(1)}¢</span>
-          <span className="text-[9px] text-white/15">→</span>
-          <span className="text-[9px] font-mono text-emerald-400/50">{(lot.target_sell_price * 100).toFixed(1)}¢</span>
-          {isSelling && <span className="text-[8px] font-semibold text-amber-400/60 uppercase tracking-widest">selling</span>}
-        </div>
-      </div>
-      <div className="flex items-center gap-3 shrink-0">
-        <span className="text-[11px] font-mono text-white/60">${lot.size.toFixed(2)}</span>
-        {pnlPct !== null && (
-          <span className={`text-[10px] font-mono font-semibold ${pnlPct >= 0 ? 'text-emerald-400/70' : 'text-red-400/70'}`}>
-            ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%)
-          </span>
-        )}
-        <span className="text-[10px] font-mono text-white/25">{lot.tokens?.toFixed(2)} tok</span>
-        <span className="text-[9px] font-mono text-white/15">{age}</span>
-      </div>
-    </div>
-  )
-}
-
-function OrdersList({ slots, loaded }: { slots: RuntimeSlotStats[]; loaded: boolean }) {
-  // Merge BUY (open_order_list) and SELL (sell_order_list) from all slots
-  const allBuys = useMemo(() => slots.flatMap(s =>
-    (s.open_order_list ?? []).map(o => ({ ...o, question: s.question, condition_id: s.condition_id }))
-  ), [slots])
-  const allSells = useMemo(() => slots.flatMap(s =>
-    (s.sell_order_list ?? []).map(o => ({ ...o, question: s.question, condition_id: s.condition_id }))
-  ), [slots])
-  const total = allBuys.length + allSells.length
+function SlotActivityList({ slots, loaded }: { slots: RuntimeSlotStats[]; loaded: boolean }) {
+  const [open, setOpen] = useState<Record<string, boolean>>({})
+  const toggle = (id: string) => setOpen(p => ({ ...p, [id]: !p[id] }))
 
   const condIds = useMemo(() =>
-    [...new Set([...allBuys.map(o => o.condition_id), ...allSells.map(o => o.condition_id)])]
-  , [allBuys, allSells])
+    slots.map(s => s.condition_id).filter(Boolean) as string[]
+  , [slots])
   const imgs = useMarketImages(condIds)
+
+  const totalPos = useMemo(() => slots.reduce((a, s) => a + (s.lot_list?.length ?? 0), 0), [slots])
+  const totalOrd = useMemo(() => slots.reduce((a, s) => a + (s.open_order_list?.length ?? 0) + (s.sell_order_list?.length ?? 0), 0), [slots])
 
   return (
     <div className="border-b border-white/[0.03]">
-      <div className="px-5 py-2.5 flex items-center justify-between">
-        <span className="text-[9px] text-white/20 uppercase tracking-widest font-semibold">Open Orders</span>
-        {loaded && <span className="text-[9px] font-mono text-white/15">{total}</span>}
+      {/* Section header */}
+      <div className="px-5 py-2.5 flex items-center gap-3">
+        <span className="text-[9px] text-white/20 uppercase tracking-widest font-semibold flex-1">Slots</span>
+        {loaded && (
+          <span className="text-[9px] font-mono text-white/15">{totalPos} pos · {totalOrd} orders</span>
+        )}
       </div>
+
       {!loaded ? (
         <div className="px-5 pb-3 space-y-2">
-          {[1,2,3].map(i => <div key={i} className="h-10 rounded-xl bg-white/[0.02] animate-pulse" />)}
+          {[1,2,3].map(i => <div key={i} className="h-12 rounded-xl bg-white/[0.02] animate-pulse" />)}
         </div>
-      ) : total === 0 ? (
-        <div className="px-5 pb-3 text-[10px] font-mono text-white/15">No open orders</div>
+      ) : slots.length === 0 ? (
+        <div className="px-5 pb-3 text-[10px] font-mono text-white/15">No slots</div>
       ) : (
         <div className="pb-1">
-          {/* SELL orders first (TP) */}
-          {allSells.map(o => (
-            <OrderRow key={o.order_id} order={o} img={o.condition_id ? (imgs[o.condition_id] ?? null) : null} />
-          ))}
-          {/* BUY orders */}
-          {allBuys.map(o => (
-            <OrderRow key={o.order_id} order={o} img={o.condition_id ? (imgs[o.condition_id] ?? null) : null} />
-          ))}
+          {slots.map(s => {
+            const lots   = s.lot_list ?? []
+            const sells  = s.sell_order_list ?? []
+            const buys   = s.open_order_list ?? []
+            const isOpen = open[s.session_slot_id]
+            const img    = s.condition_id ? (imgs[s.condition_id] ?? null) : null
+            const upnl   = s.unrealized_pnl
+            const hasSelling = lots.some(l => l.status === 'SELLING')
+
+            return (
+              <div key={s.session_slot_id}>
+                {/* Slot summary row — always visible, tap to expand */}
+                <button
+                  className="w-full flex items-center gap-3 px-5 py-2.5 hover:bg-white/[0.02] transition-colors text-left"
+                  onClick={() => toggle(s.session_slot_id)}
+                >
+                  <MarketThumb img={img} question={s.question} />
+
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[11px] text-white/65 truncate leading-tight">
+                      {s.question ?? 'Idle'}
+                    </div>
+                    {/* Compact chips */}
+                    <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                      <span className={`text-[8px] font-semibold uppercase tracking-widest px-1 py-0.5 rounded ${
+                        s.state === 'active' ? 'bg-emerald-500/10 text-emerald-400/70'
+                        : s.state === 'replacement_queued' ? 'bg-amber-500/10 text-amber-400/70'
+                        : 'bg-white/[0.04] text-white/25'
+                      }`}>{s.state}</span>
+                      {lots.length > 0 && (
+                        <span className="text-[8px] font-mono text-white/30">{lots.length} pos</span>
+                      )}
+                      {(buys.length + sells.length) > 0 && (
+                        <span className="text-[8px] font-mono text-white/25">{buys.length + sells.length} ord</span>
+                      )}
+                      {hasSelling && (
+                        <span className="text-[8px] font-semibold text-amber-400/60 uppercase tracking-widest">selling</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right summary */}
+                  <div className="shrink-0 text-right flex flex-col items-end gap-0.5">
+                    <span className="text-[11px] font-mono text-white/50">${s.deployed_capital.toFixed(2)}</span>
+                    {upnl !== 0 && (
+                      <span className={`text-[9px] font-mono ${upnl >= 0 ? 'text-emerald-400/60' : 'text-red-400/60'}`}>
+                        {upnl >= 0 ? '+' : ''}{fmtUsd(upnl)}
+                      </span>
+                    )}
+                    <svg
+                      width="10" height="10" viewBox="0 0 10 10"
+                      className={`text-white/20 transition-transform duration-150 ${isOpen ? 'rotate-180' : ''}`}
+                      fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"
+                    >
+                      <path d="M2 3.5l3 3 3-3" />
+                    </svg>
+                  </div>
+                </button>
+
+                {/* Expanded detail */}
+                {isOpen && (
+                  <div className="bg-white/[0.015] border-t border-b border-white/[0.04] mx-3 mb-1 rounded-xl overflow-hidden">
+                    {/* Positions */}
+                    {lots.length > 0 && (
+                      <div>
+                        <div className="px-3 pt-2 pb-1 text-[8px] font-semibold uppercase tracking-widest text-white/20">Positions</div>
+                        {lots.map((lot: any) => {
+                          const age = fmtAge(lot.timestamp_entry)
+                          const entryVal = lot.entry_price * lot.tokens
+                          const currentVal = lot.current_price > 0 ? lot.current_price * lot.tokens : 0
+                          const pnlPct = entryVal > 0 && currentVal > 0 ? ((currentVal - entryVal) / entryVal) * 100 : null
+                          return (
+                            <div key={lot.lot_id} className="flex items-center gap-2 px-3 py-1.5 border-t border-white/[0.03]">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-[10px] font-mono text-white/55">${lot.size.toFixed(2)}</span>
+                                  <span className="text-[9px] font-mono text-white/25">{(lot.entry_price * 100).toFixed(1)}¢ → {(lot.target_sell_price * 100).toFixed(1)}¢</span>
+                                  {lot.status === 'SELLING' && <span className="text-[8px] font-semibold text-amber-400/60 uppercase">selling</span>}
+                                </div>
+                              </div>
+                              <div className="shrink-0 flex items-center gap-2">
+                                {pnlPct !== null && (
+                                  <span className={`text-[9px] font-mono ${pnlPct >= 0 ? 'text-emerald-400/70' : 'text-red-400/70'}`}>
+                                    {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
+                                  </span>
+                                )}
+                                <span className="text-[8px] font-mono text-white/20">{age}</span>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                    {/* Orders */}
+                    {(sells.length > 0 || buys.length > 0) && (
+                      <div>
+                        <div className="px-3 pt-2 pb-1 text-[8px] font-semibold uppercase tracking-widest text-white/20">Orders</div>
+                        {[...sells, ...buys].map((o: any) => {
+                          const isSell = o.side === 'SELL'
+                          return (
+                            <div key={o.order_id} className="flex items-center gap-2 px-3 py-1.5 border-t border-white/[0.03]">
+                              <span className={`text-[8px] font-bold uppercase tracking-widest px-1 py-0.5 rounded shrink-0 ${
+                                isSell ? 'bg-red-500/10 text-red-400/60' : 'bg-emerald-500/10 text-emerald-400/60'
+                              }`}>{isSell ? 'TP' : 'BUY'}</span>
+                              <span className="text-[10px] font-mono text-white/50 flex-1">{(o.price * 100).toFixed(1)}¢</span>
+                              <span className="text-[9px] font-mono text-white/25 shrink-0">${o.size.toFixed(2)}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                    {lots.length === 0 && sells.length === 0 && buys.length === 0 && (
+                      <div className="px-3 py-3 text-[10px] font-mono text-white/15">No activity</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
-    </div>
-  )
-}
-
-function OrderRow({ order, img }: { order: any; img: string | null }) {
-  const isSell = order.side === 'SELL'
-  return (
-    <div className="flex items-center gap-3 px-5 py-2 hover:bg-white/[0.015] transition-colors">
-      <MarketThumb img={img} question={order.question} />
-      <div className="flex-1 min-w-0">
-        <div className="text-[11px] text-white/65 truncate">
-          {order.question ?? '—'}
-        </div>
-        <div className="mt-0.5">
-          <span className={`text-[8px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${
-            isSell
-              ? 'bg-red-500/10 text-red-400/70'
-              : 'bg-emerald-500/10 text-emerald-400/70'
-          }`}>
-            {isSell ? 'TP SELL' : 'BUY'}
-          </span>
-        </div>
-      </div>
-      <div className="text-right shrink-0">
-        <div className={`text-[11px] font-mono ${isSell ? 'text-red-400/60' : 'text-emerald-400/60'}`}>
-          {(order.price * 100).toFixed(1)}¢
-        </div>
-        <div className="text-[9px] font-mono text-white/20 mt-0.5">${order.size.toFixed(2)}</div>
-      </div>
     </div>
   )
 }
@@ -570,8 +590,8 @@ const dotCls: Record<string, string> = {
   degraded: 'bg-red-500', error: 'bg-red-500', stopped: 'bg-white/20', idle: 'bg-white/20',
 }
 
-function MiniStat({ label, value, color, tooltip, tooltipTitle }: {
-  label: string; value: React.ReactNode; color?: string; tooltip?: string; tooltipTitle?: string
+function MiniStat({ label, value, color, tooltip, tooltipTitle, sub }: {
+  label: string; value: React.ReactNode; color?: string; tooltip?: string; tooltipTitle?: string; sub?: React.ReactNode
 }) {
   return (
     <div>
@@ -580,6 +600,7 @@ function MiniStat({ label, value, color, tooltip, tooltipTitle }: {
         {tooltip && <InfoTip content={tooltip} title={tooltipTitle} />}
       </div>
       <div className={`text-[12px] font-bold font-mono tabular-nums leading-none ${color ?? 'text-white/70'}`}>{value}</div>
+      {sub && <div className="text-[9px] font-mono text-white/25 mt-0.5 leading-tight">{sub}</div>}
     </div>
   )
 }
@@ -735,7 +756,26 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
       <div className="px-5 py-3 grid grid-cols-5 gap-3 border-b border-white/[0.03]">
         {loaded ? (
           <>
-            <MiniStat label="Volume"   value={fmtUsd(rt!.total_volume, 2)} />
+            {(() => {
+              const vol = rt!.total_volume
+              const size = session.gross_capital
+              const uptime = rt!.uptime_s ?? 0
+              const totalX = size > 0 ? vol / size : null
+              const dailyX = totalX != null && uptime > 0 ? totalX / (uptime / 86400) : null
+              const fmtX = (x: number) => `${x.toFixed(2)}×`
+              return (
+                <MiniStat
+                  label="Volume"
+                  value={fmtUsd(vol, 2)}
+                  sub={totalX != null ? (
+                    <>
+                      <span className="hidden sm:inline">{fmtX(totalX)} total · {dailyX != null ? fmtX(dailyX) : '—'} / 24h</span>
+                      <span className="sm:hidden flex flex-col gap-0">{fmtX(totalX)} total<br />{dailyX != null ? fmtX(dailyX) : '—'} 24h</span>
+                    </>
+                  ) : undefined}
+                />
+              )
+            })()}
             <MiniStat label="Orders"   value={String(rt!.order_count ?? rt!.trade_count)} />
             <MiniStat label="Realized" value={fmtUsd(realizedPnl, 2)} color={pnlColor(realizedPnl)} />
             <MiniStat label="Fees"     value={fmtUsdFloor(fees)} color="text-white/25" />
@@ -793,11 +833,8 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
         </div>
       </div>
 
-      {/* ── Positions ─────────────────────────────────────────────────────── */}
-      <PositionsList slots={slotStats} loaded={loaded} />
-
-      {/* ── Open Orders (BUY + SELL) ───────────────────────────────────────── */}
-      <OrdersList slots={slotStats} loaded={loaded} />
+      {/* ── Slots (positions + orders, collapsed) ─────────────────────────── */}
+      <SlotActivityList slots={slotStats} loaded={loaded} />
 
       {/* ── Stop modal ────────────────────────────────────────────────────── */}
       {showStopModal && (

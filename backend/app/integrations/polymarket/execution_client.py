@@ -189,9 +189,41 @@ class ExecutionClient:
                 json={"client_id": self._client_id, "token_id": token_id},
             )
             resp.raise_for_status()
-            return float(resp.json().get("balance", 0.0))
+            raw = float(resp.json().get("balance", 0.0))
+            # Polymarket conditional tokens use 6 decimals — SDK returns raw wei
+            return raw / 1_000_000.0
         except Exception:
             return None
+
+    async def get_all_positions(self) -> list[dict]:
+        """Fetch all CTF positions from Polymarket data-api using proxy_address."""
+        addr = self._proxy_address or self._wallet_address
+        if not addr:
+            return []
+        try:
+            resp = await self._http.get(
+                f"{settings.DATA_API_HOST}/positions",
+                params={"user": addr, "sizeThreshold": "0.01", "limit": "500"},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            items = resp.json()
+            if not isinstance(items, list):
+                return []
+            return [
+                {
+                    "token_id":  item.get("asset") or "",
+                    "size":      float(item.get("size") or 0),
+                    "avg_price": float(item.get("avgPrice") or 0),
+                    "cur_price": float(item.get("curPrice") or 0),
+                    "question":  item.get("title") or "",
+                    "outcome":   item.get("outcome") or "",
+                }
+                for item in items
+                if float(item.get("size") or 0) >= 0.01 and item.get("asset")
+            ]
+        except Exception:
+            return []
 
     @property
     def is_initialized(self) -> bool:

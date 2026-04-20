@@ -104,7 +104,15 @@ impl LiveClientHandle {
         Ok(())
     }
 
-    pub async fn place_limit_order(&self, token_id: &str, price: f64, size: f64, side: &str) -> Result<Value> {
+    pub async fn place_limit_order(
+        &self,
+        token_id: &str,
+        price: f64,
+        size: f64,
+        side: &str,
+        tick_size: Option<&str>,
+        neg_risk: bool,
+    ) -> Result<Value> {
         use polymarket_client_sdk::clob::types::OrderType;
 
         let side_enum = match side.to_uppercase().as_str() {
@@ -113,8 +121,26 @@ impl LiveClientHandle {
             other => anyhow::bail!("unknown side: {other}"),
         };
 
-        let price_dec = Decimal::from_str(&format!("{price:.3}")).context("parse price")?;
-        let size_dec = Decimal::from_str(&format!("{size:.2}")).context("parse size")?;
+        // Fetch actual tick_size from SDK (which caches it) so we snap price to correct precision.
+        // Fall back to caller-provided tick_size if the API call fails.
+        let sdk_tick = self.client.tick_size(token_id).await
+            .map(|r| r.minimum_tick_size.to_string())
+            .unwrap_or_else(|_| tick_size.unwrap_or("0.001").to_string());
+
+        let tick_str = sdk_tick.as_str();
+        let decimals = tick_str.find('.').map(|dot| tick_str.len() - dot - 1).unwrap_or(3);
+
+        // Snap price to tick_size precision (truncate extra decimals)
+        let tick_dec = Decimal::from_str(tick_str).unwrap_or_else(|_| Decimal::from_str("0.001").unwrap());
+        let price_raw = Decimal::from_str(&format!("{price:.6}")).context("parse price")?;
+        let price_dec = (price_raw / tick_dec).trunc() * tick_dec;
+        // Clamp to [tick, 1 - tick]
+        let price_dec = price_dec.max(tick_dec).min(Decimal::ONE - tick_dec);
+
+        let size_str = format!("{size:.2}");
+        let size_dec = Decimal::from_str(&size_str).context("parse size")?;
+
+        let _ = decimals; // used via sdk_tick above
 
         let signable = self.client
             .limit_order()

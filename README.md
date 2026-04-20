@@ -757,6 +757,28 @@ Backend restart = **automatic session recovery** (~3–5s downtime).
 5. If session stays `degraded`: `POST /api/v1/admin/sessions/{id}/recovery/retry`
 6. Re-enable: `global_pause=false`
 
+
+
+
+
+et ajoute sur sessions admin une option pour lancerune session pour un user avec les criteres que je choisis en tant qu'admin parmis liste des users sans session running.
+
+pour l'onboarding fais qu'on peut skip et accéder à l'app à l'étape du depot e tdu bridge avec un skip for now. mais que sinon ça marche quand même, dire que délay c'est d'environ 60s. si on skip for now dans la page deposit à gauche de bridge history met un bouton comme launch session pour Bridge (et rename bridge history, juste history), qui ouvre comme l'étape 3 du onboarding et que ça fonctionne comme onboarding, en gros on peut use le reste de l'app et y accéder sans avoir deposit forcément en onboarding, réduit la friction, fais que les 2 options, depot au onboarding comme maintenant, ou skip for now, fonctionne sans casser l'app quelque part.
+
+ensuite je  veux aussi créé des referral en gros, onboarding avant l'étape 2 pour choisir son username tu met pareil que lui mais pour mettre l'username d'un parrain (en dessous écrire le parrain gagne 10% des frais automatiquement vers son compte, pas obligé d'en sélectionner un), donc verif en bdd si il y a un user avec cet username sinon dire pas troubé, tu peux skip for now cette étape. chaque user peut avoir un parrain ou non, il peut etre null de base, sur ton onglet profile en dessous perfomance mettre bouton pour définir son parrain si on l'a pas fait à l'onboarding donc meme principe, et si y'en a un, impossible de le changer ou d'écrire.
+
+en dessous mettre un lien pour partager son ref à lui sous format ..com/?r=REF
+et en dessous mettre Rewards avec en USDC x.xx$ l'usdc reçu par ses filleuls qui ont mit en parrain
+
+et si tu vas sur l'app avec un ref dans l'url ça l'auto rempli lors de l'onboarding à l'étape 2
+
+lors des paiement de frais, si l'user a un parrain (éviter requete à chaque bdd pour les paiement tui save en memory au lancement session) tu recup le wallet arbitrum du parrain et t'envoie 10% des fees payés, si y a des frais payés donc both buy ou sell et pas 0 bps fee en override, en USDC vers le wallet du parrain).
+
+tout en responsive pour  ce que je viens de te dire
+
+pose des questions avant si t'en a
+
+
 ---
 
 ## Auth Flow

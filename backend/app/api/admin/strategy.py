@@ -211,6 +211,87 @@ async def get_global_strategy(db: DbSession, admin: AdminUser):
     return await _strategy_detail(db, strat)
 
 
+@router.get("/global/slot-volume")
+async def get_slot_volume_stats(db: DbSession, admin: AdminUser):
+    """Per-slot volume/pnl/fees stats across all sessions, plus live engine data."""
+    from app.db.models import SessionSlot as DBSessionSlot, SessionSlotMarketHistory, Session as DBSession
+    from app.runtime.session_registry import session_registry
+    import datetime
+
+    strat = await _get_global_strategy(db)
+
+    slots_q = await db.execute(
+        select(StrategySlot)
+        .where(StrategySlot.strategy_id == strat.id, StrategySlot.archived_at.is_(None))
+        .order_by(StrategySlot.order_index)
+    )
+    strategy_slots = slots_q.scalars().all()
+
+    live_engines = {e.session_id: e for e in await session_registry.all()}
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    results = []
+    for ss in strategy_slots:
+        # All session slots for this strategy slot
+        ss_rows_q = await db.execute(
+            select(DBSessionSlot).where(DBSessionSlot.strategy_slot_id == ss.id)
+        )
+        ss_rows = ss_rows_q.scalars().all()
+        ss_ids = [r.id for r in ss_rows]
+        session_ids = list({r.session_id for r in ss_rows if r.session_id})
+
+        # DB history (closed)
+        mh_q = await db.execute(
+            select(SessionSlotMarketHistory)
+            .where(SessionSlotMarketHistory.session_slot_id.in_(ss_ids))
+        )
+        markets = mh_q.scalars().all()
+        db_vol  = sum((m.volume or 0) for m in markets)
+        db_pnl  = sum((m.realized_pnl or 0) for m in markets)
+        db_fees = sum((m.fees_paid or 0) for m in markets)
+
+        # Live engine data — match by session_slot_id
+        ss_id_set = set(ss_ids)
+        live_vol = live_pnl = live_fees = 0.0
+        for sid in session_ids:
+            eng = live_engines.get(sid)
+            if eng:
+                for slot_rt in eng._slot_runtimes.values():
+                    if slot_rt._session_slot_id in ss_id_set:
+                        live_vol  += slot_rt._volume
+                        live_pnl  += slot_rt._realized_pnl
+                        live_fees += slot_rt._paid_fees
+
+        total_vol  = round(db_vol + live_vol, 2)
+        total_pnl  = round(db_pnl + live_pnl, 2)
+        total_fees = round(db_fees + live_fees, 2)
+        alloc = ss.allocation_pct or 0
+
+        # Compute daily vol annualised from live sessions
+        daily_vol = 0.0
+        for sid in session_ids:
+            eng = live_engines.get(sid)
+            if eng:
+                uptime_days = eng.uptime_s / 86400 if eng.uptime_s > 0 else None
+                if uptime_days and uptime_days > 0:
+                    for slot_rt in eng._slot_runtimes.values():
+                        if slot_rt._session_slot_id in ss_id_set:
+                            daily_vol += slot_rt._volume / uptime_days
+
+        results.append({
+            "slot_id":      ss.id,
+            "label":        ss.label,
+            "alloc_pct":    alloc,
+            "total_volume": total_vol,
+            "total_pnl":    total_pnl,
+            "total_fees":   total_fees,
+            "daily_volume": round(daily_vol, 2),
+            "session_count": len(session_ids),
+        })
+
+    return results
+
+
 @router.get("/global-published-slots")
 async def get_published_slots(db: DbSession, admin: AdminUser):
     """Return slots as frozen in the latest published version."""
