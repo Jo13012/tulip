@@ -367,7 +367,26 @@ async def funding_status(user: CurrentUser, db: DbSession):
 
     if FUNDING_ENABLED and wallet_funded and auto_bridge_allowed:
         last_obs = wallet.funding_last_usdc_observed or 0.0
-        if usdc_balance - last_obs >= bridge_trigger_amount:
+        observed_delta = usdc_balance - last_obs
+        should_auto_bridge = (
+            observed_delta >= bridge_trigger_amount
+            or bridge_available
+        )
+        log.info(
+            "[funding:auto] user=%s state=%s wallet_funded=%s bridge_available=%s "
+            "usdc=%.6f trading=%s last_obs=%.6f observed_delta=%.6f trigger=%.6f should_auto_bridge=%s",
+            user["sub"],
+            wallet.funding_state,
+            wallet_funded,
+            bridge_available,
+            usdc_balance,
+            f"{trading_balance:.6f}" if trading_balance is not None else "None",
+            last_obs,
+            observed_delta,
+            bridge_trigger_amount,
+            should_auto_bridge,
+        )
+        if should_auto_bridge:
             locked_wallet = await _get_primary_wallet(user["sub"], db, for_update=True)
             if locked_wallet and locked_wallet.funding_state in ("idle", "completed"):
                 # Re-fetch live balance after acquiring lock to avoid race condition
@@ -382,6 +401,13 @@ async def funding_status(user: CurrentUser, db: DbSession):
                     try:
                         deposit_address = await _ensure_cached_deposit_address(wallet, db)
                         amount_to_bridge = funding_service.compute_bridge_amount(fresh_usdc, trading_balance)
+                        log.info(
+                            "[funding:auto] user=%s fresh_usdc=%.6f amount_to_bridge=%.6f deposit=%s",
+                            user["sub"],
+                            fresh_usdc,
+                            amount_to_bridge,
+                            deposit_address,
+                        )
                         if amount_to_bridge <= 0:
                             # Nothing to bridge — reset state, no FundingTransaction created
                             wallet.funding_state = "completed" if (trading_balance or 0.0) > 0 else "idle"
@@ -411,6 +437,12 @@ async def funding_status(user: CurrentUser, db: DbSession):
                             ft.state = "submitted"
                             ft.tx_hash = tx_hash
                             await db.commit()
+                            log.info(
+                                "[funding:auto] user=%s tx_submitted=%s amount=%.6f",
+                                user["sub"],
+                                tx_hash,
+                                amount_to_bridge,
+                            )
                             message = "Bridge in progress. Your trading balance should update automatically."
                     except (BridgeClientError, PrivyTxError) as e:
                         wallet.funding_state = "failed"
@@ -418,8 +450,8 @@ async def funding_status(user: CurrentUser, db: DbSession):
                             ft.state = "failed"
                             ft.error_detail = str(e)
                         await db.commit()
-                        if not (trading_balance is not None and trading_balance > 0):
-                            message = f"Funding failed: {e}"
+                        log.warning("[funding:auto] user=%s failed: %s", user["sub"], e)
+                        message = f"Funding failed: {e}"
 
     return FundingStatusOut(
         trading_balance=trading_balance,

@@ -64,10 +64,8 @@ def compute_viability(
     The most capital-hungry slot sets the floor.
     min_capital / recommended_capital are expressed in gross for the UI.
     """
-    reserve_factor = min(max(reserve_pct / 100.0, 0.0), 1.0)
-    deployable = gross_capital * (1.0 - reserve_factor)
+    deployable = gross_capital * (1 - reserve_pct / 100) 
     enabled = [s for s in slots if s.get("enabled", True) and s.get("allocation_pct", 0) > 0]
-
     if not enabled:
         return ViabilityResult(True, 0.0, 0.0, "No enabled slots")
 
@@ -82,7 +80,7 @@ def compute_viability(
         min_dep = max(min_dep, (levels * MIN_LOT_USDC) / alloc_pct)
 
     # Convert back to gross for UI display
-    factor      = 1.0 - reserve_factor
+    factor      = (1 - reserve_pct / 100)
     min_gross   = min_dep / factor if factor > 0 else min_dep
     rec_gross   = min_gross * 3.0
 
@@ -287,9 +285,8 @@ class SessionManager:
                 )
 
             # Capital split
-            reserve_pct = strat.reserve_pct or 0.0
-            reserve_factor = min(max(reserve_pct / 100.0, 0.0), 1.0)
-            fee_reserve = round(gross_capital * reserve_factor, 2)
+            reserve_pct = strat.reserve_pct
+            fee_reserve = round(gross_capital * reserve_pct / 100, 2)
             deployable  = round(gross_capital - fee_reserve, 2)
 
             # Create session
