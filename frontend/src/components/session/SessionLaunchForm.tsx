@@ -26,7 +26,7 @@ export function SessionLaunchForm({ strategy, walletId, onLaunched }: Props) {
 
   const gross      = parseFloat(grossCapital) || 0
   const reservePct = strategy.reserve_pct
-  const feeRes     = gross * 0.95
+  const feeRes     = gross * 0.05
   const deployable = gross - feeRes
 
   useEffect(() => {
