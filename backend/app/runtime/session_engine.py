@@ -28,7 +28,6 @@ from app.integrations.polymarket.execution_client import ExecutionClient
 from app.services.fee_service import fee_service
 from app.services.fee_payment_service import FeePaymentError
 from app.services.nuclear_close_service import run_nuclear_close
-from app.services.redeem_service import redeem_service
 from app.services import funding_service
 from app.core.config import settings
 
@@ -262,12 +261,6 @@ class SessionEngine:
                             stop_reason=reason,
                         )
                     )
-                    redeem_result = await redeem_service.redeem_session_winnings(
-                        db,
-                        self.session_id,
-                        trigger="hard_stop",
-                    )
-                    await self._log_session("INFO", f"Hard stop redeem result: {redeem_result}")
                     await db.commit()
             except Exception as e:
                 await self._log_session("ERROR", f"Failed to persist hard stop: {e}")
@@ -389,11 +382,6 @@ class SessionEngine:
                         action="session.soft_stop_complete",
                         entity_type="session", entity_id=self.session_id,
                     ))
-                    await redeem_service.redeem_session_winnings(
-                        db,
-                        self.session_id,
-                        trigger="soft_stop_complete",
-                    )
                     await db.commit()
             except Exception as e:
                 await self._log_session("ERROR", f"Failed to persist soft stop: {e}")

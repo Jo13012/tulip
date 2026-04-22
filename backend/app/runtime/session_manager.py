@@ -30,7 +30,6 @@ from app.integrations.polymarket.execution_client import ExecutionClient
 from app.integrations.polymarket.market_resolver import market_resolver
 from app.core.config import settings
 from app.services import funding_service
-from app.services.redeem_service import redeem_service
 
 MIN_LOT_USDC = 5   # Practical minimum USDC per lot
 
@@ -524,11 +523,6 @@ class SessionManager:
                     entity_type="session",
                     entity_id=session_id,
                 ))
-                await redeem_service.redeem_session_winnings(
-                    db,
-                    session_id,
-                    trigger="manual_soft_stop",
-                )
                 await db.commit()
         else:
             # Hard stop — engine wrote snapshot+status if it was alive; add audit log.
@@ -552,18 +546,6 @@ class SessionManager:
                     entity_type="session",
                     entity_id=session_id,
                 ))
-                if not engine:
-                    log.info("[session_manager] session=%s manual_hard_stop redeem without live engine", session_id[:8])
-                    redeem_result = await redeem_service.redeem_session_winnings(
-                        db,
-                        session_id,
-                        trigger="manual_hard_stop",
-                    )
-                    log.info(
-                        "[session_manager] session=%s manual_hard_stop redeem result=%s",
-                        session_id[:8],
-                        redeem_result,
-                    )
                 await db.commit()
 
 

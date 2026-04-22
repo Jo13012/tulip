@@ -27,10 +27,6 @@ from app.services.privy_tx_service import PrivyTxError, _privy_rpc
 
 log = logging.getLogger("uvicorn.error")
 
-_ZERO_BYTES32 = b"\x00" * 32
-_REDEEM_SELECTOR = keccak(text="redeemPositions(address,bytes32,bytes32,uint256[])")[:4]
-
-
 class RedeemService:
     async def redeem_session_winnings(
         self,

@@ -718,9 +718,9 @@ git push origin main
 ### Send secrets to VPS (only when keys change)
 
 ```bash
-scp backend/.env.prod     tulip@95.179.180.246:~/tulip/backend/.env
-scp frontend/.env.prod    tulip@95.179.180.246:~/tulip/frontend/.env
-scp polymarket_rust_service/.env.prod  tulip@95.179.180.246:~/tulip/polymarket_rust_service/.env
+scp backend/.env.production     tulip@95.179.180.246:~/tulip/backend/.env
+scp frontend/.env.production    tulip@95.179.180.246:~/tulip/frontend/.env
+scp polymarket_rust_service/.env.production  tulip@95.179.180.246:~/tulip/polymarket_rust_service/.env
 ```
 
 ### Pull and restart on VPS
