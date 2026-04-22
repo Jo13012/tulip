@@ -23,6 +23,7 @@ from app.runtime.session_manager import session_manager
 from app.services.balance_poller import balance_poller
 from app.integrations.polymarket.execution_client import ExecutionClient
 from app.runtime.market_data_service import market_data_service
+from app.runtime.runtime_models import norm
 from sqlalchemy import func as _func
 
 
