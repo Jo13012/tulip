@@ -15,6 +15,10 @@ log = logging.getLogger("uvicorn.error")
 async def ensure_user_profile_columns() -> None:
     statements = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name_updated_at TIMESTAMPTZ",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name_change_count INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS referrer_user_id VARCHAR",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_reward_usdc FLOAT DEFAULT 0.0",
+        "CREATE INDEX IF NOT EXISTS ix_users_referrer_user_id ON users(referrer_user_id)",
     ]
 
     async with engine.begin() as conn:

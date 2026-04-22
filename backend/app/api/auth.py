@@ -13,12 +13,13 @@ Dev mode only:
 """
 from __future__ import annotations
 import uuid
-from datetime import datetime, timedelta, timezone
+import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from jose import jwt
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.core.config import settings
 from app.core.deps import CurrentUser
@@ -42,6 +43,9 @@ class UserProfile(BaseModel):
     user_id: str
     privy_user_id: str
     display_name: str = ""
+    can_change_username: bool = True
+    referrer_username: str | None = None
+    referral_reward_usdc: float = 0.0
     is_admin: bool
     wallet_id: str = ""
     wallet_address: str = ""
@@ -50,6 +54,41 @@ class UserProfile(BaseModel):
 
 class UpdateDisplayNameRequest(BaseModel):
     display_name: str = Field(min_length=3, max_length=15, pattern=r"^[A-Za-z0-9]+$")
+
+
+AUTO_DISPLAY_NAME_RE = re.compile(r"^0x[0-9a-fA-F]{4}.*[0-9a-fA-F]{4}$")
+
+
+async def _get_referrer_username(db, referrer_user_id: str | None) -> str | None:
+    if not referrer_user_id:
+        return None
+    q = await db.execute(select(User.display_name).where(User.id == referrer_user_id))
+    return q.scalar()
+
+
+async def _ensure_display_name_available(db, display_name: str, *, exclude_user_id: str | None = None) -> None:
+    stmt = select(User.id).where(func.lower(User.display_name) == display_name.lower())
+    if exclude_user_id:
+        stmt = stmt.where(User.id != exclude_user_id)
+    existing = await db.execute(stmt.limit(1))
+    if existing.scalar():
+        raise HTTPException(status_code=409, detail="Username already taken")
+
+
+def _is_auto_display_name(display_name: str | None) -> bool:
+    trimmed = (display_name or "").strip()
+    if not trimmed:
+        return False
+    return bool(AUTO_DISPLAY_NAME_RE.match(trimmed))
+
+
+def _can_change_username(db_user: User | None) -> bool:
+    if not db_user:
+        return True
+    current_display_name = (db_user.display_name or "").strip()
+    if not current_display_name or _is_auto_display_name(current_display_name):
+        return True
+    return int(db_user.display_name_change_count or 0) < 1
 
 
 # ── Dev token (local dev only) ────────────────────────────────────────────────
@@ -302,11 +341,15 @@ async def sync_user(request: Request, body: SyncRequest):
 
         await db.commit()
         await db.refresh(user)
+        referrer_username = await _get_referrer_username(db, user.referrer_user_id)
 
     return UserProfile(
         user_id=user.id,
         privy_user_id=privy_user_id,
         display_name=user.display_name or "",
+        can_change_username=_can_change_username(user),
+        referrer_username=referrer_username,
+        referral_reward_usdc=round(float(user.referral_reward_usdc or 0.0), 2),
         is_admin=user.is_admin,
         wallet_id=primary_wallet_id,
         wallet_address=primary_wallet_address,
@@ -329,11 +372,15 @@ async def get_me(user: CurrentUser):
         wallet = wq.scalars().first()
         uq = await db.execute(select(User).where(User.id == user["sub"]))
         db_user = uq.scalars().first()
+        referrer_username = await _get_referrer_username(db, db_user.referrer_user_id if db_user else None)
 
     return UserProfile(
         user_id=user["sub"],
         privy_user_id=user["privy_id"],
         display_name=db_user.display_name if db_user else "",
+        can_change_username=_can_change_username(db_user),
+        referrer_username=referrer_username,
+        referral_reward_usdc=round(float(db_user.referral_reward_usdc or 0.0), 2) if db_user else 0.0,
         is_admin=user["is_admin"],
         wallet_id=wallet.id if wallet else "",
         wallet_address=wallet.wallet_address if wallet else "",
@@ -349,21 +396,19 @@ async def update_profile(body: UpdateDisplayNameRequest, user: CurrentUser):
         if not db_user:
             raise HTTPException(status_code=404, detail="User not found")
 
-        now = datetime.now(timezone.utc)
         if db_user.display_name != body.display_name:
-            last_update = db_user.display_name_updated_at
-            if last_update:
-                elapsed = now - last_update
-                if elapsed < timedelta(hours=12):
-                    remaining = timedelta(hours=12) - elapsed
-                    hours = int(remaining.total_seconds() // 3600)
-                    minutes = int((remaining.total_seconds() % 3600) // 60)
-                    raise HTTPException(
-                        status_code=429,
-                        detail=f"Username can be changed once every 12 hours. Try again in {hours}h {minutes}m.",
-                    )
+            await _ensure_display_name_available(db, body.display_name, exclude_user_id=db_user.id)
+            current_display_name = (db_user.display_name or "").strip()
+            is_initial_setup = not current_display_name or _is_auto_display_name(current_display_name)
+            if not is_initial_setup and int(db_user.display_name_change_count or 0) >= 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Username can only be changed once after your initial setup.",
+                )
             db_user.display_name = body.display_name
-            db_user.display_name_updated_at = now
+            db_user.display_name_updated_at = datetime.now(timezone.utc)
+            if not is_initial_setup:
+                db_user.display_name_change_count = int(db_user.display_name_change_count or 0) + 1
         await db.commit()
         await db.refresh(db_user)
 
@@ -374,11 +419,15 @@ async def update_profile(body: UpdateDisplayNameRequest, user: CurrentUser):
             )
         )
         wallet = wq.scalars().first()
+        referrer_username = await _get_referrer_username(db, db_user.referrer_user_id)
 
     return UserProfile(
         user_id=db_user.id,
         privy_user_id=db_user.privy_user_id or "",
         display_name=db_user.display_name or "",
+        can_change_username=_can_change_username(db_user),
+        referrer_username=referrer_username,
+        referral_reward_usdc=round(float(db_user.referral_reward_usdc or 0.0), 2),
         is_admin=db_user.is_admin,
         wallet_id=wallet.id if wallet else "",
         wallet_address=wallet.wallet_address if wallet else "",

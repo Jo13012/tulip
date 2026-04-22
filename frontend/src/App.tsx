@@ -10,7 +10,7 @@ import { AdminSidebar } from './components/layout/AdminSidebar'
 import { OnboardingModal, getFundingSkipKey } from './components/user/OnboardingModal'
 import tulipLogo from './assets/tulip.png'
 
-import UserDashboard   from './pages/UserDashboard'
+import UserDashboard from './pages/UserDashboard'
 import AdminDashboard  from './pages/admin/Dashboard'
 import AdminStrategies from './pages/admin/Strategies'
 import AdminSessions   from './pages/admin/Sessions'
@@ -302,6 +302,15 @@ export default function App() {
   useEffect(() => {
     initApiAuth(() => getAccessToken())
   }, [getAccessToken])
+
+  useEffect(() => {
+    try {
+      const ref = new URLSearchParams(window.location.search).get('r')?.trim()
+      if (ref) {
+        sessionStorage.setItem('referral_prefill', ref)
+      }
+    } catch {}
+  }, [])
 
   async function bootstrap() {
     setBootstrapping(true)

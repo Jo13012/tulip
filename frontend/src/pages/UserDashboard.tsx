@@ -1,10 +1,11 @@
 /**
  * UserDashboard - User shell.
  * Layout: fixed top bar + tab navigation + content area.
- * Tabs: Run | History | Profile | Settings
+ * Tabs: Run | History | Performance | Profile | Settings
  */
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Sparkles } from 'lucide-react'
 
 import { useAppStore } from '../store'
 import { api } from '../utils/api'
@@ -14,11 +15,12 @@ import { FUNDING_STATUS_REFRESH_MS } from '../utils/bridge'
 
 import { RunTab } from '../components/user/RunTab'
 import { HistoryTab } from '../components/user/HistoryTab'
+import { PerformanceTab } from '../components/user/PerformanceTab'
 import { SettingsTab } from '../components/user/SettingsTab'
 import { ProfileTab } from '../components/user/ProfileTab'
 import { FaqTab } from '../components/user/FaqTab'
 
-type Tab = 'run' | 'history' | 'profile' | 'settings' | 'faq'
+type Tab = 'run' | 'history' | 'performance' | 'profile' | 'settings' | 'faq'
 
 interface Props {
   user: AppUser
@@ -199,6 +201,16 @@ export default function UserDashboard({ user, onSignOut }: Props) {
 
   return (
     <div className="min-h-screen bg-[#0a0b0d] flex flex-col">
+      <style>{`
+        @keyframes giftWiggle {
+          0%, 100% { transform: rotate(0deg) translateY(0); }
+          15% { transform: rotate(-10deg) translateY(-0.5px); }
+          30% { transform: rotate(8deg) translateY(0); }
+          45% { transform: rotate(-6deg) translateY(-0.5px); }
+          60% { transform: rotate(4deg) translateY(0); }
+          75% { transform: rotate(-2deg) translateY(0); }
+        }
+      `}</style>
       {/* Event banner */}
       {EVENT_BANNER.active && (() => {
         const { text, emphasis } = EVENT_BANNER
@@ -238,6 +250,20 @@ export default function UserDashboard({ user, onSignOut }: Props) {
               admin {'->'}
             </Link>
           )}
+          <button
+            onClick={() => setTab('profile')}
+            className="group flex items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-500/[0.12] px-2.5 py-1 text-emerald-300/90 hover:bg-emerald-500/[0.16] hover:border-emerald-300/30 transition-colors"
+            title="Open rewards"
+          >
+            <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-400/12 text-emerald-300">
+              <Sparkles
+                size={12}
+                strokeWidth={2}
+                className="animate-[giftWiggle_2.2s_ease-in-out_infinite] group-hover:animate-[giftWiggle_1s_ease-in-out_infinite]"
+              />
+            </span>
+            <span className="hidden sm:inline text-[11px] font-semibold tracking-wide text-emerald-200/95">Referral campaign</span>
+          </button>
           <a
             href="https://discord.gg/y2B8kmAA3n"
             target="_blank"
@@ -312,7 +338,7 @@ export default function UserDashboard({ user, onSignOut }: Props) {
       {/* Tab bar */}
       <div className="flex-shrink-0 border-b border-white/[0.06]">
         <div className="w-[80%] mx-auto flex">
-          {(['run', 'history', 'profile', 'settings'] as Tab[]).map((t) => (
+          {(['run', 'history', 'performance', 'profile', 'settings'] as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -355,6 +381,7 @@ export default function UserDashboard({ user, onSignOut }: Props) {
             />
           )}
           {tab === 'history' && <HistoryTab />}
+          {tab === 'performance' && <PerformanceTab />}
           {tab === 'profile' && <ProfileTab user={user} />}
           {tab === 'settings' && <SettingsTab user={user} onSignOut={onSignOut} />}
           {tab === 'faq' && <FaqTab />}

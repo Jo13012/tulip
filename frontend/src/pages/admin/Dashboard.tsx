@@ -98,6 +98,79 @@ function fmtShortDate(iso: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
+const CHART_PAD_L = 52
+const CHART_PAD_R = 12
+const CHART_PAD_T = 16
+const CHART_PAD_B = 28
+const CHART_W = 900
+const CHART_H = 180
+
+function buildIndexBands(length: number, chartW: number) {
+  if (length <= 0) return []
+  return Array.from({ length }, (_, i) => {
+    if (length === 1) return { left: 0, width: chartW, center: chartW / 2 }
+    const step = chartW / (length - 1)
+    const center = i * step
+    const left = i === 0 ? 0 : center - step / 2
+    const right = i === length - 1 ? chartW : center + step / 2
+    return { left, width: right - left, center }
+  })
+}
+
+function groupMultipleByDate(rows: SessionMultiple[]): SessionMultiple[] {
+  const grouped = new Map<string, {
+    date: string
+    volume: number
+    gross_pnl: number
+    fees: number
+    capital: number
+    capital_days: number
+    run_days_weighted: number
+    count: number
+  }>()
+
+  for (const row of rows) {
+    const capitalDays = Math.max(0, row.capital) * Math.max(0, row.run_days)
+    const current = grouped.get(row.date) ?? {
+      date: row.date,
+      volume: 0,
+      gross_pnl: 0,
+      fees: 0,
+      capital: 0,
+      capital_days: 0,
+      run_days_weighted: 0,
+      count: 0,
+    }
+    current.volume += row.volume || 0
+    current.gross_pnl += row.gross_pnl || 0
+    current.fees += row.fees || 0
+    current.capital += row.capital || 0
+    current.capital_days += capitalDays
+    current.run_days_weighted += capitalDays
+    current.count += 1
+    grouped.set(row.date, current)
+  }
+
+  return Array.from(grouped.values())
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((row) => {
+      const gross_multiple = row.capital_days > 0 ? row.volume / row.capital_days : 0
+      const net_multiple = row.capital_days > 0 ? (row.volume - row.fees) / row.capital_days : 0
+      const avg_run_days = row.capital > 0 ? row.run_days_weighted / row.capital : 0
+      return {
+        session_id: `group:${row.date}`,
+        date: row.date,
+        volume: Number(row.volume.toFixed(2)),
+        run_days: Number(avg_run_days.toFixed(3)),
+        capital: Number(row.capital.toFixed(2)),
+        gross_multiple: Number(gross_multiple.toFixed(4)),
+        net_multiple: Number(net_multiple.toFixed(4)),
+        gross_pnl: Number(row.gross_pnl.toFixed(2)),
+        fees: Number(row.fees.toFixed(2)),
+      }
+    })
+}
+
 function VolumeChart({ data }: { data: DayVolume[] }) {
   const [tooltip, setTooltip] = useState<{ x: number; y: number; date: string; volume: number; fees: number } | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
@@ -160,7 +233,7 @@ function VolumeChart({ data }: { data: DayVolume[] }) {
           return (
             <rect
               key={d.date}
-              x={x} y={y} width={barW} height={barH} rx={2}
+              x={x} y={y} width={barW} height={barH } rx={2}
               fill={isHov ? 'rgba(16,185,129,0.75)' : 'rgba(16,185,129,0.40)'}
               className="cursor-default transition-colors"
               onMouseEnter={(e) => {
@@ -203,10 +276,129 @@ function VolumeChart({ data }: { data: DayVolume[] }) {
   )
 }
 
+// ── Catmull-Rom spline ────────────────────────────────────────────────────────
+// Remplace les segments droits par des courbes lisses
+
+function catmullRom(points: { x: number; y: number }[], tension = 0.4): string {
+  if (points.length < 2) return ""
+  const pts = [points[0], ...points, points[points.length - 1]]
+  let d = `M${points[0].x.toFixed(2)},${points[0].y.toFixed(2)}`
+  for (let i = 1; i < points.length; i++) {
+    const p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2]
+    const cp1x = p1.x + (p2.x - p0.x) * tension
+    const cp1y = p1.y + (p2.y - p0.y) * tension
+    const cp2x = p2.x - (p3.x - p1.x) * tension
+    const cp2y = p2.y - (p3.y - p1.y) * tension
+    d += ` C${cp1x.toFixed(2)},${cp1y.toFixed(2)} ${cp2x.toFixed(2)},${cp2y.toFixed(2)} ${p2.x.toFixed(2)},${p2.y.toFixed(2)}`
+  }
+  return d
+}
+
+// ── Animated line (draw-on effect) ────────────────────────────────────────────
+
+function AnimatedLinePath({ d }: { d: string }) {
+  const ref = useRef<SVGPathElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const len = el.getTotalLength?.() ?? 600
+    el.style.strokeDasharray = String(len)
+    el.style.strokeDashoffset = String(len)
+    el.style.transition = "none"
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        el.style.transition = "stroke-dashoffset 1.1s cubic-bezier(0.4,0,0.2,1)"
+        el.style.strokeDashoffset = "0"
+      })
+    })
+  }, [d])
+  return (
+    <>
+      {/* Glow layer derrière */}
+      <path d={d} stroke="rgba(52,211,153,0.22)" strokeWidth={4} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      {/* Ligne principale animée */}
+      <path ref={ref} d={d} stroke="rgba(52,211,153,0.92)" strokeWidth={1.6} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+    </>
+  )
+}
+
+// ── Glow dot ──────────────────────────────────────────────────────────────────
+
+function GlowDot({ cx, cy, active }: { cx: number; cy: number; active: boolean }) {
+  return (
+    <g>
+      {active && (
+        <>
+          <circle cx={cx} cy={cy} r={14} fill="rgba(52,211,153,1)" opacity={0.07} />
+          <circle cx={cx} cy={cy} r={8}  fill="rgba(52,211,153,1)" opacity={0.13} />
+        </>
+      )}
+      <circle
+        cx={cx} cy={cy}
+        r={active ? 4.5 : 3}
+        fill="rgba(52,211,153,0.96)"
+        stroke={active ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.1)"}
+        strokeWidth={active ? 1.5 : 1}
+        style={{ transition: "r 0.12s, opacity 0.12s" }}
+      />
+    </g>
+  )
+}
+
+// ── Tooltip ───────────────────────────────────────────────────────────────────
+// Remplace ton TooltipShell — se repositionne automatiquement aux bords
+
+function TooltipShell({
+  x, y, children, svgRef, width = 120,
+}: {
+  x: number; y: number; children: React.ReactNode
+  svgRef: React.RefObject<SVGSVGElement>; width?: number
+}) {
+  const HEIGHT_EST = 72
+  const [pos, setPos] = useState({ tx: 0, ty: 0 })
+
+  useEffect(() => {
+    const el = svgRef.current
+    if (!el) return
+    const svgW = el.clientWidth
+    const svgH = el.clientHeight
+    let tx = x + 14
+    let ty = y - HEIGHT_EST / 2
+    if (tx + width > svgW - 8) tx = x - width - 14
+    if (ty < 8) ty = 8
+    if (ty + HEIGHT_EST > svgH - 8) ty = svgH - HEIGHT_EST - 8
+    setPos({ tx, ty })
+  }, [x, y, svgRef, width])
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: pos.tx,
+        top: pos.ty,
+        width,
+        pointerEvents: "none",
+        zIndex: 20,
+      }}
+    >
+      <div style={{
+        background: "rgba(10,12,18,0.96)",
+        border: "1px solid rgba(255,255,255,0.08)",
+        borderRadius: 10,
+        padding: "9px 12px",
+        backdropFilter: "blur(14px)",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05)",
+      }}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 // ── CPM Line Chart ─────────────────────────────────────────────────────────────
 
 function CpmChart({ data, mode }: { data: DayCpm[]; mode: 'gross' | 'net' }) {
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; d: DayCpm } | null>(null)
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; d: DayCpm; idx: number } | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
 
   const pts = data.filter(d => (mode === 'gross' ? d.gross_cpm : d.net_cpm) !== null) as DayCpm[]
@@ -215,83 +407,126 @@ function CpmChart({ data, mode }: { data: DayCpm[]; mode: 'gross' | 'net' }) {
     return <div className="flex items-center justify-center h-40 text-white/15 text-xs font-mono uppercase tracking-widest">No data yet</div>
   }
 
-  const vals    = pts.map(d => (mode === 'gross' ? d.gross_cpm! : d.net_cpm!))
-  const minV    = Math.min(...vals)
-  const maxV    = Math.max(...vals)
-  const rangeV  = maxV - minV || 1
+  const vals = pts.map(d => (mode === 'gross' ? d.gross_cpm! : d.net_cpm!))
+  const minV = Math.min(...vals)
+  const maxV = Math.max(...vals)
+  const rangeV = maxV - minV || 1
+  const chartW = CHART_W - CHART_PAD_L - CHART_PAD_R
+  const chartH = CHART_H - CHART_PAD_T - CHART_PAD_B
+  const bands = buildIndexBands(pts.length, chartW)
 
-  const PAD_L = 52; const PAD_R = 12; const PAD_T = 16; const PAD_B = 28
-  const W = 900; const H = 180
-  const chartW = W - PAD_L - PAD_R
-  const chartH = H - PAD_T - PAD_B
+  const toX = (i: number) => CHART_PAD_L + bands[i].center
+  const toY = (v: number) => CHART_PAD_T + chartH - ((v - minV) / rangeV) * chartH
 
-  const toX = (i: number) => PAD_L + (i / (pts.length - 1 || 1)) * chartW
-  const toY = (v: number) => PAD_T + chartH - ((v - minV) / rangeV) * chartH
+  const avg = vals.reduce((sum, v) => sum + v, 0) / vals.length
+  const avgY = toY(avg)
 
-  const vwAvg   = vals.reduce((s, v, _, a) => s + v / a.length, 0)
-  const avgY    = toY(vwAvg)
-
-  const yTickCount = 5
-  const yTicks = Array.from({ length: yTickCount }, (_, i) => {
-    const v = minV + (rangeV * i) / (yTickCount - 1)
+  const yTicks = Array.from({ length: 5 }, (_, i) => {
+    const v = minV + (rangeV * i) / 4
     return { v, y: toY(v) }
   })
 
-  const step    = Math.max(1, Math.floor(pts.length / 10))
+  const step = Math.max(1, Math.floor(pts.length / 8))
   const xLabels = pts.filter((_, i) => i % step === 0 || i === pts.length - 1)
 
-  const linePath = pts.map((d, i) => {
-    const v = mode === 'gross' ? d.gross_cpm! : d.net_cpm!
-    return `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`
-  }).join(' ')
+  const splinePts = pts.map((d, i) => ({
+    x: toX(i),
+    y: toY(mode === 'gross' ? d.gross_cpm! : d.net_cpm!),
+  }))
+  const linePath = catmullRom(splinePts)
+  const areaPath = linePath
+    + ` L${toX(pts.length - 1).toFixed(2)},${CHART_PAD_T + chartH}`
+    + ` L${toX(0).toFixed(2)},${CHART_PAD_T + chartH} Z`
+
+  const fillId = `cpm-area-${mode}`
+
+  const handleMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const scale = CHART_W / (svgRef.current?.clientWidth ?? CHART_W)
+    const localX = Math.min(Math.max((e.clientX - rect.left) * scale - CHART_PAD_L, 0), chartW)
+    const idx = bands.reduce((best, band, i) =>
+      Math.abs(localX - band.center) < Math.abs(localX - bands[best].center) ? i : best, 0)
+    setTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, d: pts[idx], idx })
+  }
 
   return (
     <div className="relative select-none">
       <svg
         ref={svgRef}
-        viewBox={`0 0 ${W} ${H}`}
+        viewBox={`0 0 ${CHART_W} ${CHART_H}`}
         className="w-full h-auto"
         preserveAspectRatio="xMidYMid meet"
+        onMouseMove={handleMove}
         onMouseLeave={() => setTooltip(null)}
       >
+        <defs>
+          <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stopColor="rgba(52,211,153,0.18)" />
+            <stop offset="60%"  stopColor="rgba(52,211,153,0.04)" />
+            <stop offset="100%" stopColor="rgba(52,211,153,0)" />
+          </linearGradient>
+        </defs>
+
+        {/* Grid */}
         {yTicks.map((t, i) => (
           <g key={i}>
-            <line x1={PAD_L} y1={t.y} x2={W - PAD_R} y2={t.y} stroke="rgba(255,255,255,0.04)" strokeWidth="1" />
-            <text x={PAD_L - 6} y={t.y + 3.5} textAnchor="end" className="fill-white/20" style={{ fontSize: 9, fontFamily: 'monospace' }}>
+            <line x1={CHART_PAD_L} y1={t.y} x2={CHART_W - CHART_PAD_R} y2={t.y} stroke="rgba(255,255,255,0.035)" strokeWidth="1" />
+            <text x={CHART_PAD_L - 8} y={t.y + 3.5} textAnchor="end" className="fill-white/20" style={{ fontSize: 9, fontFamily: 'monospace' }}>
               {Math.round(t.v)}
             </text>
           </g>
         ))}
 
-        {/* VW average dashed line */}
-        <line x1={PAD_L} y1={avgY} x2={W - PAD_R} y2={avgY} stroke="rgba(234,179,8,0.55)" strokeWidth="1.5" strokeDasharray="5,4" />
-        <text x={W - PAD_R - 2} y={avgY - 3} textAnchor="end" className="fill-yellow-400/60" style={{ fontSize: 8, fontFamily: 'monospace' }}>avg</text>
+        {/* Hover band + crosshair */}
+        {tooltip && (
+          <>
+            <rect
+              x={CHART_PAD_L + bands[tooltip.idx].left}
+              y={CHART_PAD_T}
+              width={bands[tooltip.idx].width}
+              height={chartH}
+              rx={4}
+              fill="rgba(255,255,255,0.025)"
+            />
+            <line
+              x1={toX(tooltip.idx)} y1={CHART_PAD_T}
+              x2={toX(tooltip.idx)} y2={CHART_PAD_T + chartH}
+              stroke="rgba(255,255,255,0.1)"
+              strokeWidth="1"
+              strokeDasharray="4,5"
+            />
+          </>
+        )}
 
-        {/* Line */}
-        <path d={linePath} fill="none" stroke={mode === 'gross' ? 'rgba(99,102,241,0.75)' : 'rgba(16,185,129,0.75)'} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        {/* Avg line */}
+        <line x1={CHART_PAD_L - 6} y1={avgY} x2={CHART_PAD_L} y2={avgY} stroke="rgba(251,191,36,0.7)" strokeWidth="1.5" />
+        <text x={CHART_PAD_L - 8} y={avgY + 3.5} textAnchor="end" className="fill-yellow-400/65" style={{ fontSize: 9, fontFamily: 'monospace' }}>
+          {Math.round(avg)}
+        </text>
+        <line x1={CHART_PAD_L} y1={avgY} x2={CHART_W - CHART_PAD_R} y2={avgY} stroke="rgba(251,191,36,0.4)" strokeWidth="1" strokeDasharray="5,5" />
+        <text x={CHART_W - CHART_PAD_R - 4} y={avgY - 4} textAnchor="end" className="fill-yellow-400/45" style={{ fontSize: 8, fontFamily: 'monospace' }}>avg</text>
 
-        {/* Dots (hit area) */}
+        {/* Area fill + smooth animated line */}
+        <path d={areaPath} fill={`url(#${fillId})`} />
+        <AnimatedLinePath d={linePath} />
+
+        {/* Dots */}
         {pts.map((d, i) => {
           const v = mode === 'gross' ? d.gross_cpm! : d.net_cpm!
           return (
-            <circle
-              key={d.date}
-              cx={toX(i)} cy={toY(v)} r={4}
-              fill="transparent"
-              className="cursor-default"
-              onMouseEnter={(e) => {
-                const r = svgRef.current?.getBoundingClientRect()
-                if (!r) return
-                setTooltip({ x: e.clientX - r.left, y: e.clientY - r.top, d })
-              }}
-            />
+            <g key={d.date}>
+              <rect x={CHART_PAD_L + bands[i].left} y={CHART_PAD_T} width={bands[i].width} height={chartH} fill="transparent" />
+              <GlowDot cx={toX(i)} cy={toY(v)} active={tooltip?.idx === i} />
+            </g>
           )
         })}
 
+        {/* X labels */}
         {xLabels.map(d => {
           const i = pts.indexOf(d)
           return (
-            <text key={d.date} x={toX(i)} y={H - 4} textAnchor="middle" className="fill-white/20" style={{ fontSize: 9, fontFamily: 'monospace' }}>
+            <text key={d.date} x={toX(i)} y={CHART_H - 4} textAnchor="middle" className="fill-white/20" style={{ fontSize: 9, fontFamily: 'monospace' }}>
               {fmtShortDate(d.date)}
             </text>
           )
@@ -299,18 +534,13 @@ function CpmChart({ data, mode }: { data: DayCpm[]; mode: 'gross' | 'net' }) {
       </svg>
 
       {tooltip && (
-        <div
-          className="pointer-events-none absolute z-50 bg-[#1e1f23] border border-white/[0.10] rounded-lg shadow-xl px-3 py-2"
-          style={{
-            left: Math.min(tooltip.x + 12, (svgRef.current?.clientWidth ?? 300) - 120),
-            top: Math.max(8, tooltip.y - 40),
-            transform: 'translateY(-50%)',
-          }}
-        >
-          <div className="text-[10px] font-semibold text-white/70 mb-0.5">{fmtShortDate(tooltip.d.date)}</div>
-          <div className="text-[12px] font-mono font-bold text-indigo-400">{Math.round(mode === 'gross' ? tooltip.d.gross_cpm! : tooltip.d.net_cpm!)} CPM</div>
-          <div className="text-[10px] font-mono text-white/30">vol {fmtUsd(tooltip.d.volume, 0)}</div>
-        </div>
+        <TooltipShell x={tooltip.x} y={tooltip.y} svgRef={svgRef} width={148}>
+          <div className="text-[10px] font-mono text-white/40 mb-1">{fmtShortDate(tooltip.d.date)}</div>
+          <div className="font-mono font-bold text-emerald-400" style={{ fontSize: 20, lineHeight: 1.1 }}>
+            {Math.round(mode === 'gross' ? tooltip.d.gross_cpm! : tooltip.d.net_cpm!)}
+            <span className="text-[11px] font-medium text-emerald-400/60 ml-1">CPM</span>
+          </div>
+          </TooltipShell>
       )}
     </div>
   )
@@ -319,84 +549,131 @@ function CpmChart({ data, mode }: { data: DayCpm[]; mode: 'gross' | 'net' }) {
 // ── Multiple Scatter/Line Chart ────────────────────────────────────────────────
 
 function MultipleChart({ data, mode }: { data: SessionMultiple[]; mode: 'gross' | 'net' }) {
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; d: SessionMultiple } | null>(null)
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; d: SessionMultiple; idx: number } | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
 
   if (!data.length) {
     return <div className="flex items-center justify-center h-40 text-white/15 text-xs font-mono uppercase tracking-widest">No data yet</div>
   }
 
-  const vals   = data.map(d => mode === 'gross' ? d.gross_multiple : d.net_multiple)
-  const maxV   = Math.max(...vals, 0.1)
-  const avg    = vals.reduce((s, v) => s + v, 0) / vals.length
+  const vals = data.map(d => mode === 'gross' ? d.gross_multiple : d.net_multiple)
+  const maxV = Math.max(...vals, 0.1)
+  const avg = vals.reduce((sum, v) => sum + v, 0) / vals.length
+  const chartW = CHART_W - CHART_PAD_L - CHART_PAD_R
+  const chartH = CHART_H - CHART_PAD_T - CHART_PAD_B
+  const bands = buildIndexBands(data.length, chartW)
 
-  const PAD_L = 52; const PAD_R = 12; const PAD_T = 16; const PAD_B = 28
-  const W = 900; const H = 180
-  const chartW = W - PAD_L - PAD_R
-  const chartH = H - PAD_T - PAD_B
-
-  // x axis = index (chronological order by date)
-  const toX = (i: number) => PAD_L + (data.length > 1 ? (i / (data.length - 1)) * chartW : chartW / 2)
-  const toY = (v: number) => PAD_T + chartH - (v / maxV) * chartH
-
+  const toX = (i: number) => CHART_PAD_L + bands[i].center
+  const toY = (v: number) => CHART_PAD_T + chartH - (v / maxV) * chartH
   const avgY = toY(avg)
 
-  const yTickCount = 5
-  const yTicks = Array.from({ length: yTickCount }, (_, i) => {
-    const v = maxV * i / (yTickCount - 1)
+  const yTicks = Array.from({ length: 5 }, (_, i) => {
+    const v = maxV * i / 4
     return { v, y: toY(v) }
   })
 
-  const step    = Math.max(1, Math.floor(data.length / 10))
+  const step = data.length <= 12 ? 1 : Math.max(1, Math.floor(data.length / 8))
   const xLabels = data.filter((_, i) => i % step === 0 || i === data.length - 1)
+
+  const splinePts = data.map((d, i) => ({
+    x: toX(i),
+    y: toY(mode === 'gross' ? d.gross_multiple : d.net_multiple),
+  }))
+  const linePath = catmullRom(splinePts)
+  const areaPath = linePath
+    + ` L${toX(data.length - 1).toFixed(2)},${CHART_PAD_T + chartH}`
+    + ` L${toX(0).toFixed(2)},${CHART_PAD_T + chartH} Z`
+
+  const fillId = `multiple-area-${mode}`
+
+  const handleMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const scale = CHART_W / (svgRef.current?.clientWidth ?? CHART_W)
+    const localX = Math.min(Math.max((e.clientX - rect.left) * scale - CHART_PAD_L, 0), chartW)
+    const idx = bands.reduce((best, band, i) =>
+      Math.abs(localX - band.center) < Math.abs(localX - bands[best].center) ? i : best, 0)
+    setTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, d: data[idx], idx })
+  }
 
   return (
     <div className="relative select-none">
       <svg
         ref={svgRef}
-        viewBox={`0 0 ${W} ${H}`}
+        viewBox={`0 0 ${CHART_W} ${CHART_H}`}
         className="w-full h-auto"
         preserveAspectRatio="xMidYMid meet"
+        onMouseMove={handleMove}
         onMouseLeave={() => setTooltip(null)}
       >
+        <defs>
+          <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stopColor="rgba(52,211,153,0.18)" />
+            <stop offset="60%"  stopColor="rgba(52,211,153,0.04)" />
+            <stop offset="100%" stopColor="rgba(52,211,153,0)" />
+          </linearGradient>
+        </defs>
+
+        {/* Grid */}
         {yTicks.map((t, i) => (
           <g key={i}>
-            <line x1={PAD_L} y1={t.y} x2={W - PAD_R} y2={t.y} stroke="rgba(255,255,255,0.04)" strokeWidth="1" />
-            <text x={PAD_L - 6} y={t.y + 3.5} textAnchor="end" className="fill-white/20" style={{ fontSize: 9, fontFamily: 'monospace' }}>
-              {t.v.toFixed(1)}×
+            <line x1={CHART_PAD_L} y1={t.y} x2={CHART_W - CHART_PAD_R} y2={t.y} stroke="rgba(255,255,255,0.035)" strokeWidth="1" />
+            <text x={CHART_PAD_L - 8} y={t.y + 3.5} textAnchor="end" className="fill-white/20" style={{ fontSize: 9, fontFamily: 'monospace' }}>
+              {t.v.toFixed(1)}x
             </text>
           </g>
         ))}
 
-        {/* Average line */}
-        <line x1={PAD_L} y1={avgY} x2={W - PAD_R} y2={avgY} stroke="rgba(234,179,8,0.55)" strokeWidth="1.5" strokeDasharray="5,4" />
-        <text x={W - PAD_R - 2} y={avgY - 3} textAnchor="end" className="fill-yellow-400/60" style={{ fontSize: 8, fontFamily: 'monospace' }}>avg</text>
+        {/* Hover band + crosshair */}
+        {tooltip && (
+          <>
+            <rect
+              x={CHART_PAD_L + bands[tooltip.idx].left}
+              y={CHART_PAD_T}
+              width={bands[tooltip.idx].width}
+              height={chartH}
+              rx={4}
+              fill="rgba(255,255,255,0.025)"
+            />
+            <line
+              x1={toX(tooltip.idx)} y1={CHART_PAD_T}
+              x2={toX(tooltip.idx)} y2={CHART_PAD_T + chartH}
+              stroke="rgba(255,255,255,0.1)"
+              strokeWidth="1"
+              strokeDasharray="4,5"
+            />
+          </>
+        )}
+
+        {/* Avg line */}
+        <line x1={CHART_PAD_L - 6} y1={avgY} x2={CHART_PAD_L} y2={avgY} stroke="rgba(251,191,36,0.7)" strokeWidth="1.5" />
+        <text x={CHART_PAD_L - 8} y={avgY + 3.5} textAnchor="end" className="fill-yellow-400/65" style={{ fontSize: 9, fontFamily: 'monospace' }}>
+          {avg.toFixed(1)}x
+        </text>
+        <line x1={CHART_PAD_L} y1={avgY} x2={CHART_W - CHART_PAD_R} y2={avgY} stroke="rgba(251,191,36,0.4)" strokeWidth="1" strokeDasharray="5,5" />
+        <text x={CHART_W - CHART_PAD_R - 4} y={avgY - 4} textAnchor="end" className="fill-yellow-400/45" style={{ fontSize: 8, fontFamily: 'monospace' }}>avg</text>
+
+        {/* Area fill + smooth animated line */}
+        <path d={areaPath} fill={`url(#${fillId})`} />
+        <AnimatedLinePath d={linePath} />
 
         {/* Dots */}
         {data.map((d, i) => {
           const v = mode === 'gross' ? d.gross_multiple : d.net_multiple
-          const isHov = tooltip?.d.session_id === d.session_id
           return (
-            <circle
-              key={d.session_id}
-              cx={toX(i)} cy={toY(v)} r={isHov ? 5 : 3.5}
-              fill={mode === 'gross' ? 'rgba(99,102,241,0.75)' : 'rgba(16,185,129,0.75)'}
-              stroke={isHov ? 'rgba(255,255,255,0.4)' : 'none'}
-              strokeWidth="1"
-              className="cursor-default transition-all"
-              onMouseEnter={(e) => {
-                const r = svgRef.current?.getBoundingClientRect()
-                if (!r) return
-                setTooltip({ x: e.clientX - r.left, y: e.clientY - r.top, d })
-              }}
-            />
+            <g key={d.session_id}>
+              <rect x={CHART_PAD_L + bands[i].left} y={CHART_PAD_T} width={bands[i].width} height={chartH} fill="transparent" />
+              <GlowDot cx={toX(i)} cy={toY(v)} active={tooltip?.idx === i} />
+            </g>
           )
         })}
 
+        {/* X labels */}
         {xLabels.map(d => {
           const i = data.indexOf(d)
+          const anchor = i === 0 ? 'start' : i === data.length - 1 ? 'end' : 'middle'
           return (
-            <text key={d.session_id} x={toX(i)} y={H - 4} textAnchor="middle" className="fill-white/20" style={{ fontSize: 9, fontFamily: 'monospace' }}>
+            <text key={d.session_id} x={toX(i)} y={CHART_H - 4} textAnchor={anchor} className="fill-white/20" style={{ fontSize: 9, fontFamily: 'monospace' }}>
               {fmtShortDate(d.date)}
             </text>
           )
@@ -404,26 +681,18 @@ function MultipleChart({ data, mode }: { data: SessionMultiple[]; mode: 'gross' 
       </svg>
 
       {tooltip && (
-        <div
-          className="pointer-events-none absolute z-50 bg-[#1e1f23] border border-white/[0.10] rounded-lg shadow-xl px-3 py-2"
-          style={{
-            left: Math.min(tooltip.x + 12, (svgRef.current?.clientWidth ?? 300) - 130),
-            top: Math.max(8, tooltip.y - 40),
-            transform: 'translateY(-50%)',
-          }}
-        >
-          <div className="text-[10px] font-semibold text-white/70 mb-0.5">{fmtShortDate(tooltip.d.date)}</div>
-          <div className="text-[12px] font-mono font-bold text-indigo-400">
-            {(mode === 'gross' ? tooltip.d.gross_multiple : tooltip.d.net_multiple).toFixed(2)}×/day
+        <TooltipShell x={tooltip.x} y={tooltip.y} svgRef={svgRef} width={172}>
+          <div className="text-[10px] font-mono text-white/40 mb-1">{fmtShortDate(tooltip.d.date)}</div>
+          <div className="font-mono font-bold text-emerald-400" style={{ fontSize: 20, lineHeight: 1.1 }}>
+            {(mode === 'gross' ? tooltip.d.gross_multiple : tooltip.d.net_multiple).toFixed(2)}
+            <span className="text-[11px] font-medium text-emerald-400/60 ml-1">x/day</span>
           </div>
-          <div className="text-[10px] font-mono text-white/30">
-            {fmtUsd(tooltip.d.volume, 0)} vol · {tooltip.d.run_days.toFixed(1)}d · {fmtUsd(tooltip.d.capital, 0)} cap
-          </div>
-        </div>
+        </TooltipShell>
       )}
     </div>
   )
 }
+
 
 // ── Sub-tabs ──────────────────────────────────────────────────────────────────
 
@@ -654,7 +923,7 @@ function AnalyticsTab() {
   useEffect(() => {
     setMultLoad(true)
     ;(api.admin.dailyMultiple(multDays) as Promise<SessionMultiple[]>)
-      .then(setMultData).catch(() => setMultData([]))
+      .then(rows => setMultData(groupMultipleByDate(rows))).catch(() => setMultData([]))
       .finally(() => setMultLoad(false))
   }, [multDays])
 

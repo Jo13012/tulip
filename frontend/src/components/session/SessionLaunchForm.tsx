@@ -17,7 +17,7 @@ export function SessionLaunchForm({ strategy, walletId, onLaunched }: Props) {
 
   const [grossCapital, setGrossCapital] = useState('')
   const [stopMode, setStopMode]     = useState<'days' | 'volume'>('days')
-  const [stopDays, setStopDays]     = useState('30')
+  const [stopDays, setStopDays]     = useState('7')
   const [targetVol, setTargetVol]   = useState('')
   const [slPct, setSlPct]           = useState('20')
   const [viability, setViability]   = useState<ViabilityResult | null>(null)
@@ -26,7 +26,7 @@ export function SessionLaunchForm({ strategy, walletId, onLaunched }: Props) {
 
   const gross      = parseFloat(grossCapital) || 0
   const reservePct = strategy.reserve_pct
-  const feeRes     = gross * reservePct / 100
+  const feeRes     = gross * 0.95
   const deployable = gross - feeRes
 
   useEffect(() => {
@@ -48,7 +48,7 @@ export function SessionLaunchForm({ strategy, walletId, onLaunched }: Props) {
     try {
       await api.launchSession({
         wallet_id:      walletId,
-        gross_capital:  gross,
+        gross_capital:  gross * 0.97,
         stop_mode:      stopMode,
         stop_days:      stopMode === 'days' ? parseInt(stopDays) : null,
         target_volume:  stopMode === 'volume' ? parseFloat(targetVol) : null,

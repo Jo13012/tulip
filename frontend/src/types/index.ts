@@ -4,6 +4,9 @@ export interface AppUser {
   user_id: string
   privy_user_id: string
   display_name: string
+  can_change_username?: boolean
+  referrer_username?: string | null
+  referral_reward_usdc?: number
   is_admin: boolean
   wallet_id: string
   wallet_address: string
@@ -22,6 +25,15 @@ export interface ProfileData {
   fee_is_overridden: boolean  // true when admin set a custom fee
   wallet_volume:     number   // always a number (fallback = trading_volume)
   wallet_pnl:        number   // always a number (fallback = bot_pnl)
+  referrer_username: string | null
+  can_set_referrer: boolean
+  referral_reward_usdc: number
+}
+
+export interface ReferralListItem {
+  user_id: string
+  username: string
+  reward_usdc: number
 }
 
 // ── XP ────────────────────────────────────────────────────────────────────────
@@ -176,6 +188,8 @@ export interface RuntimeSlotStats {
   open_order_list: RuntimeOpenOrder[]
   sell_order_list: RuntimeOpenOrder[]
   lot_list: RuntimeLot[]
+  bid_price: number
+  pending_question: string | null
 }
 
 export type SessionStatus =

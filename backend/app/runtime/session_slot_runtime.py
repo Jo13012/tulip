@@ -97,6 +97,7 @@ class SessionSlotRuntime:
         # Slot state
         self._state           = SlotState.IDLE
         self._pending_replacement: Optional[SlotMarketConfig] = None
+        self._market_epoch: int = 0
 
         # Capital
         self._allocated_capital: float = 0.0
@@ -106,6 +107,7 @@ class SessionSlotRuntime:
         self._realized_pnl:  float = 0.0
         self._unrealized_pnl: float = 0.0
         self._last_mid_price: float = 0.0
+        self._last_bid_price: float = 0.0
         self._paid_fees:     float = 0.0
         self._trade_count:   int   = 0   # closed round-trip trades
         self._order_count:   int   = 0   # every buy fill + sell fill (incl. partials)
@@ -141,6 +143,8 @@ class SessionSlotRuntime:
         self._cancel_sent: Set[str] = set()
         # token_id → accumulated fractional tokens from floor() rounding on sells
         self._dust_balance: dict[str, float] = {}
+        # last time we reconciled lot state vs actual poly balance (for stuck replacement)
+        self._last_reconcile_time: float = 0.0
 
     # ── Properties ────────────────────────────────────────────────────────────
 
@@ -231,10 +235,12 @@ class SessionSlotRuntime:
             "price_min": mc.price_min if mc else None,
             "price_max": mc.price_max if mc else None,
             "lot_size": mc.lot_size if mc else None,
+            "pending_question": self._pending_replacement.question if self._pending_replacement else None,
             # Live order/position detail
             "open_order_list": open_order_list,
             "sell_order_list": sell_order_list,
             "lot_list": lot_list,
+            "bid_price": self._last_bid_price,
         }
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -265,6 +271,33 @@ class SessionSlotRuntime:
         if self._poll_task:
             self._poll_task.cancel()
         await self._set_state(SlotState.IDLE, reason)
+
+    async def _reconcile_lots_vs_poly(self):
+        """
+        When waiting for replacement, check actual token balance on Poly.
+        If positions were externally closed (nuclear close, etc.) but we still track
+        them as OPEN, force-close them so replacement can proceed.
+        """
+        m = self._market_config
+        if not m or not m.active_token_id:
+            return
+        try:
+            actual = await self._client.get_token_balance(m.active_token_id)
+            open_tokens = sum(l.tokens for l in self.open_lots)
+            if open_tokens > 0 and actual < 0.5:
+                await self._log(
+                    "WARN",
+                    f"[RECONCILE] Poly balance={actual:.3f} but tracking {open_tokens:.3f}tok open "
+                    f"— externally closed. Force-clearing {len(self.open_lots)} lots."
+                )
+                async with self._lots_lock:
+                    for l in self._lots:
+                        if l.status in (LotStatus.OPEN, LotStatus.SELLING):
+                            l.status = LotStatus.CLOSED
+                self._sell_orders.clear()
+                self._selling.clear()
+        except Exception as e:
+            await self._log("WARN", f"[RECONCILE] Balance check failed: {e}")
 
     async def soft_stop(self):
         """Stop new entries; cancel live buy orders; let open positions exit cleanly."""
@@ -311,6 +344,96 @@ class SessionSlotRuntime:
             if lot.lot_id not in self._selling:
                 asyncio.create_task(self._execute_sell(lot, bid, "TAKER_HARD_STOP"))
 
+    async def force_replace(self, new_config: Optional[SlotMarketConfig]):
+        """
+        Force-replace: cancel ALL open orders on Poly for this token (tracked or not),
+        taker-sell actual token balance on Poly (not just tracked lots), then queue replacement.
+        """
+        self._stop_new_entries = True
+        self._market_epoch += 1
+        m = self._market_config
+        if not m or not m.active_token_id:
+            # Nothing running, just queue
+            if new_config is not None:
+                self._pending_replacement = new_config
+            await self._set_state(SlotState.REPLACEMENT_QUEUED, "force-replace by admin (no market)")
+            return
+
+        token_id = m.active_token_id
+        await self._log("INFO", f"[FORCE_REPLACE] Starting on token {token_id[:12]}…")
+
+        # 1. Cancel ALL open orders on Poly for this token (tracked + untracked)
+        try:
+            all_orders = await self._client.get_open_orders()
+            cancelled = 0
+            for oid, od in all_orders.items():
+                if od.get("asset_id") == token_id:
+                    try:
+                        await self._client.cancel_order(oid)
+                        cancelled += 1
+                    except Exception as e:
+                        await self._log("WARN", f"[FORCE_REPLACE] Cancel {oid[:14]}… failed: {e}")
+            await self._log("INFO", f"[FORCE_REPLACE] Cancelled {cancelled} order(s) on Poly")
+        except Exception as e:
+            await self._log("WARN", f"[FORCE_REPLACE] get_open_orders failed: {e}")
+
+        # Clear tracked state
+        self._buy_orders.clear()
+        self._sell_orders.clear()
+        self._pending_buy_capital.clear()
+        self._buying.clear()
+        self._selling.clear()
+        self._cancel_sent.clear()
+        self._last_cancel_time = time.monotonic()
+
+        # 2. Get actual token balance and taker-sell everything
+        try:
+            actual_tokens = await self._client.get_token_balance(token_id)
+        except Exception as e:
+            await self._log("WARN", f"[FORCE_REPLACE] token balance failed: {e}")
+            actual_tokens = None
+
+        sell_tokens = float(math.floor(actual_tokens)) if actual_tokens else 0.0
+
+        if sell_tokens >= 5:
+            try:
+                book = await market_data_service.get_order_book(token_id)
+                bid = norm(float(book["bids"][0]["price"])) if book.get("bids") else None
+            except Exception:
+                bid = None
+
+            if bid:
+                await self._log("INFO", f"[FORCE_REPLACE] Taker-selling {sell_tokens:.0f} tok @ {h(bid)}")
+                await self._client.ensure_sell_allowance(token_id)
+                try:
+                    resp = await self._client.place_limit_order(
+                        token_id=token_id, price=bid, size=sell_tokens,
+                        side="SELL", tick_size=m.tick_size or "0.001", neg_risk=m.neg_risk,
+                    )
+                    await self._log("INFO", f"[FORCE_REPLACE] Sell order placed: {resp.get('orderID', '?')[:14]}…")
+                except Exception as e:
+                    await self._log("WARN", f"[FORCE_REPLACE] Taker-sell failed: {e}")
+            else:
+                await self._log("WARN", "[FORCE_REPLACE] No bid available — skipping taker-sell")
+        elif actual_tokens is not None and actual_tokens > 0:
+            await self._log("INFO", f"[FORCE_REPLACE] Actual balance={actual_tokens:.3f} tok < 5 — writing off as dust")
+        else:
+            await self._log("INFO", "[FORCE_REPLACE] No token balance on Poly — nothing to sell")
+
+        # Force-close all tracked lots so is_clean becomes True quickly
+        async with self._lots_lock:
+            for l in self._lots:
+                if l.status in (LotStatus.OPEN, LotStatus.SELLING):
+                    l.status = LotStatus.CLOSED
+
+        # 3. Queue replacement — keep existing _pending_replacement if new_config not provided
+        if new_config is not None:
+            self._pending_replacement = new_config
+        effective = self._pending_replacement
+        await self._set_state(SlotState.REPLACEMENT_QUEUED, "force-replace by admin")
+        label = (effective.question or effective.polymarket_url) if effective else "idle (archived)"
+        await self._log("INFO", f"[FORCE_REPLACE] Done — replacement queued → {label}")
+
     async def queue_replacement(self, new_config: Optional[SlotMarketConfig]):
         """
         Queue a slot market replacement.
@@ -319,6 +442,7 @@ class SessionSlotRuntime:
         None config = slot archived, slot will idle after current positions exit.
         """
         self._pending_replacement = new_config
+        self._market_epoch += 1
         self._stop_new_entries = True
         await self._set_state(SlotState.REPLACEMENT_QUEUED, "replacement queued by admin")
         await self._cancel_all_buys()
@@ -450,6 +574,7 @@ class SessionSlotRuntime:
 
                 bid_moved   = (_last_bid is not None and bid != _last_bid)
                 _last_bid   = bid
+                self._last_bid_price = bid
 
                 # 1. Rebalance: cancel stale buys when grid shifts
                 if bid_moved or m.spread_from_ask:
@@ -466,6 +591,13 @@ class SessionSlotRuntime:
                     await self._fill_grid(m, bid, tick, levels)
 
                 # 5. Check if replacement ready to switch
+                if self._state in (SlotState.WAITING_PREVIOUS_CLEAN, SlotState.REPLACEMENT_QUEUED):
+                    # Reconcile lots vs actual poly balance every 60s to detect external closes
+                    now_t = time.monotonic()
+                    if self.open_lots and now_t - self._last_reconcile_time > 60.0:
+                        self._last_reconcile_time = now_t
+                        await self._reconcile_lots_vs_poly()
+
                 if self._state == SlotState.WAITING_PREVIOUS_CLEAN and self.is_clean:
                     await self._execute_switch()
 
@@ -511,6 +643,7 @@ class SessionSlotRuntime:
         self._last_cancel_time = 0.0
 
         self._market_config = new_config
+        self._market_epoch += 1
         self._pending_replacement = None
         self._stop_new_entries = False
         self._lots = [l for l in self._lots if l.status == LotStatus.CLOSED]
@@ -570,20 +703,16 @@ class SessionSlotRuntime:
     # ── SL check ─────────────────────────────────────────────────────────────
 
     async def _check_sl(self, m: SlotMarketConfig, bid: float, tick: float):
-        # global_sl: one tick below price_min. If price_min == 0, no floor is configured.
-        global_sl = norm(m.price_min - tick) if m.price_min > 0 else None
-        now       = time.monotonic()
+        # SL only triggers on sl_ticks below entry price. price_min is grid range only, not SL.
+        if m.sl_ticks <= 0:
+            return  # no SL configured
+        now = time.monotonic()
         for lot in self.open_lots:
             if lot.lot_id in self._selling:
                 continue
             if now - self._sell_fail_time.get(lot.lot_id, 0.0) < 30.0:
                 continue
-            if m.sl_ticks > 0:
-                sl = norm(lot.entry_price - m.sl_ticks * tick)
-            elif global_sl is not None:
-                sl = global_sl
-            else:
-                continue  # no SL configured — skip
+            sl = norm(lot.entry_price - m.sl_ticks * tick)
             if bid <= sl:
                 await self._log(
                     "WARN",
@@ -630,11 +759,11 @@ class SessionSlotRuntime:
 
             order_id, actual, dust_frac = await self._place_sell(m, lot, price)
             if order_id is None:
-                if math.floor(lot.tokens) <= 0:
-                    # Dust lot — close so it stops triggering every tick
+                if math.floor(lot.tokens) < 5:
+                    # Dust lot (< 5 tokens) — close so it stops triggering every tick
                     await self._account_dust(m.active_token_id, lot.tokens)
                     await self._close_lot(lot.lot_id, lot.entry_price, "dust")
-                    await self._log("WARN", f"[SELL] Dust lot closed lot={lot.lot_id[:8]}")
+                    await self._log("WARN", f"[SELL] Dust lot closed lot={lot.lot_id[:8]} tokens={lot.tokens:.3f}")
                 else:
                     async with self._lots_lock:
                         for l in self._lots:
@@ -722,6 +851,8 @@ class SessionSlotRuntime:
         m = self._market_config
         if not m:
             return
+        epoch = self._market_epoch
+        token_id = m.active_token_id
         if level in self._buying:
             return
         self._buying.add(level)
@@ -737,10 +868,33 @@ class SessionSlotRuntime:
         if size < POLY_MIN_ORDER_USDC:
             self._buying.discard(level)
             return
+        if (
+            self._market_epoch != epoch
+            or self._pending_replacement is not None
+            or self._stop_new_entries
+            or not self._market_config
+            or self._market_config.active_token_id != token_id
+        ):
+            self._buying.discard(level)
+            return
 
         try:
             order_id, filled_price, is_matched, tokens_filled = await self._place_buy(m, level, size)
             if order_id is None:
+                return
+            if (
+                self._market_epoch != epoch
+                or not self._market_config
+                or self._market_config.active_token_id != token_id
+            ):
+                self._buy_orders.pop(level, None)
+                self._pending_buy_capital.pop(order_id, None)
+                self._buy_size_matched.pop(order_id, None)
+                self._cancel_sent.discard(order_id)
+                try:
+                    await self._client.cancel_order(order_id)
+                except Exception:
+                    pass
                 return
 
             self._buy_fail_time.pop(level, None)
@@ -784,11 +938,12 @@ class SessionSlotRuntime:
                 "not available for trading", "market is not active", "not_available",
                 "trading is closed", "market resolved",
             ))
-            # 500 errors on a specific level repeated many times = market no longer accepting orders
             self._buy_fail_count[level] = self._buy_fail_count.get(level, 0) + 1
-            if not permanent and "500" in err_str and self._buy_fail_count[level] >= 3:
-                permanent = True
-            if permanent:
+            # 500 errors are transient server errors — use long cooldown, not permanent
+            if not permanent and "500" in err_str:
+                await self._log("WARN", f"[BUY] 500 @ {h(level)} (#{self._buy_fail_count[level]}) — 2m cooldown")
+                self._buy_fail_time[level] = time.monotonic() + 120.0
+            elif permanent:
                 await self._log("ERROR", f"[BUY] Permanent error @ {h(level)}: {e} — slot to error")
                 await self._set_state(SlotState.ERROR, str(e)[:120])
             elif "not enough balance" in err_str or "balance is not enough" in err_str:
@@ -837,8 +992,8 @@ class SessionSlotRuntime:
         # Returns (order_id, actual_price, dust_frac)
         token_size = float(math.floor(lot.tokens))
         dust_frac  = lot.tokens - token_size
-        if token_size <= 0:
-            await self._log("WARN", f"SELL skipped lot={lot.lot_id[:8]}: tokens rounds to 0")
+        if token_size < 5:  # Polymarket minimum order size is 5 tokens
+            await self._log("WARN", f"SELL skipped lot={lot.lot_id[:8]}: tokens={lot.tokens:.3f} < 5 (dust)")
             return None, 0.0, lot.tokens  # full lot is dust
 
         await self._client.ensure_sell_allowance(m.active_token_id)
@@ -879,11 +1034,11 @@ class SessionSlotRuntime:
                     f"[TP] Maker sell posted @ {h(lot.target_sell_price)} lot={lot.lot_id[:8]} | {order_id[:14]}…",
                 )
                 self._tp_last_attempt[lot.lot_id] = time.monotonic()
-            elif order_id is None and lot.tokens < 1.0:
-                # Sub-1 token dust lot — can never be sold, write it off
+            elif order_id is None and lot.tokens < 5.0:
+                # Sub-5 token lot — below Poly minimum, write off as dust
                 await self._log(
                     "WARN",
-                    f"[TP] Dust write-off lot={lot.lot_id[:8]} tokens={lot.tokens:.4f} (<1, unsellable)",
+                    f"[TP] Dust write-off lot={lot.lot_id[:8]} tokens={lot.tokens:.4f} (<5, unsellable)",
                 )
                 await self._close_lot(lot.lot_id, lot.entry_price, "dust-writeoff")
         except Exception as e:

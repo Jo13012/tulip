@@ -30,6 +30,7 @@ from app.integrations.polymarket.execution_client import ExecutionClient
 from app.integrations.polymarket.market_resolver import market_resolver
 from app.core.config import settings
 from app.services import funding_service
+from app.services.redeem_service import redeem_service
 
 MIN_LOT_USDC = 5   # Practical minimum USDC per lot
 
@@ -64,7 +65,7 @@ def compute_viability(
     The most capital-hungry slot sets the floor.
     min_capital / recommended_capital are expressed in gross for the UI.
     """
-    deployable = gross_capital * (1 - reserve_pct / 100)
+    deployable = gross_capital * 0.95
     enabled = [s for s in slots if s.get("enabled", True) and s.get("allocation_pct", 0) > 0]
 
     if not enabled:
@@ -81,7 +82,7 @@ def compute_viability(
         min_dep = max(min_dep, (levels * MIN_LOT_USDC) / alloc_pct)
 
     # Convert back to gross for UI display
-    factor      = (1 - reserve_pct / 100)
+    factor      = 0.95
     min_gross   = min_dep / factor if factor > 0 else min_dep
     rec_gross   = min_gross * 3.0
 
@@ -287,7 +288,7 @@ class SessionManager:
 
             # Capital split
             reserve_pct = strat.reserve_pct
-            fee_reserve = round(gross_capital * reserve_pct / 100, 2)
+            fee_reserve = round(gross_capital * 0.95, 2)
             deployable  = round(gross_capital - fee_reserve, 2)
 
             # Create session
@@ -406,10 +407,22 @@ class SessionManager:
                         else user.effective_fee_bps
                     )
                     user_trading_volume = user.trading_volume
+                    referrer_user_id = user.referrer_user_id or ""
                 else:
                     fee_is_overridden = False
                     user_fee_bps = 120
                     user_trading_volume = 0.0
+                    referrer_user_id = ""
+
+                referrer_wallet_address = ""
+                if referrer_user_id:
+                    ref_wallet_q = await db.execute(
+                        select(Wallet.wallet_address).where(
+                            Wallet.user_id == referrer_user_id,
+                            Wallet.is_primary == True,
+                        )
+                    )
+                    referrer_wallet_address = ref_wallet_q.scalar() or ""
 
             client = ExecutionClient(
                 privy_wallet_id=wallet.privy_wallet_id,
@@ -434,6 +447,8 @@ class SessionManager:
                 strategy=strategy,
                 privy_wallet_id=wallet.privy_wallet_id or "",
                 fee_wallet_address=wallet.wallet_address,
+                referrer_user_id=referrer_user_id,
+                referrer_wallet_address=referrer_wallet_address,
                 user_fee_bps=user_fee_bps,
                 fee_is_overridden=fee_is_overridden,
                 user_trading_volume=user_trading_volume,
@@ -509,6 +524,11 @@ class SessionManager:
                     entity_type="session",
                     entity_id=session_id,
                 ))
+                await redeem_service.redeem_session_winnings(
+                    db,
+                    session_id,
+                    trigger="manual_soft_stop",
+                )
                 await db.commit()
         else:
             # Hard stop — engine wrote snapshot+status if it was alive; add audit log.
@@ -532,6 +552,18 @@ class SessionManager:
                     entity_type="session",
                     entity_id=session_id,
                 ))
+                if not engine:
+                    log.info("[session_manager] session=%s manual_hard_stop redeem without live engine", session_id[:8])
+                    redeem_result = await redeem_service.redeem_session_winnings(
+                        db,
+                        session_id,
+                        trigger="manual_hard_stop",
+                    )
+                    log.info(
+                        "[session_manager] session=%s manual_hard_stop redeem result=%s",
+                        session_id[:8],
+                        redeem_result,
+                    )
                 await db.commit()
 
 

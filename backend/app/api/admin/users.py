@@ -10,7 +10,6 @@ POST /admin/users/{id}/nuclear-close — cancel orders and/or taker-sell positio
 from __future__ import annotations
 
 import asyncio
-import math
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select, and_
@@ -23,7 +22,6 @@ from app.runtime.session_manager import session_manager
 from app.services.balance_poller import balance_poller
 from app.integrations.polymarket.execution_client import ExecutionClient
 from app.runtime.market_data_service import market_data_service
-from app.runtime.runtime_models import norm
 from sqlalchemy import func as _func
 
 
@@ -340,6 +338,7 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
 
 class NuclearCloseRequest(BaseModel):
     cancel_orders: bool = True
+    cancel_order_ids: List[str] = Field(default_factory=list)  # specific order IDs; if set, only these are cancelled
     sell_token_ids: List[str] = Field(default_factory=list)
 
 
@@ -354,7 +353,7 @@ async def nuclear_close(user_id: str, body: NuclearCloseRequest, db: DbSession, 
     if not user:
         raise HTTPException(404, "User not found")
 
-    if not body.cancel_orders and not body.sell_token_ids:
+    if not body.cancel_orders and not body.cancel_order_ids and not body.sell_token_ids:
         raise HTTPException(400, "Nothing to do")
 
     client = await _get_user_client(user_id, db)
@@ -368,15 +367,21 @@ async def nuclear_close(user_id: str, body: NuclearCloseRequest, db: DbSession, 
             results["errors"].append(f"get_open_orders failed: {e}")
             live_orders = {}
 
-        sell_token_set = set(body.sell_token_ids)
+        sell_token_set   = set(body.sell_token_ids)
+        specific_oid_set = set(body.cancel_order_ids)
 
         # ── 1. Cancel orders ──────────────────────────────────────────────────
         # Always cancel ALL orders on tokens we want to sell (both BUY and SELL)
         # so Poly doesn't reject the new taker sell order.
-        # If cancel_orders=True, also cancel all other orders.
+        # If cancel_order_ids set, only cancel those specific orders (+ orders on sell tokens).
+        # If cancel_orders=True, cancel all orders.
         for oid, order in live_orders.items():
             token_id = order.get("asset_id") or ""
-            should_cancel = body.cancel_orders or (token_id in sell_token_set)
+            should_cancel = (
+                body.cancel_orders
+                or (token_id in sell_token_set)
+                or (specific_oid_set and oid in specific_oid_set)
+            )
             if not should_cancel:
                 continue
             try:

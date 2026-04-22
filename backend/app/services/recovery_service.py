@@ -603,7 +603,10 @@ class RecoveryService:
         # Restore stats from DB
         slot_runtime._volume       = float(db_slot.volume or 0.0)
         slot_runtime._realized_pnl = float(db_slot.realized_pnl or 0.0)
+        slot_runtime._unrealized_pnl = float(db_slot.unrealized_pnl or 0.0)
         slot_runtime._paid_fees    = float(db_slot.paid_fees or 0.0)
+        slot_runtime._order_count = len(slot_runtime._buy_orders) + len(slot_runtime._sell_orders)
+        slot_runtime._trade_count = len([l for l in slot_runtime.open_lots if l.status == LotStatus.SELLING])
 
         # ── G. Restore queued replacement if one was pending ─────────────────
         if replacement_sv:

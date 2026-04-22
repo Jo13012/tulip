@@ -17,7 +17,9 @@ Transfer mechanism: pending backend implementation
  Platform-side accounting is the safe supported approach for V1.)
 """
 from __future__ import annotations
-from app.db.models import Strategy
+from sqlalchemy import update
+
+from app.db.models import Strategy, User
 from app.services.fee_payment_service import pay_fee, FeePaymentError
 
 
@@ -58,14 +60,23 @@ class FeeService:
         user_fee_bps: int,
         privy_wallet_id: str,
         wallet_address: str,
+        referrer_user_id: str = "",
+        referrer_wallet_address: str = "",
+        db_factory=None,
     ) -> float:
         fee = compute_fill_fee(fill_usdc, "BUY", user_fee_bps, strategy.fee_side)
         if fee > 0:
             session_engine.charge_fee(fee)
-            await pay_fee(
+            payout = await pay_fee(
                 privy_wallet_id=privy_wallet_id,
                 wallet_address=wallet_address,
                 amount_usdc=fee,
+                referrer_wallet_address=referrer_wallet_address,
+            )
+            await self._record_referral_reward(
+                referrer_user_id=referrer_user_id,
+                amount_usdc=float(payout.get("referral_paid_usdc") or 0.0),
+                db_factory=db_factory,
             )
         return fee
 
@@ -78,16 +89,36 @@ class FeeService:
         user_fee_bps: int,
         privy_wallet_id: str,
         wallet_address: str,
+        referrer_user_id: str = "",
+        referrer_wallet_address: str = "",
+        db_factory=None,
     ) -> float:
         fee = compute_fill_fee(fill_usdc, "SELL", user_fee_bps, strategy.fee_side)
         if fee > 0:
             session_engine.charge_fee(fee)
-            await pay_fee(
+            payout = await pay_fee(
                 privy_wallet_id=privy_wallet_id,
                 wallet_address=wallet_address,
                 amount_usdc=fee,
+                referrer_wallet_address=referrer_wallet_address,
+            )
+            await self._record_referral_reward(
+                referrer_user_id=referrer_user_id,
+                amount_usdc=float(payout.get("referral_paid_usdc") or 0.0),
+                db_factory=db_factory,
             )
         return fee
+
+    async def _record_referral_reward(self, *, referrer_user_id: str, amount_usdc: float, db_factory) -> None:
+        if not referrer_user_id or amount_usdc <= 0 or not db_factory:
+            return
+        async with db_factory() as db:
+            await db.execute(
+                update(User)
+                .where(User.id == referrer_user_id)
+                .values(referral_reward_usdc=User.referral_reward_usdc + amount_usdc)
+            )
+            await db.commit()
 
 
 fee_service = FeeService()

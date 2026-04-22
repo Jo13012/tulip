@@ -27,6 +27,8 @@ from app.runtime.session_slot_runtime import SessionSlotRuntime
 from app.integrations.polymarket.execution_client import ExecutionClient
 from app.services.fee_service import fee_service
 from app.services.fee_payment_service import FeePaymentError
+from app.services.nuclear_close_service import run_nuclear_close
+from app.services.redeem_service import redeem_service
 from app.services import funding_service
 from app.core.config import settings
 
@@ -71,6 +73,8 @@ class SessionEngine:
         strategy=None,
         privy_wallet_id: str = "",
         fee_wallet_address: str = "",
+        referrer_user_id: str = "",
+        referrer_wallet_address: str = "",
         user_fee_bps: int = 120,           # active fee at session start (override ?? XP)
         fee_is_overridden: bool = False,  # True when fee_override_bps is set; suppresses XP live-update
         user_trading_volume: float = 0.0, # lifetime trading volume at session start
@@ -98,6 +102,8 @@ class SessionEngine:
         self._strategy           = strategy
         self._privy_wallet_id    = privy_wallet_id
         self._fee_wallet_address = fee_wallet_address
+        self._referrer_user_id = referrer_user_id
+        self._referrer_wallet_address = referrer_wallet_address
 
         # Per-user fee
         # _user_fee_bps = active fee used for all fills (override or XP-computed)
@@ -217,15 +223,27 @@ class SessionEngine:
             await self._log_session("ERROR", f"Failed to write final snapshot: {e}")
 
     async def hard_stop(self, reason: str = "hard stop"):
-        """Taker-unwind all slots immediately, then mark stopped."""
-        # hard_stop on each slot cancels TP sells + fires taker-sell tasks
+        """Stop local runtimes, then nuclear-close positions directly on Polymarket."""
+        await self._log_session("INFO", f"Hard stop requested: {reason}")
+        self._running = False
+        if self._monitor_task:
+            self._monitor_task.cancel()
+        if self._snapshot_task:
+            self._snapshot_task.cancel()
         for slot in self._slot_runtimes.values():
-            await slot.hard_stop()
-        # Give taker-sell tasks time to complete before the engine is removed
-        await asyncio.sleep(8.0)
-        # Sweep any residual dust accumulated from fractional token rounding
-        for slot in self._slot_runtimes.values():
-            await slot.sweep_all_dust()
+            await slot.stop(reason="hard stop")
+        try:
+            close_result = await run_nuclear_close(
+                self._client,
+                cancel_orders=True,
+                sell_all_positions=True,
+            )
+            await self._log_session(
+                "INFO",
+                f"Hard stop nuclear close: cancelled={len(close_result['cancelled_orders'])} sold={len(close_result['sold_positions'])} errors={len(close_result['errors'])}",
+            )
+        except Exception as e:
+            await self._log_session("ERROR", f"Hard stop nuclear close failed: {e}")
         self.stop_reason  = reason
         self.status       = "stopped"
         self.health_state = SessionHealthState.STOPPED
@@ -244,6 +262,12 @@ class SessionEngine:
                             stop_reason=reason,
                         )
                     )
+                    redeem_result = await redeem_service.redeem_session_winnings(
+                        db,
+                        self.session_id,
+                        trigger="hard_stop",
+                    )
+                    await self._log_session("INFO", f"Hard stop redeem result: {redeem_result}")
                     await db.commit()
             except Exception as e:
                 await self._log_session("ERROR", f"Failed to persist hard stop: {e}")
@@ -282,6 +306,13 @@ class SessionEngine:
         await slot.queue_replacement(new_config)
         await self._broadcast()
 
+    async def force_replace_slot(self, session_slot_id: str, new_config: Optional[SlotMarketConfig]):
+        slot = self._slot_runtimes.get(session_slot_id)
+        if not slot:
+            return
+        await slot.force_replace(new_config)
+        await self._broadcast()
+
     async def update_slot_capital(self, session_slot_id: str, capital: float):
         slot = self._slot_runtimes.get(session_slot_id)
         if slot:
@@ -312,6 +343,18 @@ class SessionEngine:
         for slot in self._slot_runtimes.values():
             await slot.sweep_all_dust()
         await self._log_session("INFO", "All positions exited — session stopped")
+        try:
+            close_result = await run_nuclear_close(
+                self._client,
+                cancel_orders=True,
+                sell_all_positions=True,
+            )
+            await self._log_session(
+                "INFO",
+                f"Soft stop nuclear close: cancelled={len(close_result['cancelled_orders'])} sold={len(close_result['sold_positions'])} errors={len(close_result['errors'])}",
+            )
+        except Exception as e:
+            await self._log_session("ERROR", f"Soft stop nuclear close failed: {e}")
         self._running      = False
         self.status        = "stopped"
         self.health_state  = SessionHealthState.STOPPED
@@ -346,6 +389,11 @@ class SessionEngine:
                         action="session.soft_stop_complete",
                         entity_type="session", entity_id=self.session_id,
                     ))
+                    await redeem_service.redeem_session_winnings(
+                        db,
+                        self.session_id,
+                        trigger="soft_stop_complete",
+                    )
                     await db.commit()
             except Exception as e:
                 await self._log_session("ERROR", f"Failed to persist soft stop: {e}")
@@ -464,6 +512,9 @@ class SessionEngine:
                     user_fee_bps=self._user_fee_bps,
                     privy_wallet_id=self._privy_wallet_id,
                     wallet_address=self._fee_wallet_address,
+                    referrer_user_id=self._referrer_user_id,
+                    referrer_wallet_address=self._referrer_wallet_address,
+                    db_factory=self._db_factory,
                 )
             except FeePaymentError as e:
                 await self._log_session("WARN", f"Fee payment failed: {e}. Stopping session.")
@@ -484,6 +535,9 @@ class SessionEngine:
                     user_fee_bps=self._user_fee_bps,
                     privy_wallet_id=self._privy_wallet_id,
                     wallet_address=self._fee_wallet_address,
+                    referrer_user_id=self._referrer_user_id,
+                    referrer_wallet_address=self._referrer_wallet_address,
+                    db_factory=self._db_factory,
                 )
             except FeePaymentError as e:
                 await self._log_session("WARN", f"Fee payment failed: {e}. Stopping session.")

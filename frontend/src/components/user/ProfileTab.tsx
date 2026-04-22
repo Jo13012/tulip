@@ -6,6 +6,7 @@ import { api } from '../../utils/api'
 import { fmtUsd, pnlColor, fmtStoredBps, fmtStoredBpsPct } from '../../utils/format'
 import { XPModal } from './XPModal'
 import { BridgeHistoryModal } from './BridgeHistoryModal'
+import { ReferralHistoryModal } from './ReferralHistoryModal'
 import { FundingModal } from './OnboardingModal'
 import { Section, Row, AddressField, GhostButton } from '../ui/Field'
 
@@ -31,18 +32,22 @@ function writeCache(uid: string, data: ProfileData) {
 }
 
 export function ProfileTab({ user }: Props) {
-  const addToast      = useAppStore(s => s.addToast)
+  const addToast = useAppStore(s => s.addToast)
+  const setUser = useAppStore(s => s.setUser)
   const fundingStatus = useAppStore(s => s.fundingStatus)
-  const { exportWallet } = usePrivy()
+  usePrivy()
 
   const cached = readCache(user.user_id)
   const [profile, setProfile] = useState<ProfileData | null>(cached)
   const [loading, setLoading] = useState(!cached)
-  const [xpOpen, setXpOpen]             = useState(false)
+  const [xpOpen, setXpOpen] = useState(false)
   const [bridgeHistoryOpen, setBridgeHistoryOpen] = useState(false)
+  const [referralHistoryOpen, setReferralHistoryOpen] = useState(false)
   const [fundingModalOpen, setFundingModalOpen] = useState(false)
   const [forcingFunding, setForcingFunding] = useState(false)
   const [fundTab, setFundTab] = useState<'deposit' | 'withdraw'>('deposit')
+  const [referrerInput, setReferrerInput] = useState(user.referrer_username || '')
+  const [savingReferrer, setSavingReferrer] = useState(false)
 
   useEffect(() => {
     api.getProfile().then((d: any) => {
@@ -51,36 +56,79 @@ export function ProfileTab({ user }: Props) {
     }).catch(() => {}).finally(() => setLoading(false))
   }, [user.user_id])
 
+  useEffect(() => {
+    setReferrerInput(user.referrer_username || profile?.referrer_username || '')
+  }, [user.referrer_username, profile?.referrer_username])
+
   async function handleForceFunding() {
     setForcingFunding(true)
     try {
       const status = await api.forceFunding() as any
       useAppStore.getState().setFundingStatus(status)
-      addToast({ type: 'success', message: 'Fixing funding…' })
-    } catch (e: any) { addToast({ type: 'error', message: e?.message ?? 'Funding fix failed' }) }
-    finally { setForcingFunding(false) }
+      addToast({ type: 'success', message: 'Fixing funding...' })
+    } catch (e: any) {
+      addToast({ type: 'error', message: e?.message ?? 'Funding fix failed' })
+    } finally {
+      setForcingFunding(false)
+    }
   }
 
-  const pnl             = profile ? Math.max(profile.bot_pnl, profile.wallet_pnl) : 0
-  const vol             = profile?.trading_volume ?? 0
-  const feeBps          = profile?.fee_bps ?? 120
-  const feeIsOverridden = profile?.fee_is_overridden ?? false
-  const sh              = loading && !profile
-  const dots            = <span className="text-white/20 font-mono">···</span>
+  async function handleSaveReferrer() {
+    const username = referrerInput.trim()
+    if (!username) {
+      addToast({ type: 'error', message: 'Enter a referrer username' })
+      return
+    }
+    setSavingReferrer(true)
+    try {
+      await api.lookupReferrer(username)
+      const assigned = await api.assignReferrer(username) as any
+      const nextReferrer = assigned.referrer_username || username
+      const nextProfile: ProfileData = {
+        trading_volume: profile?.trading_volume ?? 0,
+        bot_pnl: profile?.bot_pnl ?? 0,
+        fee_bps: profile?.fee_bps ?? 120,
+        fee_is_overridden: profile?.fee_is_overridden ?? false,
+        wallet_volume: profile?.wallet_volume ?? 0,
+        wallet_pnl: profile?.wallet_pnl ?? 0,
+        referrer_username: nextReferrer,
+        can_set_referrer: false,
+        referral_reward_usdc: profile?.referral_reward_usdc ?? 0,
+      }
+      setProfile(nextProfile)
+      writeCache(user.user_id, nextProfile)
+      setUser({ ...user, referrer_username: nextReferrer })
+      setReferrerInput(nextReferrer)
+      addToast({ type: 'success', message: 'Referrer saved' })
+    } catch (e: any) {
+      addToast({ type: 'warning', message: e?.message || 'Unable to set this referrer.' })
+    } finally {
+      setSavingReferrer(false)
+    }
+  }
 
-  const addr        = user.wallet_address || ''
-  const tradingBal  = fundingStatus?.trading_balance ?? null
-  const walletUsdc  = fundingStatus?.usdc_balance ?? null
-  const walletEth   = fundingStatus?.eth_balance ?? null
-  const bridgeMinUsdc = Number(fundingStatus?.bridge_min_usdc || 5)
+  const pnl = profile ? Math.max(profile.bot_pnl, profile.wallet_pnl) : 0
+  const vol = profile?.trading_volume ?? 0
+  const feeBps = profile?.fee_bps ?? 120
+  const feeIsOverridden = profile?.fee_is_overridden ?? false
+  const sh = loading && !profile
+  const dots = <span className="text-white/20 font-mono">...</span>
+
+  const addr = user.wallet_address || ''
+  const tradingBal = fundingStatus?.trading_balance ?? null
+  const walletUsdc = fundingStatus?.usdc_balance ?? null
+  const walletEth = fundingStatus?.eth_balance ?? null
   const bridgeAvailable = Boolean(fundingStatus?.bridge_available)
   const bridgeableUsdc = Number(fundingStatus?.bridgeable_usdc || 0)
   const reserveUsdcRequired = Number(fundingStatus?.required_usdc || fundingStatus?.fee_wallet_usdc_min || 2)
   const needsAction = Boolean(fundingStatus?.needs_usdc || fundingStatus?.needs_eth || fundingStatus?.funding_state === 'failed')
   const isSuggested = Boolean((fundingStatus?.warn_usdc || fundingStatus?.warn_eth) && !needsAction)
-  const isReady     = !needsAction && !isSuggested && fundingStatus != null
+  const isReady = !needsAction && !isSuggested && fundingStatus != null
+  const resolvedReferrer = profile?.referrer_username || user.referrer_username || ''
+  const canSetReferrer = Boolean(profile?.can_set_referrer && !resolvedReferrer)
+  const referralLink = user.display_name ? `${window.location.origin}/?r=${encodeURIComponent(user.display_name)}` : ''
 
-  const statusLabel = needsAction ? 'Action needed' : isSuggested ? 'Top up suggested' : isReady ? 'Ready' : 'Checking…'
+  const statusLabel = needsAction ? 'Action needed' : isSuggested ? 'Top up suggested' : isReady ? 'Ready' : 'Checking...'
   const statusColor = needsAction
     ? 'text-amber-300/80 bg-amber-500/10 border-amber-400/20'
     : isReady
@@ -89,22 +137,17 @@ export function ProfileTab({ user }: Props) {
 
   return (
     <div className="p-6 space-y-5">
-
-      {/* Greeting */}
       <p className="text-[18px] font-semibold text-white/80">
-        Hi {user.display_name || 'Trader'} 👋
+        Hi {user.display_name || 'Trader'}
       </p>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-
-        {/* Left — Account + Performance */}
         <div className="space-y-6">
-
           <Section title="Account">
             <Row label="Wallet">
               {addr
                 ? <AddressField value={addr} />
-                : <span className="text-[11px] text-white/20 font-mono">—</span>
+                : <span className="text-[11px] text-white/20 font-mono">-</span>
               }
             </Row>
           </Section>
@@ -130,7 +173,7 @@ export function ProfileTab({ user }: Props) {
                   <rect x="1" y="5.25" width="7" height="1.5" rx=".75" fill="currentColor" opacity=".7"/>
                   <rect x="1" y="9" width="4.5" height="1.5" rx=".75" fill="currentColor"/>
                 </svg>
-                View tiers
+                View tier
               </button>
               {feeIsOverridden && (
                 <span className="text-[10px] text-amber-400/60">custom fee</span>
@@ -155,11 +198,65 @@ export function ProfileTab({ user }: Props) {
             )}
           </Section>
 
+          <Section title="Referral">
+            <Row label="Your referrer">
+              {canSetReferrer ? (
+                <>
+                  <input
+                    type="text"
+                    value={referrerInput}
+                    onChange={(e) => setReferrerInput(e.target.value.replace(/[^A-Za-z0-9]/g, ''))}
+                    placeholder="Enter username"
+                    maxLength={15}
+                    className="w-full max-w-[220px] bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[12px] text-white placeholder-white/20 outline-none transition-colors focus:border-white/20"
+                  />
+                  <button
+                    disabled={savingReferrer || !referrerInput.trim()}
+                    onClick={handleSaveReferrer}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.09] text-white/40 hover:text-white/70 transition-all text-[10px] font-semibold disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    {savingReferrer ? 'Saving...' : 'Set referrer'}
+                  </button>
+                </>
+              ) : (
+                <span className="text-[12px] font-mono font-semibold text-white/65">
+                  {resolvedReferrer || dots}
+                </span>
+              )}
+              {canSetReferrer ? (<p className="text-[11px] text-white/40 leading-relaxed">
+                Enter your referrer&apos;s username to link your account. Referrer can only be set once.
+              </p>) : (<></>)}
+            
+            </Row>
+
+            <Row label="Rewards">
+              <span className="text-[12px] font-mono font-semibold text-emerald-400">
+                {fmtUsd(profile?.referral_reward_usdc ?? user.referral_reward_usdc ?? 0)}
+              </span>
+
+              <button
+                onClick={() => setReferralHistoryOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.09] text-white/40 hover:text-white/70 transition-all text-[10px] font-semibold"
+              >
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                  <rect x="1" y="1.5" width="10" height="1.5" rx=".75" fill="currentColor" opacity=".5"/>
+                  <rect x="1" y="5.25" width="7" height="1.5" rx=".75" fill="currentColor" opacity=".7"/>
+                  <rect x="1" y="9" width="4.5" height="1.5" rx=".75" fill="currentColor"/>
+                </svg>
+                View referrals
+              </button>  
+            </Row>
+            <Row label="Custom Link">
+              {referralLink
+                ? <AddressField value={referralLink} />
+                : <span className="text-[11px] text-white/20 font-mono">Set your username first</span>
+              }
+            </Row>
+          </Section>
         </div>
 
-        {/* Right — Deposit / Withdraw */}
         <Section
-          title={
+          title={(
             <div className="flex items-center gap-1">
               {(['deposit', 'withdraw'] as const).map(t => (
                 <button
@@ -173,7 +270,7 @@ export function ProfileTab({ user }: Props) {
                 </button>
               ))}
             </div>
-          }
+          )}
           action={fundTab === 'deposit' && fundingStatus ? (
             <span className={`text-[10px] font-semibold px-2.5 py-0.5 rounded-full border ${statusColor}`}>
               {statusLabel}
@@ -184,14 +281,37 @@ export function ProfileTab({ user }: Props) {
             <>
               <div className="px-4 py-3 space-y-3">
                 {[
-                  <>Deposit <span className="text-white/65 font-semibold">USDC</span> to your wallet on <span className="text-white/65 font-semibold">Arbitrum</span>.</>,
-                  <>Keep a small ETH amount of <span className="text-white/65 font-semibold">ETH</span> for gas{fundingStatus?.fee_wallet_eth_warn_threshold != null && <span className="text-white/30"> ({fundingStatus.fee_wallet_eth_warn_threshold.toFixed(4)} ETH)</span>}.</>,
-                  <>We move <span className="text-white/65 font-semibold">USDC</span> to your trading balance automatically.</>,
-                  <>We keep a fee reserve on your Arbitrum wallet: <span className="text-white/65 font-semibold">min ${reserveUsdcRequired.toFixed(2)} USDC</span>, or <span className="text-white/65 font-semibold">{Math.round((fundingStatus?.fee_buffer_pct ?? 0.05) * 100)}%</span> of your trading balance (whichever is higher). Covers platform fee transactions.</>,
-                  <>Auto-bridge triggers when <span className="text-white/65 font-semibold">${(fundingStatus?.bridge_min_usdc ?? 5).toFixed(0)}+</span> is available above reserve. Session pauses if reserve drops below <span className="text-white/65 font-semibold">${(fundingStatus?.fee_wallet_usdc_stop ?? 0.5).toFixed(2)}</span> — top up your Arbitrum wallet to resume.</>,
+                  <>
+                    Deposit <span className="text-white/65 font-semibold">USDC</span> to your wallet on{" "}
+                    <span className="text-white/65 font-semibold">Arbitrum</span>.
+                  </>,
+                  <>
+                    Keep a small amount of <span className="text-white/65 font-semibold">ETH</span> for gas fees{" "}
+                    <span className="text-white/30">(around 0.0015 ETH)</span>.
+                  </>,
+                  <>
+                    Your funds are automatically allocated to your trading balance for execution.
+                  </>,
+                  <>
+                    A small safety buffer is maintained on your Arbitrum wallet: the greater of{" "}
+                    <span className="text-white/65 font-semibold">${reserveUsdcRequired.toFixed(2)} USDC</span> or{" "}
+                    <span className="text-white/65 font-semibold">
+                      {Math.round((fundingStatus?.fee_buffer_pct ?? 0.05) * 100)}%
+                    </span>{" "}
+                    of your total capital.
+                  </>,
+                  <>
+                    Any balance above{" "}
+                    <span className="text-white/65 font-semibold">
+                      ${(fundingStatus?.bridge_min_usdc ?? 5).toFixed(0)}+
+                    </span>{" "}
+                    is automatically bridged when available.
+                  </>,
                 ].map((text, i) => (
                   <div key={i} className="flex gap-3 items-start">
-                    <span className="text-[10px] text-white/20 font-mono mt-0.5 w-3 flex-shrink-0">{i + 1}</span>
+                    <span className="text-[10px] text-white/20 font-mono mt-0.5 w-3 flex-shrink-0">
+                      {i + 1}
+                    </span>
                     <p className="text-[11px] text-white/45 leading-relaxed">{text}</p>
                   </div>
                 ))}
@@ -217,9 +337,9 @@ export function ProfileTab({ user }: Props) {
                       <span className="text-[12px] font-mono font-semibold text-white/65">
                         {walletUsdc != null
                           ? `$${walletUsdc.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`
-                          : '—'}
+                          : '-'}
                         {' · '}
-                        {walletEth != null ? `${walletEth.toFixed(5)} ETH` : '—'}
+                        {walletEth != null ? `${walletEth.toFixed(5)} ETH` : '-'}
                       </span>
                     </Row>
                   )}
@@ -248,7 +368,7 @@ export function ProfileTab({ user }: Props) {
                       disabled={forcingFunding || !bridgeAvailable || fundingStatus?.funding_state === 'bridging' || fundingStatus?.funding_state === 'preparing'}
                       onClick={handleForceFunding}
                     >
-                      {(forcingFunding || fundingStatus?.funding_state === 'bridging' || fundingStatus?.funding_state === 'preparing') ? 'Bridging…' : 'Bridge to Polymarket'}
+                      {(forcingFunding || fundingStatus?.funding_state === 'bridging' || fundingStatus?.funding_state === 'preparing') ? 'Bridging...' : 'Bridge to Polymarket'}
                     </GhostButton>
                   )}
                   <GhostButton onClick={() => setBridgeHistoryOpen(true)}>
@@ -258,7 +378,6 @@ export function ProfileTab({ user }: Props) {
               </div>
             </>
           ) : (
-            /* Withdraw */
             <div className="px-4 py-4 space-y-4">
               <div className="space-y-3">
                 {[
@@ -284,15 +403,14 @@ export function ProfileTab({ user }: Props) {
               </div>
 
               <div className="flex items-start gap-2.5 px-3.5 py-3 rounded-xl border border-amber-400/15 bg-amber-500/[0.04]">
-                <span className="text-[11px] text-amber-400/50 mt-0.5 flex-shrink-0">⚠</span>
+                <span className="text-[11px] text-amber-400/50 mt-0.5 flex-shrink-0">!</span>
                 <p className="text-[10px] text-amber-300/55 leading-relaxed">
-                  We do not store your private key and have no access to your funds at any time. You are the sole person with access to your wallet — we cannot recover funds in the event of a loss. You are entirely responsible for the safekeeping of your private key.
+                  We do not store your private key and have no access to your funds at any time. You are the sole person with access to your wallet and remain responsible for its safekeeping.
                 </p>
               </div>
             </div>
           )}
         </Section>
-
       </div>
 
       {xpOpen && (
@@ -305,6 +423,9 @@ export function ProfileTab({ user }: Props) {
       )}
       {bridgeHistoryOpen && (
         <BridgeHistoryModal onClose={() => setBridgeHistoryOpen(false)} />
+      )}
+      {referralHistoryOpen && (
+        <ReferralHistoryModal onClose={() => setReferralHistoryOpen(false)} />
       )}
       {fundingModalOpen && (
         <FundingModal

@@ -41,6 +41,7 @@ from app.api.user.sessions import router as user_sessions_router
 from app.api.user.strategy import router as user_strategy_router
 from app.api.user.ws import router as user_ws_router
 from app.api.user.wallets import router as user_wallets_router
+from app.api.user.analytics import router as user_analytics_router
 from app.api.admin.strategy import router as admin_strategy_router
 from app.api.admin.sessions import router as admin_sessions_router
 from app.api.admin.analytics import router as admin_analytics_router
@@ -117,6 +118,7 @@ app.include_router(auth_router,            prefix="/api/v1")
 app.include_router(user_sessions_router,   prefix="/api/v1/user")
 app.include_router(user_strategy_router,   prefix="/api/v1/user")
 app.include_router(user_wallets_router,    prefix="/api/v1/user")
+app.include_router(user_analytics_router,  prefix="/api/v1/user")
 app.include_router(user_ws_router)
 app.include_router(admin_strategy_router,  prefix="/api/v1")
 app.include_router(admin_sessions_router,  prefix="/api/v1")

@@ -757,10 +757,6 @@ Backend restart = **automatic session recovery** (~3–5s downtime).
 5. If session stays `degraded`: `POST /api/v1/admin/sessions/{id}/recovery/retry`
 6. Re-enable: `global_pause=false`
 
-
-
-
-
 et ajoute sur sessions admin une option pour lancerune session pour un user avec les criteres que je choisis en tant qu'admin parmis liste des users sans session running.
 
 pour l'onboarding fais qu'on peut skip et accéder à l'app à l'étape du depot e tdu bridge avec un skip for now. mais que sinon ça marche quand même, dire que délay c'est d'environ 60s. si on skip for now dans la page deposit à gauche de bridge history met un bouton comme launch session pour Bridge (et rename bridge history, juste history), qui ouvre comme l'étape 3 du onboarding et que ça fonctionne comme onboarding, en gros on peut use le reste de l'app et y accéder sans avoir deposit forcément en onboarding, réduit la friction, fais que les 2 options, depot au onboarding comme maintenant, ou skip for now, fonctionne sans casser l'app quelque part.
@@ -778,6 +774,10 @@ tout en responsive pour  ce que je viens de te dire
 
 pose des questions avant si t'en a
 
+
+
+
+fais une nouvelle sosu section dans proifle pour la partie ref + si jamais un user change son username (maintenant tu limite juste à 1 changement pas à 12h donc tu met juste délai 10 ans et coté front si délai tu dis trop tard une fois pour éviter de rajouter qqc en bdd en table pour save cb de fois, si ca marche ce que je viens de te dire, si un user change son username ça doit pas casser pour ses filleuls. pour le bouton pour définir son parrain si pas déjà fait, juste expliquer vite fait. on peut pas s'auto parrainer, et sur la section ref, sur la partie Rewards et le montant tu met un bouton exactement comme view tier, mais view referrals et ça te met une liste de tes filleuls et le montant qu'ils t'ont payé en $ exactement le modal comme view tier, adapté à ça du coup, responsive etc..
 
 ---
 

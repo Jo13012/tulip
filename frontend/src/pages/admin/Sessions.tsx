@@ -112,11 +112,24 @@ function AdminStopModal({ sessionId, isStopping, onClose, onDone }: {
   )
 }
 
+function fmtAge(isoTs: string | null): string {
+  if (!isoTs) return '—'
+  const ms = Date.now() - new Date(isoTs).getTime()
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ${m % 60}m`
+  return `${Math.floor(h / 24)}d ${h % 24}h`
+}
+
 function SessionDetail({ id }: { id: string }) {
   const addToast = useAppStore((s) => s.addToast)
   const [s, setS]               = useState<any>(null)
   const [stopModal, setStopModal] = useState(false)
   const [replModal, setReplModal] = useState<string | null>(null)
+  const [openSlots, setOpenSlots] = useState<Record<string, boolean>>({})
   const [replForm, setReplForm]   = useState({
     polymarket_url: '', side: 'YES', price_min: 0.9, price_max: 0.99,
     number_of_lots: 1, sl_ticks: 0, spread_from_ask: false,
@@ -151,6 +164,14 @@ function SessionDetail({ id }: { id: string }) {
   async function retryRecovery() {
     try { await api.admin.retryRecovery(id); addToast({ type: 'info', message: 'Recovery queued' }); reload() }
     catch (e: any) { addToast({ type: 'error', message: e.message }) }
+  }
+
+  async function forceReplace(ssId: string) {
+    try {
+      await api.admin.forceReplaceSlot(id, ssId)
+      addToast({ type: 'success', message: 'Force-replace triggered' })
+      reload()
+    } catch (e: any) { addToast({ type: 'error', message: e.message }) }
   }
 
   async function queueReplacement(ssId: string) {
@@ -228,51 +249,151 @@ function SessionDetail({ id }: { id: string }) {
         <div className="px-4 py-2.5 border-b border-white/[0.05] bg-white/[0.015]">
           <span className="text-[9px] font-semibold uppercase tracking-widest text-white/20">Slots</span>
         </div>
-        {s.slots?.map((ss: any) => (
-          <div key={ss.session_slot_id} className="border-b border-white/[0.04] last:border-0 px-4 py-3 hover:bg-white/[0.015] transition-colors">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-0.5">
-                  <SlotStateChip state={ss.slot_state} />
-                  <span className="text-[10px] text-white/20 font-mono">{ss.session_slot_id.slice(0, 8)}</span>
-                </div>
-                <div className="text-[10px] text-white/35">
-                  {ss.allocation_pct}% · {fmtUsd(ss.allocated_capital)} allocated
-                </div>
-                {ss.runtime && (
-                  <div className="text-[10px] text-white/20 mt-0.5 font-mono">
-                    deployed {fmtUsd(ss.runtime.deployed_capital)}
-                    {' · '}lots {ss.runtime.open_lots}
-                    {' · '}<span className="text-white/35">{fmtUsd(ss.runtime.volume, 0)} vol</span>
-                    {' · '}pnl{' '}
-                    <span className={pnlColor(ss.runtime.realized_pnl)}>{fmtUsd(ss.runtime.realized_pnl)}</span>
+        {s.slots?.map((ss: any) => {
+          const rt   = ss.runtime
+          const lots = rt?.lot_list ?? []
+          const buys = rt?.open_order_list ?? []
+          const sells = rt?.sell_order_list ?? []
+          const isOpen = openSlots[ss.session_slot_id]
+          const hasSelling = lots.some((l: any) => l.status === 'SELLING')
+
+          return (
+            <div key={ss.session_slot_id} className="border-b border-white/[0.04] last:border-0">
+              <button
+                className="w-full flex items-start justify-between gap-3 px-4 py-3 hover:bg-white/[0.015] transition-colors text-left"
+                onClick={() => setOpenSlots(p => ({ ...p, [ss.session_slot_id]: !p[ss.session_slot_id] }))}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                    <SlotStateChip state={ss.slot_state} />
+                    <span className="text-[10px] text-white/20 font-mono">{ss.session_slot_id.slice(0, 8)}</span>
+                    {rt?.question && <span className="text-[10px] text-white/35 truncate max-w-[200px]">{rt.question}</span>}
                   </div>
-                )}
-              </div>
-              {canStop && (
-                <button
-                  className="px-2.5 py-1 border border-white/[0.08] rounded-lg text-[10px] text-white/30 hover:border-white/20 hover:text-white/55 transition-all shrink-0"
-                  onClick={() => setReplModal(ss.session_slot_id)}
-                >
-                  Replace
-                </button>
+                  <div className="text-[10px] text-white/30">
+                    {ss.allocation_pct}% · {fmtUsd(ss.allocated_capital)} alloc
+                    {rt && <> · {fmtUsd(rt.deployed_capital)} deployed · <span className="text-white/40">{fmtUsd(rt.volume, 0)} vol</span> · pnl <span className={pnlColor(rt.realized_pnl)}>{fmtUsd(rt.realized_pnl)}</span></>}
+                  </div>
+                  {rt && (lots.length > 0 || buys.length + sells.length > 0) && (
+                    <div className="flex items-center gap-2 mt-0.5">
+                      {lots.length > 0 && <span className="text-[8px] font-mono text-white/20">{lots.length} pos</span>}
+                      {(buys.length + sells.length) > 0 && <span className="text-[8px] font-mono text-white/20">{buys.length + sells.length} ord</span>}
+                      {hasSelling && <span className="text-[8px] font-semibold text-amber-400/60 uppercase">selling</span>}
+                      {rt.bid_price > 0 && <span className="text-[8px] font-mono text-white/25">bid {(rt.bid_price * 100).toFixed(1)}¢</span>}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {canStop && (
+                    <>
+                      <button
+                        className="px-2.5 py-1 border border-orange-500/20 rounded-lg text-[10px] text-orange-400/50 hover:border-orange-500/40 hover:text-orange-400 transition-all"
+                        onClick={e => { e.stopPropagation(); forceReplace(ss.session_slot_id) }}
+                        title="Taker-sell all positions + cancel all orders on this market, then queue replacement"
+                      >
+                        Force↺
+                      </button>
+                      <button
+                        className="px-2.5 py-1 border border-white/[0.08] rounded-lg text-[10px] text-white/30 hover:border-white/20 hover:text-white/55 transition-all"
+                        onClick={e => { e.stopPropagation(); setReplModal(ss.session_slot_id) }}
+                      >
+                        Replace
+                      </button>
+                    </>
+                  )}
+                  <svg width="10" height="10" viewBox="0 0 10 10" className={`text-white/20 transition-transform duration-150 ${isOpen ? 'rotate-180' : ''}`}
+                    fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                    <path d="M2 3.5l3 3 3-3" />
+                  </svg>
+                </div>
+              </button>
+
+              {/* Expanded: positions + orders */}
+              {isOpen && (
+                <div className="bg-white/[0.012] border-t border-b border-white/[0.04] mx-3 mb-1 rounded-xl overflow-hidden">
+                  {lots.length > 0 && (() => {
+                    const groups = new Map<string, any[]>()
+                    for (const lot of lots) {
+                      const key = `${(lot.entry_price ?? 0).toFixed(4)}|${(lot.target_sell_price ?? 0).toFixed(4)}`
+                      if (!groups.has(key)) groups.set(key, [])
+                      groups.get(key)!.push(lot)
+                    }
+                    return (
+                      <div>
+                        <div className="px-3 pt-2 pb-1 text-[8px] font-semibold uppercase tracking-widest text-white/20">Positions</div>
+                        {Array.from(groups.entries()).map(([key, gLots]) => {
+                          const rep = gLots[0]
+                          const totalSize = gLots.reduce((a: number, l: any) => a + l.size, 0)
+                          const totalTokens = gLots.reduce((a: number, l: any) => a + (l.tokens ?? 0), 0)
+                          const isSell = gLots.some((l: any) => l.status === 'SELLING')
+                          const entryVal = rep.entry_price * totalTokens
+                          const curVal = rep.current_price > 0 ? rep.current_price * totalTokens : 0
+                          const pnlPct = entryVal > 0 && curVal > 0 ? ((curVal - entryVal) / entryVal) * 100 : null
+                          const ts = gLots.map((l: any) => l.timestamp_entry).filter(Boolean).sort()[0] ?? null
+                          return (
+                            <div key={key} className="flex items-center gap-2 px-3 py-1.5 border-t border-white/[0.03]">
+                              <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
+                                <span className="text-[10px] font-mono text-white/55">${totalSize.toFixed(2)}</span>
+                                {gLots.length > 1 && <span className="text-[8px] font-mono text-white/25">×{gLots.length}</span>}
+                                <span className="text-[9px] font-mono text-white/25">
+                                  {(rep.entry_price * 100).toFixed(1)}¢ → {(rep.target_sell_price * 100).toFixed(1)}¢
+                                </span>
+                                {isSell && <span className="text-[8px] font-semibold text-amber-400/60 uppercase">selling</span>}
+                              </div>
+                              <div className="shrink-0 flex items-center gap-2">
+                                {pnlPct !== null && (
+                                  <span className={`text-[9px] font-mono ${pnlPct >= 0 ? 'text-emerald-400/70' : 'text-red-400/70'}`}>
+                                    {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
+                                  </span>
+                                )}
+                                <span className="text-[8px] font-mono text-white/20">{fmtAge(ts)}</span>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )
+                  })()}
+
+                  {(sells.length > 0 || buys.length > 0) && (
+                    <div>
+                      <div className="px-3 pt-2 pb-1 text-[8px] font-semibold uppercase tracking-widest text-white/20">Orders</div>
+                      {[...sells, ...buys].map((o: any) => {
+                        const isSell = o.side === 'SELL'
+                        return (
+                          <div key={o.order_id} className="flex items-center gap-2 px-3 py-1.5 border-t border-white/[0.03]">
+                            <span className={`text-[8px] font-bold uppercase tracking-widest px-1 py-0.5 rounded shrink-0 ${
+                              isSell ? 'bg-red-500/10 text-red-400/60' : 'bg-emerald-500/10 text-emerald-400/60'
+                            }`}>{isSell ? 'TP' : 'BUY'}</span>
+                            <span className="text-[10px] font-mono text-white/50 flex-1">{(o.price * 100).toFixed(1)}¢</span>
+                            <span className="text-[9px] font-mono text-white/25 shrink-0">${o.size.toFixed(2)}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {lots.length === 0 && sells.length === 0 && buys.length === 0 && (
+                    <div className="px-3 py-3 text-[10px] font-mono text-white/15">No activity</div>
+                  )}
+
+                  {ss.market_history?.length > 0 && (
+                    <div className="px-3 pt-2 pb-2 border-t border-white/[0.03]">
+                      <div className="text-[8px] font-semibold uppercase tracking-widest text-white/20 mb-1">Market history</div>
+                      {ss.market_history.slice(0, 3).map((m: any, i: number) => (
+                        <div key={i} className="text-[10px] text-white/20 flex gap-3 font-mono">
+                          <span className="truncate max-w-[180px]">{m.question || m.url}</span>
+                          <span className="text-white/15">{fmtDate(m.started_at)}</span>
+                          <span>{fmtUsd(m.volume, 0)} vol</span>
+                          <span className={pnlColor(m.pnl)}>{fmtUsd(m.pnl)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
-
-            {ss.market_history?.length > 0 && (
-              <div className="mt-2 space-y-0.5 pl-2 border-l border-white/[0.04]">
-                {ss.market_history.slice(0, 3).map((m: any, i: number) => (
-                  <div key={i} className="text-[10px] text-white/20 flex gap-3 font-mono">
-                    <span className="truncate max-w-[180px]">{m.question || m.url}</span>
-                    <span className="text-white/15">{fmtDate(m.started_at)}</span>
-                    <span>{fmtUsd(m.volume, 0)} vol</span>
-                    <span className={pnlColor(m.pnl)}>{fmtUsd(m.pnl)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
+          )
+        })}
       </div>
 
       {/* Logs */}

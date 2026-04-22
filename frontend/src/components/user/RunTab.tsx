@@ -1,5 +1,5 @@
 /**
- * RunTab — active session view or launch form.
+ * RunTab  active session view or launch form.
  */
 import { useState, useEffect, useMemo, useRef } from 'react'
 import type { AppUser, Strategy, Session, RuntimeSlotStats } from '../../types'
@@ -18,12 +18,12 @@ interface Props {
   onSessionChange: (s: Session | null) => void
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 function fmtDur(hours: number): string {
-  if (!isFinite(hours) || hours <= 0) return '—'
+  if (!isFinite(hours) || hours <= 0) return '-'
   const m = Math.round(hours * 60)
   const w = Math.floor(m / (7 * 24 * 60))
   const d = Math.floor((m % (7 * 24 * 60)) / (24 * 60))
@@ -79,9 +79,9 @@ function Field({
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Slot card (per-market)
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /** Fetch market images for a set of conditionIds; returns a stable map. */
 function useMarketImages(conditionIds: (string | null)[]): Record<string, string> {
@@ -113,12 +113,12 @@ function useMarketImages(conditionIds: (string | null)[]): Record<string, string
   return imgs
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Positions + Open Orders flat lists
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 function fmtAge(isoTs: string | null): string {
-  if (!isoTs) return '—'
+  if (!isoTs) return '-'
   const ms = Date.now() - new Date(isoTs).getTime()
   const s = Math.floor(ms / 1000)
   if (s < 60) return `${s}s`
@@ -139,7 +139,7 @@ function MarketThumb({ img, question }: { img: string | null; question: string |
   )
 }
 
-// ── Slot-first collapsed activity (Option A) ──────────────────────────────────
+// -- Slot-first collapsed activity (Option A) ----------------------------------
 
 function SlotActivityList({ slots, loaded }: { slots: RuntimeSlotStats[]; loaded: boolean }) {
   const [open, setOpen] = useState<Record<string, boolean>>({})
@@ -182,7 +182,7 @@ function SlotActivityList({ slots, loaded }: { slots: RuntimeSlotStats[]; loaded
 
             return (
               <div key={s.session_slot_id}>
-                {/* Slot summary row — always visible, tap to expand */}
+                {/* Slot summary row  always visible, tap to expand */}
                 <button
                   className="w-full flex items-center gap-3 px-5 py-2.5 hover:bg-white/[0.02] transition-colors text-left"
                   onClick={() => toggle(s.session_slot_id)}
@@ -296,9 +296,9 @@ function SlotActivityList({ slots, loaded }: { slots: RuntimeSlotStats[]; loaded
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Stop modal
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 function StopModal({ onStop, onClose, stopping, isStopping }: {
   onStop: (mode: 'soft' | 'hard') => void
@@ -335,13 +335,13 @@ function StopModal({ onStop, onClose, stopping, isStopping }: {
             onClick={onClose}
             aria-label="Close"
           >
-            ✕
+            ?
           </button>
         </div>
 
         {/* Options */}
         <div className="p-5 space-y-3">
-          {/* Soft stop — hidden if already stopping */}
+          {/* Soft stop  hidden if already stopping */}
           {!isStopping && (
             <button
               className="w-full text-left p-4 border border-white/[0.07] rounded-xl hover:border-white/14 hover:bg-white/[0.025] transition-all group disabled:opacity-40"
@@ -375,17 +375,17 @@ function StopModal({ onStop, onClose, stopping, isStopping }: {
         </div>
 
         {stopping && (
-          <div className="px-5 pb-5 text-center text-[11px] font-mono text-white/20">Stopping…</div>
+          <div className="px-5 pb-5 text-center text-[11px] font-mono text-white/20">Stopping...</div>
         )}
       </div>
     </div>
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Session launch loader (bridge-style with dash connector)
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 type StepState = 'pending' | 'current' | 'done' | 'error'
 
@@ -464,7 +464,7 @@ function SessionLoader({
               </div>
             </div>
 
-            {/* Dash connector — between steps, not after last */}
+            {/* Dash connector  between steps, not after last */}
             {i < steps.length - 1 && (
               <div className="ml-[9px] flex flex-col gap-[3px] py-[4px]">
                 {[0,1,2].map(d => (
@@ -494,20 +494,20 @@ function SessionLoader({
   )
 }
 
-// ── SessionStartLoader — single loader driven by real backend state ────────────
+// -- SessionStartLoader  single loader driven by real backend state ------------
 //
-// phase='api'      — API call in flight (balance/capital checks); error shown here if rejected
-// phase='starting' — session exists, WS-driven: healthState + rt advance steps 1-4
+// phase='api'      API call in flight (balance/capital checks); error shown here if rejected
+// phase='starting'  session exists, WS-driven: healthState + rt advance steps 1-4
 
 const SESSION_START_STEPS = [
-  'Checking balances…',
-  'Connecting to Polymarket…',
-  'Configuring slots…',
-  'Placing first orders…',
+  'Checking balances...',
+  'Connecting to Polymarket...',
+  'Configuring slots...',
+  'Placing first orders...',
   'Session live',
 ]
 
-// Fake delays (ms) for steps 1→2→3 in 'starting' phase — real WS takes over if faster
+// Fake delays (ms) for steps 1?2?3 in 'starting' phase  real WS takes over if faster
 const FAKE_STEP_DELAYS = [800, 1200, 1000]
 
 function SessionStartLoader({
@@ -538,7 +538,7 @@ function SessionStartLoader({
     return () => clearTimeout(t)
   }, [phase, fakeStep])
 
-  // Reset fake step when phase changes (e.g. api → starting)
+  // Reset fake step when phase changes (e.g. api ? starting)
   useEffect(() => {
     if (phase === 'starting') setFakeStep(0)
   }, [phase])
@@ -566,8 +566,8 @@ function SessionStartLoader({
   }))
 
   const title = displayName
-    ? `${displayName}, launching your session…`
-    : 'Launching your session…'
+    ? `${displayName}, launching your session...`
+    : 'Launching your session...'
 
   return (
     <SessionLoader
@@ -580,9 +580,9 @@ function SessionStartLoader({
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Active session
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 const dotCls: Record<string, string> = {
   running: 'bg-emerald-400', starting: 'bg-yellow-400 animate-pulse',
@@ -632,7 +632,7 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
   const canStop       = !['stopped', 'error'].includes(liveStatus)
   const isStarting    = ['starting', 'pending'].includes(liveStatus) || ['starting'].includes(healthState)
 
-  // React to live status from WS — onStopped when terminal
+  // React to live status from WS  onStopped when terminal
   useEffect(() => {
     if (['stopped', 'error'].includes(liveStatus)) {
       onStopped()
@@ -665,9 +665,9 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
     setStopping(true); setShowStopModal(false)
     try {
       await api.stopSession(session.session_id, mode)
-      addToast({ type: 'info', message: mode === 'soft' ? 'Soft stop initiated — waiting for positions to close' : 'Hard stop executed' })
+      addToast({ type: 'info', message: mode === 'soft' ? 'Soft stop initiated · waiting for positions to close' : 'Hard stop executed' })
       // Hard stop: backend returns quickly, WS will push 'stopped'
-      // Soft stop: let WS drive — do NOT call onStopped here, session stays visible as 'stopping'
+      // Soft stop: let WS drive  do NOT call onStopped here, session stays visible as 'stopping'
       if (mode === 'hard') {
         // Give WS a moment; fallback poll
         setTimeout(() => {
@@ -695,7 +695,7 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
   return (
     <div className="flex flex-col gap-0">
 
-      {/* ── Status bar ─────────────────────────────────────────────────────── */}
+      {/* -- Status bar ------------------------------------------------------- */}
       <div className="px-5 pt-4 pb-3 flex items-center justify-between border-b border-white/[0.04]">
         <div className="flex items-center gap-2">
           <span className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors duration-500 ${dotCls[healthState] ?? 'bg-white/20'}`} />
@@ -714,13 +714,13 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
               disabled={stopping}
               onClick={() => setShowStopModal(true)}
             >
-              {stopping ? '…' : 'Stop'}
+              {stopping ? '...' : 'Stop'}
             </button>
           )}
         </div>
       </div>
 
-      {/* ── Stopping banner ───────────────────────────────────────────────── */}
+      {/* -- Stopping banner ------------------------------------------------- */}
       {isStopping && (
         <div className="mx-5 mt-3 px-4 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-between gap-3">
           <div>
@@ -736,7 +736,7 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
         </div>
       )}
 
-      {/* ── Capital + Net PnL hero ─────────────────────────────────────────── */}
+      {/* -- Capital + Net PnL hero ------------------------------------------- */}
       <div className="px-5 py-4 flex items-end justify-between border-b border-white/[0.03]">
         <div>
           <div className="text-[9px] text-white/20 uppercase tracking-widest font-semibold mb-1">Capital</div>
@@ -752,7 +752,7 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
         </div>
       </div>
 
-      {/* ── Summary stats ─────────────────────────────────────────────────── */}
+      {/* -- Summary stats --------------------------------------------------- */}
       <div className="px-5 py-3 grid grid-cols-5 gap-3 border-b border-white/[0.03]">
         {loaded ? (
           <>
@@ -769,8 +769,8 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
                   value={fmtUsd(vol, 2)}
                   sub={totalX != null ? (
                     <>
-                      <span className="hidden sm:inline">{fmtX(totalX)} total · {dailyX != null ? fmtX(dailyX) : '—'} / 24h</span>
-                      <span className="sm:hidden flex flex-col gap-0">{fmtX(totalX)} total<br />{dailyX != null ? fmtX(dailyX) : '—'} 24h</span>
+                      <span className="hidden sm:inline">{fmtX(totalX)} total · {dailyX != null ? fmtX(dailyX) : '·'} / 24h</span>
+                      <span className="sm:hidden flex flex-col gap-0">{fmtX(totalX)} total<br />{dailyX != null ? fmtX(dailyX) : '·'} 24h</span>
                     </>
                   ) : undefined}
                 />
@@ -786,7 +786,7 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
               return (
                 <MiniStat
                   label="CPM"
-                  value={cpm != null ? `${sign}${fmtUsd(cpm, 0)}` : '—'}
+                  value={cpm != null ? `${sign}${fmtUsd(cpm, 0)}` : '$'}
                   color={cpm != null ? pnlColor(cpm) : 'text-white/25'}
                   tooltipTitle="Cost per Million"
                   tooltip="Net PnL extrapolated to $1M of volume."
@@ -806,7 +806,7 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
         )}
       </div>
 
-      {/* ── Progress ──────────────────────────────────────────────────────── */}
+      {/* -- Progress -------------------------------------------------------- */}
       <div className="px-5 py-3 border-b border-white/[0.03]">
         <div className="flex items-center justify-between mb-1.5">
           <span className="text-[9px] text-white/20 uppercase tracking-widest font-semibold">
@@ -833,10 +833,10 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
         </div>
       </div>
 
-      {/* ── Slots (positions + orders, collapsed) ─────────────────────────── */}
+      {/* -- Slots (positions + orders, collapsed) --------------------------- */}
       <SlotActivityList slots={slotStats} loaded={loaded} />
 
-      {/* ── Stop modal ────────────────────────────────────────────────────── */}
+      {/* -- Stop modal ------------------------------------------------------ */}
       {showStopModal && (
         <StopModal
           stopping={stopping}
@@ -849,9 +849,9 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Launch form
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 function LaunchForm({ strategy, walletId, usdcBalance, onLaunched, displayName }: {
   strategy: Strategy; walletId: string; usdcBalance: number | null; onLaunched: () => void; displayName?: string
@@ -948,17 +948,17 @@ function LaunchForm({ strategy, walletId, usdcBalance, onLaunched, displayName }
   return (
     <div className="flex flex-col gap-0">
 
-      {/* ── Header: balance ──────────────────────────────────────────────── */}
+      {/* -- Header: balance ------------------------------------------------ */}
       <div className="px-5 pt-5 pb-4 border-b border-white/[0.05]">
         <Label>Trading Balance</Label>
         <div className="mt-1 text-[22px] font-bold font-mono tabular-nums leading-none text-white/85">
           {usdcBalance != null
             ? `$${usdcBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-            : <span className="text-white/20 text-lg">—</span>}
+            : <span className="text-white/20 text-lg">...</span>}
         </div>
       </div>
 
-      {/* ── Form grid ────────────────────────────────────────────────────── */}
+      {/* -- Form grid ------------------------------------------------------ */}
       <div className="p-5 grid grid-cols-2 gap-x-5 gap-y-4 items-start">
 
         {/* Capital */}
@@ -988,7 +988,7 @@ function LaunchForm({ strategy, walletId, usdcBalance, onLaunched, displayName }
             <span className="text-[10px] text-white/22">
               {thresholds
                 ? <>Min <span className="font-mono text-white/35">{fmtUsd(thresholds.min)}</span><span className="text-white/15"> · {fmtUsd(thresholds.rec)} suggested</span></>
-                : <span className="text-white/15">—</span>}
+                : <span className="text-white/15">...</span>}
             </span>
             {vMsg && (
               <span className={`text-[10px] font-medium ${vMsgColor}`}>{vMsg}</span>
@@ -1060,7 +1060,7 @@ function LaunchForm({ strategy, walletId, usdcBalance, onLaunched, displayName }
             )
           })()}
           <div className="text-[10px] text-white/22 pt-1 border-t border-white/[0.04]">
-            Based on previous sessions data · ~12× deployed daily · ±0.25–0.5%/day
+            Based on previous sessions data: ~12x volume daily · +0.25%-0.5%/day
           </div>
         </div>
 
@@ -1075,7 +1075,7 @@ function LaunchForm({ strategy, walletId, usdcBalance, onLaunched, displayName }
           disabled={!canLaunch}
           onClick={launch}
         >
-          {launching ? 'Launching…' : 'Launch Session'}
+          {launching ? 'Launching...' : 'Launch Session'}
         </button>
       </div>
 
@@ -1083,9 +1083,9 @@ function LaunchForm({ strategy, walletId, usdcBalance, onLaunched, displayName }
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // RunTab
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 export function RunTab({ user, strategy, activeSession, loading, usdcBalance, onSessionChange }: Props) {
   const { setActiveSession } = useAppStore()
@@ -1097,7 +1097,7 @@ export function RunTab({ user, strategy, activeSession, loading, usdcBalance, on
   // Only release when explicitly stopped (onStopped) or terminal status confirmed.
   const hasActiveRef = useRef(false)
   if (activeSession && !dbTerminal && !rtTerminal) hasActiveRef.current = true
-  if (!activeSession && !hasActiveRef.current) { /* never latched — stay false */ }
+  if (!activeSession && !hasActiveRef.current) { /* never latched  stay false */ }
   if (dbTerminal || rtTerminal) hasActiveRef.current = false
   const hasActive = hasActiveRef.current
   const walletId  = user.wallet_id || ''

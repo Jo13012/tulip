@@ -103,7 +103,7 @@ def _deposit_seed_address(wallet: Wallet) -> str:
 
 
 def _funding_thresholds(usdc_balance: float, eth_balance: float, trading_balance: float | None) -> dict[str, float | bool]:
-    required_usdc       = settings.FEE_WALLET_USDC_MIN
+    required_usdc       = funding_service.compute_reserve_target(usdc_balance, trading_balance)
     warn_usdc_threshold = settings.FEE_WALLET_USDC_MIN_WARN
     required_eth        = settings.FEE_WALLET_ETH_MIN
     warn_eth_threshold  = settings.FEE_WALLET_ETH_MIN_WARN
@@ -340,7 +340,7 @@ async def funding_status(user: CurrentUser, db: DbSession):
         await db.commit()
         if needs_usdc or needs_eth:
             if needs_usdc and needs_eth:
-                message = f"Trading balance ready. Top up wallet reserve to at least {required_usdc:.2f} USDC and {required_eth:.6f} ETH."
+                message = f"Trading balance ready. Top up wallet reserve to at least {required_usdc:.2f} USDC and 0.003 ETH."
             elif needs_usdc:
                 message = f"Trading balance ready. Top up wallet reserve to at least {required_usdc:.2f} USDC."
             else:
@@ -447,7 +447,7 @@ async def funding_status(user: CurrentUser, db: DbSession):
         bridge_min_usdc=settings.BRIDGE_MIN_USDC,
         bridgeable_usdc=bridgeable_usdc,
         bridge_available=bridge_available,
-        reserve_target=funding_service.compute_reserve_target(trading_balance),
+        reserve_target=funding_service.compute_reserve_target(usdc_balance, trading_balance),
         fee_buffer_pct=settings.FEE_BUFFER_PCT,
         fee_wallet_usdc_stop=settings.FEE_WALLET_USDC_STOP,
         funding_state=wallet.funding_state,

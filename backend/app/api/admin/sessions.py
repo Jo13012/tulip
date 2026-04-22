@@ -148,6 +148,45 @@ async def force_stop(session_id: str, admin: AdminUser):
     return {"ok": True}
 
 
+@router.post("/{session_id}/slots/{session_slot_id}/force-replace")
+async def force_replace_slot(session_id: str, session_slot_id: str, admin: AdminUser, db: DbSession):
+    """
+    Force-replace a slot: taker-sell all open positions + cancel all buy orders on the current
+    market, then queue the pending replacement (uses whatever replace version is already queued,
+    or keeps the same market if none queued). This is a manual trigger for stuck slots.
+    """
+    from app.db.models import SessionSlot as DBSessionSlot, StrategySlotVersion
+    from app.runtime.session_registry import session_registry
+    from app.runtime.session_manager import _build_slot_market_config
+
+    ss = await db.get(DBSessionSlot, session_slot_id)
+    if not ss or ss.session_id != session_id:
+        raise HTTPException(404, "Session slot not found")
+
+    engine = await session_registry.get(session_id)
+    if not engine:
+        raise HTTPException(404, "Session not running")
+
+    # Build new_config from queued replacement version if any, else None
+    new_config = None
+    if ss.replacement_strategy_slot_version_id:
+        new_sv = await db.get(StrategySlotVersion, ss.replacement_strategy_slot_version_id)
+        if new_sv:
+            levels = new_sv.max_spread_ticks + 1
+            lot_size = round(ss.allocated_capital / levels, 4) if levels > 0 else 0.0
+            new_config = await _build_slot_market_config(new_sv, lot_size)
+
+    await engine.force_replace_slot(session_slot_id, new_config)
+
+    db.add(AuditLog(
+        actor_id=admin["sub"], actor_role="admin",
+        action="slot.force_replace", entity_type="session_slot", entity_id=session_slot_id,
+        detail="admin force-replace: taker-sold positions, queued replacement",
+    ))
+    await db.commit()
+    return {"ok": True}
+
+
 @router.post("/{session_id}/retry-recovery")
 async def retry_recovery(session_id: str, admin: AdminUser):
     import asyncio

@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     FEE_WALLET_USDC_STOP: float = 0.5         # Session stop threshold
     FEE_WALLET_ETH_MIN: float = 0.001
     FEE_WALLET_ETH_MIN_WARN: float = 0.0005
-    FEE_BUFFER_PCT: float = 0.05              # Reserve 1 dynamic: max($3, TB × 5%)
+    FEE_BUFFER_PCT: float = 0.05              # Reserve 1 dynamic: max($3, 5% of total capital)
     BRIDGE_MIN_USDC: float = 5.0              # Minimum bridgeable amount
     ARB_BALANCE_CHECK_INTERVAL: int = 60      # Seconds between Arbitrum balance checks in session engine
     ARBITRUM_CHAIN_ID: int = 42161

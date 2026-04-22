@@ -41,7 +41,7 @@ const USERNAME_REGEX = /^[A-Za-z0-9]+$/
 
 type OnboardingState = 'pending' | 'deploying' | 'approving' | 'finalizing' | 'ready' | 'failed' | 'no_wallet'
 type CheckStatus = 'idle' | 'pending' | 'active' | 'ok' | 'failed'
-type Step = 1 | 2 | 3
+type Step = 1 | 2 | 3 | 4
 
 const CHECKS: { id: string; labelDone: string; labelActive: string; labelPending: string }[] = [
   { id: 'connect',  labelDone: 'Network connected',      labelActive: 'Connecting…',        labelPending: 'Network'        },
@@ -66,6 +66,23 @@ function loadDraftDisplayName(user: AppUser) {
   return ''
 }
 
+function loadDraftReferrer(user: AppUser) {
+  const existing = user.referrer_username?.trim()
+  if (existing) return existing
+
+  try {
+    const fromSession = sessionStorage.getItem('referral_prefill')?.trim() || ''
+    if (fromSession) return fromSession.replace(/[^A-Za-z0-9]/g, '').slice(0, 15)
+  } catch {}
+
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get('r')?.trim() || ''
+    if (fromUrl) return fromUrl.replace(/[^A-Za-z0-9]/g, '').slice(0, 15)
+  } catch {}
+
+  return ''
+}
+
 function validateDisplayName(value: string) {
   const trimmed = value.trim()
   if (!trimmed) return 'Username is required'
@@ -84,7 +101,7 @@ function StepDots({
 }) {
   return (
     <div className="flex items-center justify-center gap-2 mt-6">
-      {([1, 2, 3] as Step[]).map((step) => {
+      {([1, 2, 3, 4] as Step[]).map((step) => {
         const isCurrent = step === current
         return (
           <div
@@ -311,6 +328,76 @@ function Step1Review({
   )
 }
 
+function Step2Referral({
+  value,
+  onChange,
+  onContinue,
+  onSkip,
+  lockedUsername,
+  serverError,
+}: {
+  value: string
+  onChange: (value: string) => void
+  onContinue: (value: string) => void
+  onSkip: () => void
+  lockedUsername?: string | null
+  serverError: string
+}) {
+  const isLocked = Boolean(lockedUsername)
+
+  return (
+    <div className="flex flex-col flex-1">
+      <div className="mb-7">
+        <div className="text-[10px] text-white/20 uppercase tracking-widest font-semibold mb-1.5">
+          Referral
+        </div>
+        <div className="text-[15px] font-semibold text-white">Add a referrer</div>
+        <div className="text-[11px] text-white/35 mt-1">
+          Optional. You can skip this step for now.
+        </div>
+      </div>
+
+      <div className="flex-1 flex flex-col justify-center gap-2">
+        <input
+          type="text"
+          value={isLocked ? (lockedUsername || '') : value}
+          onChange={(e) => onChange(e.target.value.replace(/[^A-Za-z0-9]/g, ''))}
+          onKeyDown={(e) => e.key === 'Enter' && !isLocked && onContinue(value)}
+          placeholder="Referrer username"
+          maxLength={15}
+          disabled={isLocked}
+          className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2.5 text-[13px] text-white placeholder-white/20 outline-none transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+        />
+        <div className="text-[10px] text-white/20">
+          The referrer automatically receives 10% of paid fees in USDC. Not required.
+        </div>
+        {serverError && (
+          <div className="text-[11px] text-red-400">{serverError}</div>
+        )}
+      </div>
+
+      <div className="mt-5 flex justify-between items-center gap-3">
+        {!isLocked ? (
+          <button
+            type="button"
+            onClick={onSkip}
+            className="text-[10px] text-white/20 hover:text-white/45 transition-colors"
+          >
+            Skip for now
+          </button>
+        ) : <span />}
+        <button
+          type="button"
+          onClick={() => onContinue(isLocked ? (lockedUsername || '') : value)}
+          className="text-[10px] text-white/25 hover:text-white/50 transition-colors"
+        >
+          Continue
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function Step2Username({
   value,
   onChange,
@@ -494,8 +581,7 @@ export function Step3Funding({
         <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg border border-amber-400/20 bg-amber-500/5">
           <span className="text-[10px] text-amber-400/50 mt-0.5 flex-shrink-0">⚠</span>
           <p className="text-[10px] text-amber-300/60 leading-relaxed">
-            Minimum deposit: <strong>$20 USDC</strong> + {feeWalletEthMin.toFixed(4)} ETH for gas.
-          </p>
+            Minimum deposit: <strong>$20 USDC</strong>. <strong>5%</strong> of each deposit is reserved on your Arbitrum wallet to ensure smooth session execution. + 0.003 ETH for gas.          </p>
         </div>
 
         {/* Progress checks */}
@@ -741,8 +827,10 @@ interface Props {
 export function OnboardingModal({ user, onDone, onUpdateUser, bootstrapping = false }: Props) {
   usePrivy()
   const initialDraftDisplayName = loadDraftDisplayName(user)
+  const initialDraftReferrer = loadDraftReferrer(user)
   const [step, setStep] = useState<Step>(1)
   const [draftDisplayName, setDraftDisplayName] = useState(initialDraftDisplayName)
+  const [draftReferrer, setDraftReferrer] = useState(initialDraftReferrer)
   const [visible, setVisible] = useState(true)
   const [serverError, setServerError] = useState('')
   const [minUsdc, setMinUsdc] = useState(20)
@@ -757,7 +845,7 @@ export function OnboardingModal({ user, onDone, onUpdateUser, bootstrapping = fa
 
   useEffect(() => {
     if (serverError) setServerError('')
-  }, [draftDisplayName])
+  }, [draftDisplayName, draftReferrer])
 
   useEffect(() => {
     let mounted = true
@@ -807,7 +895,45 @@ export function OnboardingModal({ user, onDone, onUpdateUser, bootstrapping = fa
       prefetchFunding(),
       new Promise((resolve) => setTimeout(resolve, 1200)),
     ])
+    if (user.referrer_username) {
+      setStep(displayNameNeedsSetup ? 3 : 4)
+      return
+    }
     setStep(2)
+  }
+
+  function clearStoredReferralPrefill() {
+    try { sessionStorage.removeItem('referral_prefill') } catch {}
+  }
+
+  function handleReferralSkip() {
+    clearStoredReferralPrefill()
+    setStep(displayNameNeedsSetup ? 3 : 4)
+  }
+
+  async function handleReferralContinue(nextReferrer: string) {
+    setServerError('')
+    if (user.referrer_username) {
+      setStep(displayNameNeedsSetup ? 3 : 4)
+      return
+    }
+
+    const trimmed = nextReferrer.trim()
+    if (!trimmed) {
+      handleReferralSkip()
+      return
+    }
+
+    try {
+      await api.lookupReferrer(trimmed)
+      const assigned = await api.assignReferrer(trimmed) as any
+      onUpdateUser({ referrer_username: assigned.referrer_username || trimmed })
+      setDraftReferrer(assigned.referrer_username || trimmed)
+      clearStoredReferralPrefill()
+      setStep(displayNameNeedsSetup ? 3 : 4)
+    } catch (e: any) {
+      setServerError(e?.message || 'Unable to set this referrer.')
+    }
   }
 
   async function handleUsernameContinue(nextDisplayName: string) {
@@ -820,9 +946,13 @@ export function OnboardingModal({ user, onDone, onUpdateUser, bootstrapping = fa
     }
     try {
       const updated = await api.updateProfile(trimmed) as any
-      onUpdateUser({ display_name: updated.display_name })
+      onUpdateUser({
+        display_name: updated.display_name,
+        referrer_username: updated.referrer_username,
+        referral_reward_usdc: updated.referral_reward_usdc,
+      })
       setDraftDisplayName(updated.display_name || trimmed)
-      setStep(3)
+      setStep(4)
     } catch (e: any) {
       setServerError(e.message || 'Failed to save username')
     }
@@ -854,17 +984,6 @@ export function OnboardingModal({ user, onDone, onUpdateUser, bootstrapping = fa
 
   const displayNameNeedsSetup = !user.display_name || looksLikeAutoDisplayName(user.display_name)
 
-  useEffect(() => {
-    if (bootstrapping) {
-      if (step !== 1) setStep(1)
-      return
-    }
-    if (!displayNameNeedsSetup && step < 3) {
-      setStep(3)
-      return
-    }
-  }, [bootstrapping, displayNameNeedsSetup, step])
-
   if (!visible) return null
 
   return (
@@ -875,6 +994,16 @@ export function OnboardingModal({ user, onDone, onUpdateUser, bootstrapping = fa
             <Step1Loading onDone={handleWalletReady} disabled={bootstrapping} />
           )}
           {step === 2 && (
+            <Step2Referral
+              value={draftReferrer}
+              onChange={setDraftReferrer}
+              onContinue={handleReferralContinue}
+              onSkip={handleReferralSkip}
+              lockedUsername={user.referrer_username}
+              serverError={serverError}
+            />
+          )}
+          {step === 3 && (
             <Step2Username
               value={draftDisplayName}
               onChange={setDraftDisplayName}
@@ -882,7 +1011,7 @@ export function OnboardingModal({ user, onDone, onUpdateUser, bootstrapping = fa
               serverError={serverError}
             />
           )}
-          {step === 3 && (
+          {step === 4 && (
             <Step3Funding
               walletAddress={user.wallet_address || ''}
               minUsdc={minUsdc}

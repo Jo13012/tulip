@@ -12,6 +12,7 @@ import { useAppStore } from '../../store'
 interface PolyOrder {
   order_id: string
   token_id: string
+  question: string
   side: string
   price: number
   size_remaining: number
@@ -30,7 +31,7 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
   const [orders, setOrders]             = useState<PolyOrder[]>([])
   const [positions, setPositions]       = useState<PolyPosition[]>([])
   const [totalValueUsd, setTotalValueUsd] = useState(0)
-  const [cancelOrders, setCancelOrders] = useState(true)
+  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set())
   const [selectedTokens, setSelectedTokens] = useState<Set<string>>(new Set())
   const [result, setResult]             = useState<any>(null)
   const addToast = useAppStore(s => s.addToast)
@@ -42,6 +43,7 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
         setOrders(d.open_orders || [])
         setPositions(d.positions || [])
         setTotalValueUsd(d.total_value_usd || 0)
+        setSelectedOrders(new Set((d.open_orders || []).map((o: PolyOrder) => o.order_id)))
         setSelectedTokens(new Set((d.positions || []).map((p: PolyPosition) => p.token_id)))
       } catch (e: any) {
         addToast({ type: 'error', message: e.message })
@@ -60,12 +62,27 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
     })
   }
 
+  function toggleOrder(oid: string) {
+    setSelectedOrders(prev => {
+      const next = new Set(prev)
+      next.has(oid) ? next.delete(oid) : next.add(oid)
+      return next
+    })
+  }
+
+  function toggleAllOrders() {
+    setSelectedOrders(prev =>
+      prev.size === orders.length ? new Set() : new Set(orders.map(o => o.order_id))
+    )
+  }
+
   async function execute() {
-    if (!cancelOrders && selectedTokens.size === 0) return
+    if (selectedOrders.size === 0 && selectedTokens.size === 0) return
     setExecuting(true)
     try {
       const res: any = await api.admin.nuclearClose(user.id, {
-        cancel_orders: cancelOrders,
+        cancel_orders: false,
+        cancel_order_ids: Array.from(selectedOrders),
         sell_token_ids: Array.from(selectedTokens),
       })
       setResult(res)
@@ -110,18 +127,37 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
           </div>
         ) : (
           <>
-            {/* Cancel orders toggle */}
-            <div
-              className="flex items-center justify-between px-3 py-2.5 rounded-xl border border-white/[0.07] bg-white/[0.02] cursor-pointer"
-              onClick={() => setCancelOrders(v => !v)}
-            >
-              <div>
-                <p className="text-[11px] text-white/70 font-semibold">Cancel all open orders</p>
-                <p className="text-[10px] text-white/30">{orders.length} open order{orders.length !== 1 ? 's' : ''} on Poly</p>
+            {/* Open orders — individual rows with checkboxes */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] text-white/30 font-semibold uppercase tracking-wider">Open orders to cancel</p>
+                {orders.length > 0 && (
+                  <button className="text-[10px] text-white/30 hover:text-white/60" onClick={toggleAllOrders}>
+                    {selectedOrders.size === orders.length ? 'Deselect all' : 'Select all'}
+                  </button>
+                )}
               </div>
-              <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${cancelOrders ? 'bg-red-500/80 border-red-500' : 'border-white/20'}`}>
-                {cancelOrders && <span className="text-[9px] text-white font-bold">✓</span>}
-              </div>
+              {orders.length === 0 ? (
+                <p className="text-[10px] text-white/20 px-1">No open orders on Poly</p>
+              ) : orders.map(ord => (
+                <div
+                  key={ord.order_id}
+                  className="flex items-center justify-between px-3 py-2 rounded-xl border border-white/[0.07] bg-white/[0.02] cursor-pointer"
+                  onClick={() => toggleOrder(ord.order_id)}
+                >
+                  <div className="flex-1 min-w-0 pr-3">
+                    <p className="text-[11px] text-white/70 leading-snug truncate">
+                      {ord.question || ord.token_id.slice(0, 24) + '…'}
+                    </p>
+                    <p className="text-[10px] text-white/30 mt-0.5 font-mono">
+                      {ord.side} · {(ord.price * 100).toFixed(1)}¢ · {ord.size_remaining.toFixed(2)} tok
+                    </p>
+                  </div>
+                  <div className={`flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedOrders.has(ord.order_id) ? 'bg-red-500/80 border-red-500' : 'border-white/20'}`}>
+                    {selectedOrders.has(ord.order_id) && <span className="text-[9px] text-white font-bold">✓</span>}
+                  </div>
+                </div>
+              ))}
             </div>
 
             {/* Positions */}
@@ -160,13 +196,13 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
 
             {/* Warning + confirm */}
             <div className="px-3 py-2.5 rounded-xl bg-red-500/5 border border-red-500/20">
-              <p className="text-[10px] text-red-400/80">This executes directly on Polymarket. Sell orders are placed at current best bid (taker). Cannot be undone.</p>
+              <p className="text-[10px] text-red-400/80">Executes directly on Polymarket. Sell orders placed at best bid (taker). Cannot be undone.</p>
             </div>
 
             <button
               className="w-full py-2.5 rounded-xl bg-red-500/20 border border-red-500/30 text-red-400 text-[11px] font-semibold hover:bg-red-500/30 transition-colors disabled:opacity-40"
               onClick={execute}
-              disabled={executing || (!cancelOrders && selectedTokens.size === 0)}
+              disabled={executing || (selectedOrders.size === 0 && selectedTokens.size === 0)}
             >
               {executing ? 'Executing…' : 'Execute Nuclear Close'}
             </button>

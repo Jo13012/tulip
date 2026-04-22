@@ -118,19 +118,20 @@ async def get_trading_balance(proxy_address: str) -> float | None:
     return None
 
 
-def compute_reserve_target(trading_balance: float | None = None) -> float:
+def compute_reserve_target(usdc_balance: float = 0.0, trading_balance: float | None = None) -> float:
     """Reserve 1: USDC to keep on Arbitrum EOA.
     Dynamic: max(FEE_WALLET_USDC_MIN, trading_balance × FEE_BUFFER_PCT).
     """
     base = settings.FEE_WALLET_USDC_MIN
-    if trading_balance and trading_balance > 0:
-        return max(base, trading_balance * settings.FEE_BUFFER_PCT)
+    total_capital = max(0.0, usdc_balance) + max(0.0, trading_balance or 0.0)
+    if total_capital > 0:
+        return max(base, total_capital * settings.FEE_BUFFER_PCT)
     return base
 
 
 def compute_bridge_amount(usdc_balance: float, trading_balance: float | None = None) -> float:
     """Bridge everything above Reserve 1, minimum BRIDGE_MIN_USDC."""
-    reserve_target = compute_reserve_target(trading_balance)
+    reserve_target = compute_reserve_target(usdc_balance, trading_balance)
     if usdc_balance <= 0:
         return 0.0
     bridge_amount = max(0.0, usdc_balance - reserve_target)

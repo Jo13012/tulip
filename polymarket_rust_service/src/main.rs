@@ -324,7 +324,19 @@ async fn client_place_limit_order(State(state): State<AppState>, Json(body): Jso
     let neg_risk = body.neg_risk.unwrap_or(false);
     let resp = get_client(&state, &body.client_id)?
         .place_limit_order(&body.token_id, body.price, body.size, &body.side, tick, neg_risk).await
-        .map_err(|e| { tracing::error!("place_limit_order failed (detail): {e:#}"); AppError::Internal(format!("place_limit_order failed: {e:#}")) })?;
+        .map_err(|e| {
+            let msg = format!("{e:#}");
+            tracing::error!("place_limit_order failed (detail): {msg}");
+            // Propagate Polymarket CLOB rejections as 400 Bad Request so Python can read the actual error
+            let is_poly_rejection = ["not enough balance", "balance is not enough", "not enough allowance",
+                "lower than minimum", "insufficient", "400", "bad request", "orderbook is closed"]
+                .iter().any(|kw| msg.to_lowercase().contains(kw));
+            if is_poly_rejection {
+                AppError::BadRequest(format!("place_limit_order failed: {msg}"))
+            } else {
+                AppError::Internal(format!("place_limit_order failed: {msg}"))
+            }
+        })?;
     Ok(Json(resp))
 }
 

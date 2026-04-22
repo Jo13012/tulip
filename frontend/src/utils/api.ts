@@ -102,12 +102,23 @@ export const api = {
   getSessionHistory: () => request('/api/v1/user/sessions/history'),
 
   getProfile: () => request('/api/v1/user/profile/'),
+  getReferrals: () => request<import('../types').ReferralListItem[]>('/api/v1/user/profile/referrals'),
+  lookupReferrer: (username: string) =>
+    request(`/api/v1/user/profile/referrer/lookup?username=${encodeURIComponent(username)}`),
+  assignReferrer: (username: string) =>
+    request('/api/v1/user/profile/referrer', {
+      method: 'POST',
+      body: JSON.stringify({ username }),
+    }),
 
   listWallets: () => request('/api/v1/user/wallets/'),
   getOnboardingStatus: () => request('/api/v1/user/wallets/onboarding-status'),
   getFundingStatus: () => request('/api/v1/user/wallets/funding-status'),
   forceFunding: () => request('/api/v1/user/wallets/funding-force', { method: 'POST' }),
   getBridgeHistory: () => request<import('../components/user/BridgeHistoryModal').BridgeTx[]>('/api/v1/user/wallets/bridge-history'),
+  getUserDailyVolume: (days = 60) => request(`/api/v1/user/analytics/daily-volume?days=${days}`),
+  getUserDailyCpm: (days = 60) => request(`/api/v1/user/analytics/daily-cpm?days=${days}`),
+  getUserDailyMultiple: (days = 60) => request(`/api/v1/user/analytics/daily-multiple?days=${days}`),
 
   admin: {
     // ── Global strategy (single global strategy model) ──────────────────────
@@ -130,7 +141,8 @@ export const api = {
     getSession:     (id: string) => request(`/api/v1/admin/sessions/${id}`),
     stopSession:    (id: string, mode: 'soft' | 'hard') => request(`/api/v1/admin/sessions/${id}/stop`, { method: 'POST', body: JSON.stringify({ mode }) }),
     forceStop:      (id: string) => request(`/api/v1/admin/sessions/${id}/force-stop`, { method: 'POST' }),
-    retryRecovery:  (id: string) => request(`/api/v1/admin/sessions/${id}/retry-recovery`, { method: 'POST' }),
+    retryRecovery:      (id: string) => request(`/api/v1/admin/sessions/${id}/retry-recovery`, { method: 'POST' }),
+    forceReplaceSlot:   (sessionId: string, slotId: string) => request(`/api/v1/admin/sessions/${sessionId}/slots/${slotId}/force-replace`, { method: 'POST' }),
 
     // ── Analytics ────────────────────────────────────────────────────────────
     globalMetrics:           () => request('/api/v1/admin/analytics/global'),
@@ -164,7 +176,7 @@ export const api = {
     }) => request('/api/v1/admin/sessions/launch-for-user', { method: 'POST', body: JSON.stringify(data) }),
     getUserPolyState: (userId: string) =>
       request(`/api/v1/admin/users/${userId}/poly-state`),
-    nuclearClose: (userId: string, body: { cancel_orders: boolean; sell_token_ids: string[] }) =>
+    nuclearClose: (userId: string, body: { cancel_orders: boolean; cancel_order_ids?: string[]; sell_token_ids: string[] }) =>
       request(`/api/v1/admin/users/${userId}/nuclear-close`, { method: 'POST', body: JSON.stringify(body) }),
   },
 }

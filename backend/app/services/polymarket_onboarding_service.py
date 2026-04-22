@@ -47,6 +47,7 @@ SAFE_INIT_CODE_HASH = "0x2bce2127ff07fb632d16c8347c4ebf501f4841168bed00d9e6ef715
 SAFE_FACTORY_NAME = "Polymarket Contract Proxy Factory"
 
 USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+PUSD = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
 CTF  = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
 CTF_EXCHANGE        = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
 NEG_RISK_CTF_EXCH   = "0xC5d563A36AE78145C45a50134d48A1215220f80a"
@@ -276,8 +277,8 @@ async def _derive_or_create_clob_creds(
 
 # ── Safe deployment + approvals ────────────────────────────────────────────────
 
-async def _get_safe_nonce(http: httpx.AsyncClient, eoa_address: str) -> str:
-    data = await _relayer_get(http, "/nonce", {"address": eoa_address, "type": "SAFE"})
+async def _get_safe_nonce(http: httpx.AsyncClient, safe_address: str) -> str:
+    data = await _relayer_get(http, "/nonce", {"address": safe_address, "type": "SAFE"})
     return str(data["nonce"])
 
 
@@ -475,7 +476,7 @@ async def onboard_wallet(
             agg = {"to": SAFE_MULTISEND, "data": multisend_data, "value": "0", "operation": 1}
             operation = 1
 
-        nonce = await _get_safe_nonce(http, eoa_address)
+        nonce = await _get_safe_nonce(http, safe_address)
         sig = await _sign_safe_tx(
             privy_wallet_id, safe_address,
             agg["to"], agg["data"], agg["value"], operation, nonce,
