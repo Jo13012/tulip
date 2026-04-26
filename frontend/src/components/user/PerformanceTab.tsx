@@ -659,7 +659,7 @@ export function PerformanceTab() {
     <div className="p-4 sm:p-5 space-y-4">
       <ChartCard
         title="CPM Performance"
-        hero="Net PnL per $1M traded — daily."
+        hero="Net profit generated per $1M traded"
         loading={cpmLoad}
         controls={<><GrossNetToggle mode={cpmMode} setMode={setCpmMode} /><DaysToggle days={cpmDays} setDays={setCpmDays} /></>}
       >
@@ -667,11 +667,10 @@ export function PerformanceTab() {
       </ChartCard>
 
       <ChartCard
-        title="Capital Efficiency"
+        title="Daily Capital Efficiency"
         hero="Daily volume turnover relative to deployed capital."
         loading={multLoad}
         controls={<><GrossNetToggle mode={multMode} setMode={setMultMode} /><DaysToggle days={multDays} setDays={setMultDays} /></>}
-        note="Grouped by session start date. Active sessions show current totals."
       >
         <MultipleChart data={multData} mode={multMode} />
       </ChartCard>

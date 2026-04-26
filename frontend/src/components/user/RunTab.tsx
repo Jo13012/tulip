@@ -757,54 +757,52 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
 
       {/* -- Summary stats --------------------------------------------------- */}
       <div className="px-5 py-3 border-b border-white/[0.03]">
-        {loaded ? (
-          <div className="flex flex-col gap-3">
-            {/* Volume — full width row */}
-            {(() => {
-              const vol = rt!.total_volume
-              const size = session.gross_capital
-              const uptime = rt!.uptime_s ?? 0
-              const totalX = size > 0 ? vol / size : null
-              const dailyX = totalX != null && uptime > 0 ? totalX / (uptime / 86400) : null
-              const fmtX = (x: number) => `${x.toFixed(2)}×`
-              return (
-                <div>
-                  <div className="flex items-center gap-0.5 mb-0.5">
-                    <span className="text-[9px] text-white/20 uppercase tracking-widest font-semibold">Volume</span>
-                  </div>
-                  <div className="text-[12px] font-bold font-mono tabular-nums leading-none text-white/70">{fmtUsd(vol, 2)}</div>
-                  {totalX != null && (
-                    <div className="text-[9px] font-mono text-white/25 mt-0.5 leading-tight">
-                      {fmtX(totalX)} total · {dailyX != null ? fmtX(dailyX) : '—'} / 24h
-                    </div>
-                  )}
+        {loaded ? (() => {
+          const vol = rt!.total_volume
+          const uptime = rt!.uptime_s ?? 0
+          const totalX = session.gross_capital > 0 ? vol / session.gross_capital : null
+          const dailyX = totalX != null && uptime > 0 ? totalX / (uptime / 86400) : null
+          const cpm = vol > 0 ? (netPnl / vol) * 1_000_000 : null
+          const cpmSign = cpm != null && cpm > 0 ? '+' : ''
+          const fmtX = (x: number) => `${x.toFixed(2)}×`
+          return (
+            <div className="flex justify-between items-start gap-2">
+              {/* Volume */}
+              <div className="flex-1 min-w-0">
+                <span className="block text-[9px] text-white/20 uppercase tracking-widest font-semibold mb-0.5">Volume</span>
+                <span className="block text-[12px] font-bold font-mono tabular-nums text-white/70 leading-none">{fmtUsd(vol, 2)}</span>
+                {totalX != null && (
+                  <span className="block text-[9px] font-mono text-white/25 mt-0.5">
+                    {fmtX(totalX)} · {dailyX != null ? fmtX(dailyX) : '—'}/24h
+                  </span>
+                )}
+              </div>
+              {/* Realized */}
+              <div className="flex-1 min-w-0">
+                <span className="block text-[9px] text-white/20 uppercase tracking-widest font-semibold mb-0.5">Realized</span>
+                <span className={`block text-[12px] font-bold font-mono tabular-nums leading-none ${pnlColor(realizedPnl)}`}>{fmtUsd(realizedPnl, 2)}</span>
+              </div>
+              {/* Fees */}
+              <div className="flex-1 min-w-0">
+                <span className="block text-[9px] text-white/20 uppercase tracking-widest font-semibold mb-0.5">Fees</span>
+                <span className="block text-[12px] font-bold font-mono tabular-nums leading-none text-white/25">{fmtUsdFloor(fees)}</span>
+              </div>
+              {/* CPM */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-0.5 mb-0.5">
+                  <span className="text-[9px] text-white/20 uppercase tracking-widest font-semibold">CPM</span>
+                  <InfoTip content="Net PnL extrapolated to $1M of volume." title="Cost per Million" />
                 </div>
-              )
-            })()}
-            {/* Realized / Fees / CPM — 3-col row */}
-            <div className="grid grid-cols-3 gap-3">
-              <MiniStat label="Realized" value={fmtUsd(realizedPnl, 2)} color={pnlColor(realizedPnl)} />
-              <MiniStat label="Fees"     value={fmtUsdFloor(fees)} color="text-white/25" />
-              {(() => {
-                const vol = rt!.total_volume
-                const cpm = vol > 0 ? (netPnl / vol) * 1_000_000 : null
-                const sign = cpm != null && cpm > 0 ? '+' : ''
-                return (
-                  <MiniStat
-                    label="CPM"
-                    value={cpm != null ? `${sign}${fmtUsd(cpm, 0)}` : '$'}
-                    color={cpm != null ? pnlColor(cpm) : 'text-white/25'}
-                    tooltipTitle="Cost per Million"
-                    tooltip="Net PnL extrapolated to $1M of volume."
-                  />
-                )
-              })()}
+                <span className={`block text-[12px] font-bold font-mono tabular-nums leading-none ${cpm != null ? pnlColor(cpm) : 'text-white/25'}`}>
+                  {cpm != null ? `${cpmSign}${fmtUsd(cpm, 0)}` : '$—'}
+                </span>
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-4 gap-3">
+          )
+        })() : (
+          <div className="flex justify-between gap-2">
             {(['Volume','Realized','Fees','CPM'] as const).map(l => (
-              <div key={l}>
+              <div key={l} className="flex-1">
                 <div className="text-[9px] text-white/20 uppercase tracking-widest font-semibold mb-1">{l}</div>
                 <Sk w="w-12" h="h-3" />
               </div>

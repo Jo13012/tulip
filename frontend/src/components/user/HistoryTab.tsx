@@ -113,11 +113,26 @@ export function HistoryTab() {
 
   return (
     <div>
+      {/* Toggle above both views */}
+      <div className="flex justify-end px-4 sm:px-5 py-2 border-b border-white/[0.04]">
+        <button
+          onClick={() => setHideZero(v => !v)}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[9px] font-semibold uppercase tracking-widest transition-all ${
+            hideZero
+              ? 'border-brand/40 bg-brand/15 text-brand/80'
+              : 'border-white/[0.08] bg-white/[0.03] text-white/25 hover:border-white/20 hover:text-white/45'
+          }`}
+        >
+          <span className={`w-1.5 h-1.5 rounded-full transition-colors ${hideZero ? 'bg-brand/80' : 'bg-white/20'}`} />
+          Hide low
+        </button>
+      </div>
+
       {/* ── Desktop table (sm+) ── */}
       <div className="hidden sm:block">
         {/* Header */}
-        <div className="flex items-center gap-2 px-5 py-2.5 border-b border-white/[0.05] bg-white/[0.015]">
-          <div className="grid grid-cols-8 gap-2 flex-1 min-w-0">
+        <div className="px-5 py-2.5 border-b border-white/[0.05] bg-white/[0.015]">
+          <div className="grid grid-cols-8 gap-2">
             {HEADERS.map(h => (
               <div key={h} className="flex items-center text-[9px] font-semibold uppercase tracking-widest text-white/20 whitespace-nowrap">
                 {h}
@@ -125,17 +140,6 @@ export function HistoryTab() {
               </div>
             ))}
           </div>
-          <button
-            onClick={() => setHideZero(v => !v)}
-            className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[9px] font-semibold uppercase tracking-widest transition-all ${
-              hideZero
-                ? 'border-brand/40 bg-brand/15 text-brand/80'
-                : 'border-white/[0.08] bg-white/[0.03] text-white/25 hover:border-white/20 hover:text-white/45'
-            }`}
-          >
-            <span className={`w-1.5 h-1.5 rounded-full transition-colors ${hideZero ? 'bg-brand/80' : 'bg-white/20'}`} />
-            Hide low
-          </button>
         </div>
 
         {visible.map(s => {
@@ -186,22 +190,6 @@ export function HistoryTab() {
 
       {/* ── Mobile cards (xs only) ── */}
       <div className="sm:hidden">
-        {/* Mobile header */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/[0.05] bg-white/[0.015]">
-          <span className="text-[9px] font-semibold uppercase tracking-widest text-white/20">Sessions</span>
-          <button
-            onClick={() => setHideZero(v => !v)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[9px] font-semibold uppercase tracking-widest transition-all ${
-              hideZero
-                ? 'border-brand/40 bg-brand/15 text-brand/80'
-                : 'border-white/[0.08] bg-white/[0.03] text-white/25'
-            }`}
-          >
-            <span className={`w-1.5 h-1.5 rounded-full transition-colors ${hideZero ? 'bg-brand/80' : 'bg-white/20'}`} />
-            Hide low
-          </button>
-        </div>
-
         {visible.map(s => {
           const netPnl = s.realized_pnl - s.paid_fees
           const cpm = s.total_volume > 0 ? (netPnl / s.total_volume) * 1_000_000 : null

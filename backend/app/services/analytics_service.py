@@ -385,6 +385,7 @@ class AnalyticsService:
         since = datetime.now(timezone.utc) - timedelta(days=days)
         today_str = datetime.now(timezone.utc).date().isoformat()
 
+        from collections import defaultdict
         from app.runtime.session_registry import session_registry
         engines = await session_registry.all()
         live_session_ids = {e.session_id for e in engines}
@@ -461,10 +462,19 @@ class AnalyticsService:
             today_fees = max(0.0, live_fees_total - last_fees)
             if today_vol < 0.5:
                 continue
+            # Extrapolate to 24h based on time elapsed today
+            uptime_s = sm.uptime_s or 0.0
+            # Time elapsed since midnight UTC for today's portion
+            from datetime import datetime as _dt
+            now_utc = _dt.now(timezone.utc)
+            secs_since_midnight = (now_utc.hour * 3600 + now_utc.minute * 60 + now_utc.second)
+            # Use the smaller of uptime and time-since-midnight as the elapsed window
+            elapsed_today = max(min(uptime_s, secs_since_midnight), 1.0)
+            scale = 86400.0 / elapsed_today
             d = day_data.setdefault(today_str, {"vol": 0.0, "pnl": 0.0, "fees": 0.0})
-            d["vol"]  += today_vol
-            d["pnl"]  += today_pnl
-            d["fees"] += today_fees
+            d["vol"]  += today_vol  * scale
+            d["pnl"]  += today_pnl  * scale
+            d["fees"] += today_fees * scale
 
         out = []
         for day_str, d in sorted(day_data.items()):
@@ -543,25 +553,30 @@ class AnalyticsService:
                 d["capital"] += capital
                 d["n"] += 1
 
-        # Add live sessions: only today's incremental volume (total minus what snapshots already cover)
+        # Add live sessions: only today's incremental volume, extrapolated to 24h
+        from datetime import datetime as _dt
+        now_utc = _dt.now(timezone.utc)
+        secs_since_midnight = now_utc.hour * 3600 + now_utc.minute * 60 + now_utc.second
         for engine in engines:
             sm = engine.summary
             live_vol_total = sm.total_volume or 0.0
             if live_vol_total < 0.5:
                 continue
-            # Subtract volume already accounted for by snapshots up to yesterday
             vol_in_snapshots = session_days.get(engine.session_id, [])
             last_snapshot_vol = max((v for _, v, _ in vol_in_snapshots), default=0.0)
             today_vol = max(0.0, live_vol_total - last_snapshot_vol)
             if today_vol < 0.5:
                 continue
+            uptime_s = sm.uptime_s or 0.0
+            elapsed_today = max(min(uptime_s, secs_since_midnight), 1.0)
+            scale = 86400.0 / elapsed_today
             sessions_q = await db.execute(
                 select(DBSession.session_deployable_capital).where(DBSession.id == engine.session_id)
             )
             cap_row = sessions_q.first()
             capital = float(cap_row[0] or 1.0) if cap_row else 1.0
             d = day_data.setdefault(today_str, {"vol": 0.0, "capital": 0.0, "n": 0})
-            d["vol"] += today_vol
+            d["vol"] += today_vol * scale
             d["capital"] += capital
             d["n"] += 1
 
