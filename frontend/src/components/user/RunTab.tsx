@@ -756,9 +756,10 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
       </div>
 
       {/* -- Summary stats --------------------------------------------------- */}
-      <div className="px-5 py-3 grid grid-cols-4 gap-3 border-b border-white/[0.03]">
+      <div className="px-5 py-3 border-b border-white/[0.03]">
         {loaded ? (
-          <>
+          <div className="flex flex-col gap-3">
+            {/* Volume — full width row */}
             {(() => {
               const vol = rt!.total_volume
               const size = session.gross_capital
@@ -767,44 +768,48 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
               const dailyX = totalX != null && uptime > 0 ? totalX / (uptime / 86400) : null
               const fmtX = (x: number) => `${x.toFixed(2)}×`
               return (
-                <MiniStat
-                  label="Volume"
-                  value={fmtUsd(vol, 2)}
-                  sub={totalX != null ? (
-                    <>
-                      <span className="hidden sm:inline">{fmtX(totalX)} total · {dailyX != null ? fmtX(dailyX) : '·'} / 24h</span>
-                      <span className="sm:hidden flex flex-col gap-0">{fmtX(totalX)} total<br />{dailyX != null ? fmtX(dailyX) : '·'} 24h</span>
-                    </>
-                  ) : undefined}
-                />
+                <div>
+                  <div className="flex items-center gap-0.5 mb-0.5">
+                    <span className="text-[9px] text-white/20 uppercase tracking-widest font-semibold">Volume</span>
+                  </div>
+                  <div className="text-[12px] font-bold font-mono tabular-nums leading-none text-white/70">{fmtUsd(vol, 2)}</div>
+                  {totalX != null && (
+                    <div className="text-[9px] font-mono text-white/25 mt-0.5 leading-tight">
+                      {fmtX(totalX)} total · {dailyX != null ? fmtX(dailyX) : '—'} / 24h
+                    </div>
+                  )}
+                </div>
               )
             })()}
-            <MiniStat label="Realized" value={fmtUsd(realizedPnl, 2)} color={pnlColor(realizedPnl)} />
-            <MiniStat label="Fees"     value={fmtUsdFloor(fees)} color="text-white/25" />
-            {(() => {
-              const vol = rt!.total_volume
-              const cpm = vol > 0 ? (netPnl / vol) * 1_000_000 : null
-              const sign = cpm != null && cpm > 0 ? '+' : ''
-              return (
-                <MiniStat
-                  label="CPM"
-                  value={cpm != null ? `${sign}${fmtUsd(cpm, 0)}` : '$'}
-                  color={cpm != null ? pnlColor(cpm) : 'text-white/25'}
-                  tooltipTitle="Cost per Million"
-                  tooltip="Net PnL extrapolated to $1M of volume."
-                />
-              )
-            })()}
-          </>
+            {/* Realized / Fees / CPM — 3-col row */}
+            <div className="grid grid-cols-3 gap-3">
+              <MiniStat label="Realized" value={fmtUsd(realizedPnl, 2)} color={pnlColor(realizedPnl)} />
+              <MiniStat label="Fees"     value={fmtUsdFloor(fees)} color="text-white/25" />
+              {(() => {
+                const vol = rt!.total_volume
+                const cpm = vol > 0 ? (netPnl / vol) * 1_000_000 : null
+                const sign = cpm != null && cpm > 0 ? '+' : ''
+                return (
+                  <MiniStat
+                    label="CPM"
+                    value={cpm != null ? `${sign}${fmtUsd(cpm, 0)}` : '$'}
+                    color={cpm != null ? pnlColor(cpm) : 'text-white/25'}
+                    tooltipTitle="Cost per Million"
+                    tooltip="Net PnL extrapolated to $1M of volume."
+                  />
+                )
+              })()}
+            </div>
+          </div>
         ) : (
-          <>
+          <div className="grid grid-cols-4 gap-3">
             {(['Volume','Realized','Fees','CPM'] as const).map(l => (
               <div key={l}>
                 <div className="text-[9px] text-white/20 uppercase tracking-widest font-semibold mb-1">{l}</div>
                 <Sk w="w-12" h="h-3" />
               </div>
             ))}
-          </>
+          </div>
         )}
       </div>
 

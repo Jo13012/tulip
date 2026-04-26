@@ -115,10 +115,11 @@ export function HistoryTab() {
     <div>
       {/* ── Desktop table (sm+) ── */}
       <div className="hidden sm:block">
-        <div className="relative border-b border-white/[0.05] bg-white/[0.015]">
-          <div className="grid grid-cols-9 gap-2 px-5 py-2.5">
+        {/* Header */}
+        <div className="flex items-center gap-2 px-5 py-2.5 border-b border-white/[0.05] bg-white/[0.015]">
+          <div className="grid grid-cols-8 gap-2 flex-1 min-w-0">
             {HEADERS.map(h => (
-              <div key={h} className="flex items-center text-[9px] font-semibold uppercase tracking-widest text-white/20">
+              <div key={h} className="flex items-center text-[9px] font-semibold uppercase tracking-widest text-white/20 whitespace-nowrap">
                 {h}
                 {h === 'CPM' && <InfoTip title="Cost per Million" content="Net PnL extrapolated to $1M of volume." />}
               </div>
@@ -126,7 +127,7 @@ export function HistoryTab() {
           </div>
           <button
             onClick={() => setHideZero(v => !v)}
-            className={`absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[9px] font-semibold uppercase tracking-widest transition-all ${
+            className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[9px] font-semibold uppercase tracking-widest transition-all ${
               hideZero
                 ? 'border-brand/40 bg-brand/15 text-brand/80'
                 : 'border-white/[0.08] bg-white/[0.03] text-white/25 hover:border-white/20 hover:text-white/45'
@@ -145,24 +146,24 @@ export function HistoryTab() {
           return (
             <div
               key={s.session_id}
-              className="grid grid-cols-8 gap-2 px-5 py-3 border-b border-white/[0.04] last:border-0 hover:bg-white/[0.02] transition-colors"
+              className="grid grid-cols-8 gap-2 px-5 py-3 border-b border-white/[0.04] last:border-0 hover:bg-white/[0.015] transition-colors"
             >
-              <div className="flex flex-col justify-center gap-0.5">
-                <div className="text-[10px] font-mono text-white/35">{fmtShortDate(s.stopped_at)}</div>
+              <div className="flex flex-col justify-center gap-0.5 min-w-0">
+                <div className="text-[10px] font-mono text-white/35 truncate">{fmtShortDate(s.stopped_at)}</div>
                 {isError && <div className="text-[9px] font-mono text-red-400/60 truncate">{s.stop_reason || 'error'}</div>}
               </div>
               <div className="flex items-center">
-                <span className="text-[11px] font-mono font-semibold text-white/55">{fmtUsd(s.gross_capital, 0)}</span>
+                <span className="text-[11px] font-mono font-semibold text-white/55 tabular-nums">{fmtUsd(s.gross_capital, 0)}</span>
               </div>
               <div className="flex flex-col justify-center gap-0.5">
                 {(() => { const p = fmtProgressCell(s); return <>
-                  <span className="text-[10px] font-mono text-white/30">{p.line1}</span>
+                  <span className="text-[10px] font-mono text-white/30 tabular-nums">{p.line1}</span>
                   {p.pct && <span className="text-[9px] font-mono text-white/18">{p.pct}</span>}
                 </> })()}
               </div>
               <div className="flex flex-col justify-center gap-0.5">
-                <span className="text-[11px] font-mono text-white/50">{fmtUsd(s.total_volume, 0)}</span>
-                {(() => { const t = turnoverSub(s); return t ? <span className="text-[9px] font-mono text-white/20">{t.total} · {t.daily} / 24h</span> : null })()}
+                <span className="text-[11px] font-mono text-white/50 tabular-nums">{fmtUsd(s.total_volume, 0)}</span>
+                {(() => { const t = turnoverSub(s); return t ? <span className="text-[9px] font-mono text-white/20">{t.total} · {t.daily}/24h</span> : null })()}
               </div>
               <div className="flex items-center">
                 <span className={`text-[11px] font-mono font-semibold tabular-nums ${pnlColor(s.realized_pnl)}`}>{fmtUsd(s.realized_pnl)}</span>
@@ -206,43 +207,45 @@ export function HistoryTab() {
           const cpm = s.total_volume > 0 ? (netPnl / s.total_volume) * 1_000_000 : null
           const cpmSign = cpm != null && cpm > 0 ? '+' : ''
           const isError = s.status === 'error'
+          const to = turnoverSub(s)
           return (
-            <div key={s.session_id} className="px-4 py-3 border-b border-white/[0.04] last:border-0">
-              <div className="flex items-center justify-between mb-2">
+            <div key={s.session_id} className="px-4 py-3.5 border-b border-white/[0.04] last:border-0">
+              {/* Row 1: date + capital */}
+              <div className="flex items-start justify-between mb-2.5">
                 <div className="flex flex-col gap-0.5">
                   <span className="text-[10px] font-mono text-white/40">{fmtShortDate(s.stopped_at)}</span>
                   {isError && <span className="text-[9px] font-mono text-red-400/60">{s.stop_reason || 'error'}</span>}
-                </div>
-                <div className="flex items-center gap-2">
                   {(() => { const p = fmtProgressCell(s); return (
-                    <span className="text-[9px] font-mono text-white/25">{p.line1} {p.pct}</span>
+                    <span className="text-[9px] font-mono text-white/22">{p.line1} {p.pct}</span>
                   ) })()}
-                  <span className="text-[11px] font-mono font-semibold text-white/55">{fmtUsd(s.gross_capital, 0)}</span>
                 </div>
+                <span className="text-[13px] font-mono font-semibold text-white/60 tabular-nums">{fmtUsd(s.gross_capital, 0)}</span>
               </div>
-              <div className="grid grid-cols-5 gap-x-2 gap-y-1">
-                <div>
-                  <div className="text-[8px] text-white/20 uppercase tracking-widest mb-0.5">Volume</div>
-                  <div className="text-[10px] font-mono text-white/50 tabular-nums">{fmtUsd(s.total_volume, 0)}</div>
-                  {(() => { const t = turnoverSub(s); return t ? <><div className="text-[8px] font-mono text-white/20">{t.total} total</div><div className="text-[8px] font-mono text-white/20">{t.daily} 24h</div></> : null })()}
-                </div>
+              {/* Row 2: Volume full width */}
+              <div className="mb-2.5 pb-2.5 border-b border-white/[0.04]">
+                <div className="text-[8px] text-white/20 uppercase tracking-widest mb-0.5">Volume</div>
+                <div className="text-[11px] font-mono text-white/55 tabular-nums font-semibold">{fmtUsd(s.total_volume, 0)}</div>
+                {to && <div className="text-[9px] font-mono text-white/22 mt-0.5">{to.total} total · {to.daily} / 24h</div>}
+              </div>
+              {/* Row 3: 4-col PnL stats */}
+              <div className="grid grid-cols-4 gap-x-3 gap-y-0">
                 <div>
                   <div className="text-[8px] text-white/20 uppercase tracking-widest mb-0.5">Gross</div>
-                  <div className={`text-[10px] font-mono font-semibold tabular-nums ${pnlColor(s.realized_pnl)}`}>{fmtUsd(s.realized_pnl)}</div>
+                  <div className={`text-[11px] font-mono font-semibold tabular-nums ${pnlColor(s.realized_pnl)}`}>{fmtUsd(s.realized_pnl)}</div>
                 </div>
                 <div>
                   <div className="text-[8px] text-white/20 uppercase tracking-widest mb-0.5">Fees</div>
-                  <div className="text-[10px] font-mono text-white/25 tabular-nums">{fmtUsd(s.paid_fees)}</div>
+                  <div className="text-[11px] font-mono text-white/25 tabular-nums">{fmtUsd(s.paid_fees)}</div>
                 </div>
                 <div>
                   <div className="text-[8px] text-white/20 uppercase tracking-widest mb-0.5">Net</div>
-                  <div className={`text-[10px] font-mono font-semibold tabular-nums ${pnlColor(netPnl)}`}>{fmtUsd(netPnl)}</div>
+                  <div className={`text-[11px] font-mono font-semibold tabular-nums ${pnlColor(netPnl)}`}>{fmtUsd(netPnl)}</div>
                 </div>
                 <div>
                   <div className="flex items-center text-[8px] text-white/20 uppercase tracking-widest mb-0.5">
                     CPM <InfoTip title="Cost per Million" content="Net PnL extrapolated to $1M of volume." />
                   </div>
-                  <div className={`text-[10px] font-mono font-semibold tabular-nums ${cpm != null ? pnlColor(cpm) : 'text-white/20'}`}>
+                  <div className={`text-[11px] font-mono font-semibold tabular-nums ${cpm != null ? pnlColor(cpm) : 'text-white/20'}`}>
                     {cpm != null ? `${cpmSign}${fmtUsd(cpm, 0)}` : '—'}
                   </div>
                 </div>

@@ -126,8 +126,12 @@ function AnimatedLinePath({ d, color = 'rgba(52,211,153,' }: { d: string; color?
   }, [d])
   return (
     <>
-      <path d={d} stroke={`${color}0.15)`} strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-      <path ref={ref} d={d} stroke={`${color}0.9)`} strokeWidth={1.8} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      {/* outer glow halo */}
+      <path d={d} stroke={`${color}0.08)`} strokeWidth={10} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      {/* mid glow */}
+      <path d={d} stroke={`${color}0.18)`} strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      {/* crisp line */}
+      <path ref={ref} d={d} stroke={`${color}0.92)`} strokeWidth={2.2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
     </>
   )
 }
@@ -135,19 +139,22 @@ function AnimatedLinePath({ d, color = 'rgba(52,211,153,' }: { d: string; color?
 function GlowDot({ cx, cy, active, color = 'rgba(52,211,153,' }: { cx: number; cy: number; active: boolean; color?: string }) {
   return (
     <g style={{ transition: 'opacity 0.1s' }}>
+      {/* always-on subtle halo on every dot */}
+      <circle cx={cx} cy={cy} r={6} fill={`${color}1)`} opacity={0.07} />
       {active && (
         <>
-          <circle cx={cx} cy={cy} r={16} fill={`${color}1)`} opacity={0.05} />
-          <circle cx={cx} cy={cy} r={9} fill={`${color}1)`} opacity={0.12} />
+          <circle cx={cx} cy={cy} r={20} fill={`${color}1)`} opacity={0.04} />
+          <circle cx={cx} cy={cy} r={12} fill={`${color}1)`} opacity={0.09} />
+          <circle cx={cx} cy={cy} r={7} fill={`${color}1)`} opacity={0.15} />
         </>
       )}
       <circle
         cx={cx}
         cy={cy}
-        r={active ? 4.5 : 2.8}
+        r={active ? 5 : 3.2}
         fill={`${color}0.95)`}
-        stroke={active ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.08)'}
-        strokeWidth={active ? 1.5 : 1}
+        stroke={active ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.12)'}
+        strokeWidth={active ? 1.8 : 1.2}
         style={{ transition: 'r 0.12s' }}
       />
     </g>
@@ -375,8 +382,8 @@ function CpmChart({ data, mode }: { data: DayCpm[]; mode: 'gross' | 'net' }) {
       >
         <defs>
           <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={isPositiveAvg ? 'rgba(52,211,153,0.15)' : 'rgba(239,68,68,0.12)'} />
-            <stop offset="70%" stopColor="rgba(52,211,153,0.02)" />
+            <stop offset="0%" stopColor={isPositiveAvg ? 'rgba(52,211,153,0.22)' : 'rgba(239,68,68,0.18)'} />
+            <stop offset="45%" stopColor={isPositiveAvg ? 'rgba(52,211,153,0.07)' : 'rgba(239,68,68,0.05)'} />
             <stop offset="100%" stopColor="rgba(52,211,153,0)" />
           </linearGradient>
         </defs>
@@ -479,9 +486,11 @@ function MultipleChart({ data, mode }: { data: SessionMultiple[]; mode: 'gross' 
 
   const vals = data.map(d => mode === 'gross' ? d.gross_multiple : d.net_multiple)
   const minV = Math.min(...vals, 0)
-  const maxV = Math.max(...vals, 0.1)
+  const rawMax = Math.max(...vals, 0.1)
   const avg = vals.reduce((sum, v) => sum + v, 0) / vals.length
-  const pad = (maxV - minV) * 0.1
+  // Soft-cap extreme outliers: if max > 3× avg, clamp to avg * 3 so chart isn't crushed by one spike
+  const maxV = avg > 0 && rawMax > avg * 3 ? avg * 3 : rawMax
+  const pad = (maxV - minV) * 0.12
   const domainMin = Math.max(0, minV - pad)
   const domainMax = maxV + pad
   const rangeV = domainMax - domainMin || 1
@@ -533,8 +542,8 @@ function MultipleChart({ data, mode }: { data: SessionMultiple[]; mode: 'gross' 
       >
         <defs>
           <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(52,211,153,0.15)" />
-            <stop offset="70%" stopColor="rgba(52,211,153,0.02)" />
+            <stop offset="0%" stopColor="rgba(52,211,153,0.22)" />
+            <stop offset="45%" stopColor="rgba(52,211,153,0.07)" />
             <stop offset="100%" stopColor="rgba(52,211,153,0)" />
           </linearGradient>
         </defs>

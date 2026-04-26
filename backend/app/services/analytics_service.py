@@ -408,37 +408,63 @@ class AnalyticsService:
                 ),
             )
             .group_by(cast(SessionSnapshot.snapshot_at, Date), SessionSnapshot.session_id)
+            .order_by(SessionSnapshot.session_id, cast(SessionSnapshot.snapshot_at, Date))
             .subquery()
         )
 
-        q = (
-            select(
-                sub.c.day,
-                func.sum(sub.c.vol).label("total_vol"),
-                func.sum(sub.c.pnl).label("total_pnl"),
-                func.sum(sub.c.fees).label("total_fees"),
-            )
-            .group_by(sub.c.day)
-            .order_by(sub.c.day)
+        result_raw = await db.execute(
+            select(sub.c.day, sub.c.session_id, sub.c.vol, sub.c.pnl, sub.c.fees)
+            .order_by(sub.c.session_id, sub.c.day)
         )
-        result = await db.execute(q)
-        rows = result.all()
+        snapshot_rows_cpm = result_raw.all()
 
-        day_data: dict[str, dict] = {
-            str(row.day): {
-                "vol":  float(row.total_vol or 0),
-                "pnl":  float(row.total_pnl or 0),
-                "fees": float(row.total_fees or 0),
-            }
-            for row in rows
-        }
+        # Compute daily incremental vol/pnl/fees per session (delta from previous day)
+        session_days_cpm: dict[str, list[tuple]] = defaultdict(list)
+        for row in snapshot_rows_cpm:
+            session_days_cpm[row.session_id].append((
+                str(row.day),
+                float(row.vol or 0),
+                float(row.pnl or 0),
+                float(row.fees or 0),
+            ))
+
+        day_data: dict[str, dict] = {}
+        for session_id, day_rows in session_days_cpm.items():
+            day_rows.sort(key=lambda x: x[0])
+            prev_vol, prev_pnl, prev_fees = 0.0, 0.0, 0.0
+            for day_str, cum_vol, cum_pnl, cum_fees in day_rows:
+                inc_vol  = max(0.0, cum_vol  - prev_vol)
+                inc_pnl  = cum_pnl  - prev_pnl
+                inc_fees = max(0.0, cum_fees - prev_fees)
+                prev_vol, prev_pnl, prev_fees = cum_vol, cum_pnl, cum_fees
+                if inc_vol < 0.5:
+                    continue
+                d = day_data.setdefault(day_str, {"vol": 0.0, "pnl": 0.0, "fees": 0.0})
+                d["vol"]  += inc_vol
+                d["pnl"]  += inc_pnl
+                d["fees"] += inc_fees
 
         for engine in engines:
             sm = engine.summary
+            live_vol_total = sm.total_volume or 0.0
+            live_pnl_total = sm.realized_pnl or 0.0
+            live_fees_total = sm.paid_fees or 0.0
+            if live_vol_total < 0.5:
+                continue
+            # Subtract what snapshots already cover up to yesterday
+            snap_rows = session_days_cpm.get(engine.session_id, [])
+            last_vol  = max((v for _, v, _, _ in snap_rows), default=0.0)
+            last_pnl  = max((p for _, _, p, _ in snap_rows), default=0.0) if snap_rows else 0.0
+            last_fees = max((f for _, _, _, f in snap_rows), default=0.0) if snap_rows else 0.0
+            today_vol  = max(0.0, live_vol_total  - last_vol)
+            today_pnl  = live_pnl_total  - last_pnl
+            today_fees = max(0.0, live_fees_total - last_fees)
+            if today_vol < 0.5:
+                continue
             d = day_data.setdefault(today_str, {"vol": 0.0, "pnl": 0.0, "fees": 0.0})
-            d["vol"]  += sm.total_volume or 0.0
-            d["pnl"]  += sm.realized_pnl or 0.0
-            d["fees"] += sm.paid_fees or 0.0
+            d["vol"]  += today_vol
+            d["pnl"]  += today_pnl
+            d["fees"] += today_fees
 
         out = []
         for day_str, d in sorted(day_data.items()):
@@ -517,33 +543,38 @@ class AnalyticsService:
                 d["capital"] += capital
                 d["n"] += 1
 
-        # Add live sessions: today's total volume
+        # Add live sessions: only today's incremental volume (total minus what snapshots already cover)
         for engine in engines:
             sm = engine.summary
-            live_vol = sm.total_volume or 0.0
-            if live_vol < 0.5:
+            live_vol_total = sm.total_volume or 0.0
+            if live_vol_total < 0.5:
                 continue
-            # Get deployable capital from session
+            # Subtract volume already accounted for by snapshots up to yesterday
+            vol_in_snapshots = session_days.get(engine.session_id, [])
+            last_snapshot_vol = max((v for _, v, _ in vol_in_snapshots), default=0.0)
+            today_vol = max(0.0, live_vol_total - last_snapshot_vol)
+            if today_vol < 0.5:
+                continue
             sessions_q = await db.execute(
                 select(DBSession.session_deployable_capital).where(DBSession.id == engine.session_id)
             )
             cap_row = sessions_q.first()
             capital = float(cap_row[0] or 1.0) if cap_row else 1.0
             d = day_data.setdefault(today_str, {"vol": 0.0, "capital": 0.0, "n": 0})
-            d["vol"] += live_vol
+            d["vol"] += today_vol
             d["capital"] += capital
             d["n"] += 1
 
         out = []
         for day_str, d in sorted(day_data.items()):
             vol = d["vol"]
-            avg_capital = d["capital"] / max(d["n"], 1)
-            multiple = round(vol / avg_capital, 4) if avg_capital > 0 else 0.0
+            total_capital = d["capital"]  # sum of all session capitals active that day
+            multiple = round(vol / total_capital, 4) if total_capital > 0 else 0.0
             out.append({
                 "date":           day_str,
                 "volume":         round(vol, 2),
                 "run_days":       1.0,
-                "capital":        round(avg_capital, 2),
+                "capital":        round(total_capital, 2),
                 "gross_multiple": multiple,
                 "net_multiple":   multiple,
                 "gross_pnl":      0.0,
