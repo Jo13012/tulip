@@ -513,11 +513,10 @@ function diffSlot(draft: Slot, pub: any): { field: string; from: string; to: str
 // Derive slot health badge from best bid vs price range
 function slotHealthBadge(market: SlotMarket, bestBid: number | null): { label: string; cls: string } | null {
   if (bestBid === null) return null
-  const bid = bestBid * 100 // convert to cents
-  const min = market.price_min * 100
-  const max = market.price_max * 100
-  if (bid >= 99.0 || bid > max) return { label: 'ALREADY MAX', cls: 'bg-orange-500/20 text-orange-400' }
-  if (bid < min) return { label: 'OUT OF RANGE', cls: 'bg-yellow-500/20 text-yellow-400' }
+  const min = market.price_min
+  const max = market.price_max
+  if (bestBid >= 0.999) return { label: 'ALREADY MAX', cls: 'bg-orange-500/20 text-orange-400' }
+  if (bestBid < min || bestBid > max) return { label: 'OUT OF RANGE', cls: 'bg-yellow-500/20 text-yellow-400' }
   return null
 }
 
@@ -582,6 +581,21 @@ function SlotRow({ slot, onRefresh, published }: { slot: Slot; onRefresh: () => 
   const obTokenId = slot.market
     ? (slot.market.side === 'YES' ? (slot.market.token_id_yes ?? '') : (slot.market.token_id_no ?? ''))
     : ''
+
+  // Background fetch best bid always (for badge), independent of OB panel
+  useEffect(() => {
+    if (!obTokenId) return
+    let cancelled = false
+    async function fetchBid() {
+      try {
+        const data: any = await api.admin.getBook(obTokenId)
+        if (!cancelled) setObBestBid(data?.bids?.[0]?.price ?? null)
+      } catch { if (!cancelled) setObBestBid(null) }
+    }
+    fetchBid()
+    const iv = setInterval(fetchBid, 5000)
+    return () => { cancelled = true; clearInterval(iv) }
+  }, [obTokenId])
 
   return (
     <div className="border-b border-white/[0.04] last:border-0">
