@@ -756,7 +756,7 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
       </div>
 
       {/* -- Summary stats --------------------------------------------------- */}
-      <div className="px-5 py-3 grid grid-cols-5 gap-3 border-b border-white/[0.03]">
+      <div className="px-5 py-3 grid grid-cols-4 gap-3 border-b border-white/[0.03]">
         {loaded ? (
           <>
             {(() => {
@@ -779,7 +779,6 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
                 />
               )
             })()}
-            <MiniStat label="Orders"   value={String(rt!.order_count ?? rt!.trade_count)} />
             <MiniStat label="Realized" value={fmtUsd(realizedPnl, 2)} color={pnlColor(realizedPnl)} />
             <MiniStat label="Fees"     value={fmtUsdFloor(fees)} color="text-white/25" />
             {(() => {
@@ -799,7 +798,7 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
           </>
         ) : (
           <>
-            {(['Volume','Orders','Realized','Fees','CPM'] as const).map(l => (
+            {(['Volume','Realized','Fees','CPM'] as const).map(l => (
               <div key={l}>
                 <div className="text-[9px] text-white/20 uppercase tracking-widest font-semibold mb-1">{l}</div>
                 <Sk w="w-12" h="h-3" />

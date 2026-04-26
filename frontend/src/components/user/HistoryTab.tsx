@@ -72,7 +72,7 @@ function turnoverSub(s: HistorySession): { total: string; daily: string } | null
   }
 }
 
-const HEADERS = ['Finished', 'Capital', 'Progress', 'Volume', 'Gross PnL', 'Fees', 'Net PnL', 'CPM', 'Orders']
+const HEADERS = ['Finished', 'Capital', 'Progress', 'Volume', 'Gross PnL', 'Fees', 'Net PnL', 'CPM']
 
 export function HistoryTab() {
   const [sessions, setSessions] = useState<HistorySession[]>([])
@@ -145,7 +145,7 @@ export function HistoryTab() {
           return (
             <div
               key={s.session_id}
-              className="grid grid-cols-9 gap-2 px-5 py-3 border-b border-white/[0.04] last:border-0 hover:bg-white/[0.02] transition-colors"
+              className="grid grid-cols-8 gap-2 px-5 py-3 border-b border-white/[0.04] last:border-0 hover:bg-white/[0.02] transition-colors"
             >
               <div className="flex flex-col justify-center gap-0.5">
                 <div className="text-[10px] font-mono text-white/35">{fmtShortDate(s.stopped_at)}</div>
@@ -177,9 +177,6 @@ export function HistoryTab() {
                 <span className={`text-[11px] font-mono font-semibold tabular-nums ${cpm != null ? pnlColor(cpm) : 'text-white/20'}`}>
                   {cpm != null ? `${cpmSign}${fmtUsd(cpm, 0)}` : '—'}
                 </span>
-              </div>
-              <div className="flex items-center">
-                <span className="text-[11px] font-mono text-white/40 tabular-nums">{s.order_count || s.trade_count}</span>
               </div>
             </div>
           )
