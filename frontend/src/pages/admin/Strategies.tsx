@@ -585,14 +585,15 @@ function SlotRow({ slot, onRefresh, published }: { slot: Slot; onRefresh: () => 
 
   return (
     <div className="border-b border-white/[0.04] last:border-0">
-      <div className="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.015] transition-colors group">
-        <div className={cls('w-1.5 h-1.5 rounded-full flex-shrink-0', slot.enabled ? 'bg-green-500' : 'bg-white/20')} />
-        <div className="w-28 flex-shrink-0">
+      {/* Row 1: dot + label/alloc + market info */}
+      <div className="flex items-start gap-3 px-4 pt-3 pb-1 hover:bg-white/[0.015] transition-colors">
+        <div className={cls('w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1', slot.enabled ? 'bg-green-500' : 'bg-white/20')} />
+        <div className="w-24 flex-shrink-0">
           <div className="flex items-center gap-1.5 flex-wrap">
             <div className="text-xs font-medium text-white/80">{slot.label}</div>
             {isNew && <span className="text-[8px] px-1 py-0.5 rounded bg-brand/15 text-brand font-semibold uppercase tracking-wider">new</span>}
             {!isNew && hasDiff && <span className="text-[8px] px-1 py-0.5 rounded bg-amber-400/15 text-amber-400 font-semibold uppercase tracking-wider">modified</span>}
-            {badge && badge.label !== 'In range' && (
+            {badge && (
               <span className={`text-[8px] px-1 py-0.5 rounded font-semibold uppercase tracking-wider ${badge.cls}`}>{badge.label}</span>
             )}
           </div>
@@ -623,7 +624,7 @@ function SlotRow({ slot, onRefresh, published }: { slot: Slot; onRefresh: () => 
                 <span className={slot.market.side === 'YES' ? 'text-green-400' : 'text-red-400'}>{slot.market.side}</span>
                 <span>{formatPriceCents(slot.market.price_min)}–{formatPriceCents(slot.market.price_max)}¢</span>
                 {obBestBid !== null && (
-                  <span className="text-white/50 font-mono">bid <span className="text-white/70">{(obBestBid * 100).toFixed(1)}¢</span></span>
+                  <span className="font-mono">bid <span className="text-white/60">{(obBestBid * 100).toFixed(1)}¢</span></span>
                 )}
                 <span>{slot.market.number_of_lots} lots</span>
                 {slot.market.sl_ticks > 0 && <span>SL {slot.market.sl_ticks}t</span>}
@@ -633,7 +634,6 @@ function SlotRow({ slot, onRefresh, published }: { slot: Slot; onRefresh: () => 
           ) : (
             <span className="text-[10px] text-white/20 italic">No market</span>
           )}
-          {/* Diff rows */}
           {diffs.length > 0 && (
             <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
               {diffs.map(d => (
@@ -647,53 +647,54 @@ function SlotRow({ slot, onRefresh, published }: { slot: Slot; onRefresh: () => 
             </div>
           )}
         </div>
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          {confirmDelete ? (
-            <>
-              <span className="text-[10px] text-red-400/80">Delete?</span>
-              <button className="text-[10px] px-2 py-0.5 rounded bg-red-500/15 text-red-400 hover:bg-red-500/25 transition-colors disabled:opacity-40"
-                onClick={handleDelete} disabled={deleting}>
-                {deleting ? '…' : 'Yes'}
+      </div>
+
+      {/* Row 2: action buttons — always visible */}
+      <div className="flex items-center gap-1 px-8 pb-2.5">
+        {confirmDelete ? (
+          <>
+            <span className="text-[10px] text-red-400/80 mr-1">Delete?</span>
+            <button className="text-[10px] px-2 py-0.5 rounded bg-red-500/15 text-red-400 hover:bg-red-500/25 transition-colors disabled:opacity-40"
+              onClick={handleDelete} disabled={deleting}>
+              {deleting ? '…' : 'Yes'}
+            </button>
+            <button className="text-[10px] px-2 py-0.5 rounded text-white/30 hover:text-white/60 transition-colors"
+              onClick={() => setConfirmDelete(false)}>
+              No
+            </button>
+          </>
+        ) : (
+          <>
+            {hasDiff && !isNew && (
+              <button
+                className="text-[10px] px-2 py-0.5 rounded text-amber-400/50 hover:text-amber-400 hover:bg-amber-400/10 transition-colors"
+                onClick={async () => {
+                  try { await api.admin.revertSlot(slot.id); onRefresh() }
+                  catch (e: any) { addToast({ type: 'error', message: e.message }) }
+                }}
+              >
+                revert
               </button>
-              <button className="text-[10px] text-white/30 hover:text-white/60 transition-colors"
-                onClick={() => setConfirmDelete(false)}>
-                No
+            )}
+            {slot.market && (
+              <button
+                className={cls('text-[10px] px-2 py-0.5 rounded transition-colors',
+                  showOb ? 'bg-white/[0.08] text-white/60' : 'text-white/20 hover:text-white/55 hover:bg-white/[0.05]'
+                )}
+                onClick={() => { setShowOb(v => !v); setEditing(false) }}
+              >
+                OB
               </button>
-            </>
-          ) : (
-            <>
-              {hasDiff && !isNew && (
-                <button
-                  className="text-[10px] px-2 py-0.5 rounded text-amber-400/50 hover:text-amber-400 hover:bg-amber-400/10 transition-colors"
-                  title="Revert to published"
-                  onClick={async () => {
-                    try { await api.admin.revertSlot(slot.id); onRefresh() }
-                    catch (e: any) { addToast({ type: 'error', message: e.message }) }
-                  }}
-                >
-                  revert
-                </button>
-              )}
-              {slot.market && (
-                <button
-                  className={cls('text-[10px] px-2 py-0.5 rounded transition-colors',
-                    showOb ? 'bg-white/[0.08] text-white/60' : 'text-white/25 hover:text-white/55 hover:bg-white/[0.05]'
-                  )}
-                  onClick={() => { setShowOb(v => !v); setEditing(false) }}
-                >
-                  OB
-                </button>
-              )}
-              <button className="btn-ghost text-[10px]" onClick={() => { setEditing(e => !e); setShowOb(false) }}>
-                {editing ? 'close' : slot.market ? 'edit' : '+ market'}
-              </button>
-              <button className="text-[10px] px-2 py-0.5 rounded text-white/20 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                onClick={() => { setConfirmDelete(true); setEditing(false); setShowOb(false) }}>
-                ✕
-              </button>
-            </>
-          )}
-        </div>
+            )}
+            <button className="btn-ghost text-[10px]" onClick={() => { setEditing(e => !e); setShowOb(false) }}>
+              {editing ? 'close' : slot.market ? 'edit' : '+ market'}
+            </button>
+            <button className="text-[10px] px-2 py-0.5 rounded text-white/20 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+              onClick={() => { setConfirmDelete(true); setEditing(false); setShowOb(false) }}>
+              ✕
+            </button>
+          </>
+        )}
       </div>
       {showOb && obTokenId && (
         <div className="px-4 pb-3">

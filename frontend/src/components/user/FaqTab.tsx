@@ -30,6 +30,10 @@ const FAQS = [
     q: 'What is CPM and how should I understand it?',
     a: 'CPM represents your net performance scaled to one million dollars of trading volume. It helps standardise results across sessions of different sizes and durations, making comparisons easier. A positive CPM indicates profitability at scale, while a negative CPM suggests that fees or losses are outweighing gains.',
   },
+  {
+    q: 'Why does my balance sometimes drop or seem lower than expected?',
+    a: 'Some of your positions may have resolved as winners on Polymarket. When a market resolves YES and you hold YES shares, the winnings are not automatically added to your trading balance — Polymarket requires you to manually claim them. Until you do, that capital stays locked and unavailable for the bot to use, which reduces your effective trading balance. To claim your winnings, go to polymarket.com, connect with your wallet, and look for any resolved positions to collect. We recommend doing this regularly to keep your full capital available.',
+  },
 ]
 
 function DiscordIcon({ size = 16 }: { size?: number }) {
