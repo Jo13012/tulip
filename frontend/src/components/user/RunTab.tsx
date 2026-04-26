@@ -237,7 +237,7 @@ function SlotActivityList({ slots, loaded }: { slots: RuntimeSlotStats[]; loaded
                     {lots.length > 0 && (
                       <div>
                         <div className="px-3 pt-2 pb-1 text-[8px] font-semibold uppercase tracking-widest text-white/20">Positions</div>
-                        {lots.map((lot: any) => {
+                        {lots.filter((lot: any) => lot.size >= 0.5).map((lot: any) => {
                           const age = fmtAge(lot.timestamp_entry)
                           const entryVal = lot.entry_price * lot.tokens
                           const currentVal = lot.current_price > 0 ? lot.current_price * lot.tokens : 0
@@ -268,7 +268,10 @@ function SlotActivityList({ slots, loaded }: { slots: RuntimeSlotStats[]; loaded
                     {(sells.length > 0 || buys.length > 0) && (
                       <div>
                         <div className="px-3 pt-2 pb-1 text-[8px] font-semibold uppercase tracking-widest text-white/20">Orders</div>
-                        {[...sells, ...buys].map((o: any) => {
+                        {[
+                          ...[...sells].filter((o: any) => o.size >= 0.01).sort((a: any, b: any) => b.price - a.price),
+                          ...[...buys].filter((o: any) => o.size >= 0.01).sort((a: any, b: any) => b.price - a.price),
+                        ].map((o: any) => {
                           const isSell = o.side === 'SELL'
                           return (
                             <div key={o.order_id} className="flex items-center gap-2 px-3 py-1.5 border-t border-white/[0.03]">

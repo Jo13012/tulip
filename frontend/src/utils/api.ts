@@ -152,6 +152,7 @@ export const api = {
     dailyVolume:             (days = 60) => request(`/api/v1/admin/analytics/daily-volume?days=${days}`),
     dailyCpm:                (days = 60) => request(`/api/v1/admin/analytics/daily-cpm?days=${days}`),
     dailyMultiple:           (days = 60) => request(`/api/v1/admin/analytics/daily-multiple?days=${days}`),
+    referralLeaderboard:     () => request('/api/v1/admin/analytics/referral-leaderboard'),
 
     // ── Market resolution ────────────────────────────────────────────────────
     resolveEvent: (slug: string) => request(`/api/v1/admin/strategy/resolve-event?slug=${encodeURIComponent(slug)}`),

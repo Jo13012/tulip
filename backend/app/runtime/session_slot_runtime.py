@@ -145,6 +145,8 @@ class SessionSlotRuntime:
         self._dust_balance: dict[str, float] = {}
         # last time we reconciled lot state vs actual poly balance (for stuck replacement)
         self._last_reconcile_time: float = 0.0
+        # monotonic time when replacement was queued (for forced timeout)
+        self._replacement_queued_at: float = 0.0
 
     # ── Properties ────────────────────────────────────────────────────────────
 
@@ -433,6 +435,7 @@ class SessionSlotRuntime:
             self._pending_replacement = new_config
         effective = self._pending_replacement
         await self._set_state(SlotState.REPLACEMENT_QUEUED, "force-replace by admin")
+        self._replacement_queued_at = time.monotonic()
         label = (effective.question or effective.polymarket_url) if effective else "idle (archived)"
         await self._log("INFO", f"[FORCE_REPLACE] Done — replacement queued → {label}")
         # Lots force-closed above → is_clean is True, switch immediately
@@ -450,6 +453,7 @@ class SessionSlotRuntime:
         self._market_epoch += 1
         self._stop_new_entries = True
         await self._set_state(SlotState.REPLACEMENT_QUEUED, "replacement queued by admin")
+        self._replacement_queued_at = time.monotonic()
         await self._cancel_all_buys()
         # Force-clear buy tracking immediately — cancels sent, don't wait for CLOB ACK
         self._buy_orders.clear()
@@ -605,11 +609,23 @@ class SessionSlotRuntime:
 
                 # 5. Check if replacement ready to switch
                 if self._state in (SlotState.WAITING_PREVIOUS_CLEAN, SlotState.REPLACEMENT_QUEUED):
-                    # Reconcile lots vs actual poly balance every 60s to detect external closes
                     now_t = time.monotonic()
+                    # Reconcile lots vs actual poly balance every 60s
                     if self.open_lots and now_t - self._last_reconcile_time > 60.0:
                         self._last_reconcile_time = now_t
                         await self._reconcile_lots_vs_poly()
+                    # Force-switch after 3min regardless — prevents infinite stuck on CLOB failures
+                    if self._replacement_queued_at > 0 and now_t - self._replacement_queued_at > 180.0:
+                        await self._log("WARN", f"[REPLACE] Timeout 3min — force-closing {len(self.open_lots)} lots and switching")
+                        async with self._lots_lock:
+                            for l in self._lots:
+                                if l.status in (LotStatus.OPEN, LotStatus.SELLING):
+                                    l.status = LotStatus.CLOSED
+                        self._sell_orders.clear()
+                        self._selling.clear()
+                        self._replacement_queued_at = 0.0
+                        await self._execute_switch()
+                        continue
 
                 if self._state == SlotState.WAITING_PREVIOUS_CLEAN and self.is_clean:
                     await self._execute_switch()

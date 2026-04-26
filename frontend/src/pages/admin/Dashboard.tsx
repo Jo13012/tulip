@@ -54,7 +54,23 @@ interface DayVolume    { date: string; volume: number; fees?: number }
 interface DayCpm      { date: string; volume: number; gross_cpm: number | null; net_cpm: number | null }
 interface SessionMultiple { session_id: string; date: string; volume: number; run_days: number; capital: number; gross_multiple: number; net_multiple: number; gross_pnl: number; fees: number }
 
-type SubTab = 'overview' | 'versions' | 'analytics'
+type SubTab = 'overview' | 'versions' | 'analytics' | 'referrals'
+
+interface ReferredUser {
+  user_id: string
+  display_name: string
+  volume: number
+  referrer_earned: number
+}
+
+interface ReferrerRow {
+  referrer_id: string
+  display_name: string
+  referral_count: number
+  referred_volume: number
+  referrer_earnings: number
+  referrals: ReferredUser[]
+}
 
 // ── Shared UI ─────────────────────────────────────────────────────────────────
 
@@ -956,6 +972,67 @@ function AnalyticsTab() {
   )
 }
 
+// ── Referrals Tab ─────────────────────────────────────────────────────────────
+
+function ReferralsTab() {
+  const [rows, setRows]       = useState<ReferrerRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [expanded, setExpanded] = useState<string | null>(null)
+
+  useEffect(() => {
+    api.admin.referralLeaderboard().then((data: any) => {
+      setRows(data as ReferrerRow[])
+      setLoading(false)
+    }).catch(() => setLoading(false))
+  }, [])
+
+  if (loading) return <div className="text-white/20 text-xs animate-pulse">Loading…</div>
+  if (!rows.length) return <div className="text-white/20 text-xs">No referrals yet.</div>
+
+  return (
+    <div className="space-y-1">
+      <div className="grid grid-cols-[1fr_60px_110px_110px] gap-2 px-3 py-1.5 text-[9px] font-semibold uppercase tracking-widest text-white/20">
+        <span>Referrer</span>
+        <span className="text-right">Filleuls</span>
+        <span className="text-right">Vol. apporté</span>
+        <span className="text-right">Gains</span>
+      </div>
+      {rows.map((r, i) => (
+        <div key={r.referrer_id}>
+          <button
+            onClick={() => setExpanded(expanded === r.referrer_id ? null : r.referrer_id)}
+            className="w-full grid grid-cols-[1fr_60px_110px_110px] gap-2 px-3 py-2.5 bg-[#0d0e10] border border-white/[0.05] rounded-xl hover:border-white/10 transition-colors text-left"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-[10px] font-mono text-white/20 w-5 flex-shrink-0">#{i + 1}</span>
+              <span className="text-[12px] font-semibold text-white/80 truncate">{r.display_name}</span>
+            </div>
+            <span className="text-right text-[12px] font-mono text-white/50">{r.referral_count}</span>
+            <span className="text-right text-[12px] font-mono text-white/70">{fmtUsd(r.referred_volume)}</span>
+            <span className="text-right text-[12px] font-mono text-emerald-400/80">{fmtUsd(r.referrer_earnings)}</span>
+          </button>
+          {expanded === r.referrer_id && r.referrals.length > 0 && (
+            <div className="ml-7 mt-1 mb-1 border-l border-white/[0.05] pl-3 space-y-0.5">
+              <div className="grid grid-cols-[1fr_110px_110px] gap-2 px-2 py-1 text-[9px] font-semibold uppercase tracking-widest text-white/15">
+                <span>Filleul</span>
+                <span className="text-right">Volume</span>
+                <span className="text-right">Parrain gagne</span>
+              </div>
+              {r.referrals.map(u => (
+                <div key={u.user_id} className="grid grid-cols-[1fr_110px_110px] gap-2 px-2 py-1.5 bg-white/[0.02] rounded-lg">
+                  <span className="text-[11px] text-white/50 truncate">{u.display_name}</span>
+                  <span className="text-right text-[11px] font-mono text-white/40">{fmtUsd(u.volume)}</span>
+                  <span className="text-right text-[11px] font-mono text-emerald-400/50">{fmtUsd(u.referrer_earned)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ── Main Dashboard ─────────────────────────────────────────────────────────────
 
 export default function AdminDashboard() {
@@ -1019,7 +1096,7 @@ export default function AdminDashboard() {
 
         {/* Sub-tab nav */}
         <div className="flex px-5 border-t border-white/[0.04]">
-          {(['overview', 'versions', 'analytics'] as SubTab[]).map(t => (
+          {(['overview', 'versions', 'analytics', 'referrals'] as SubTab[]).map(t => (
             <button
               key={t}
               onClick={() => setSubTab(t)}
@@ -1049,6 +1126,7 @@ export default function AdminDashboard() {
             {subTab === 'overview'   && <OverviewTab m={m} strat={strat} />}
             {subTab === 'versions'   && <VersionsTab strat={strat} />}
             {subTab === 'analytics'  && <AnalyticsTab />}
+            {subTab === 'referrals'  && <ReferralsTab />}
           </>
         )}
       </div>

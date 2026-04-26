@@ -77,3 +77,75 @@ async def daily_cpm(db: DbSession, admin: AdminUser, days: int = 60):
 @router.get("/daily-multiple")
 async def daily_multiple(db: DbSession, admin: AdminUser, days: int = 60):
     return await analytics_service.daily_multiple(db, days)
+
+
+@router.get("/referral-leaderboard")
+async def referral_leaderboard(db: DbSession, admin: AdminUser):
+    """Referrer leaderboard: sorted by total volume of their referred users."""
+    from sqlalchemy import func, text
+    from app.db.models import User, SessionSlot
+
+    # Aggregate referred users' stats grouped by referrer
+    referrers_q = await db.execute(
+        select(
+            User.referrer_user_id,
+            func.count(User.id).label("referral_count"),
+            func.sum(User.trading_volume).label("referred_volume"),
+            func.sum(User.referral_reward_usdc).label("referrer_earnings"),
+        )
+        .where(User.referrer_user_id.isnot(None))
+        .group_by(User.referrer_user_id)
+        .order_by(func.sum(User.trading_volume).desc())
+    )
+    referrer_rows = referrers_q.all()
+
+    referrer_ids = [r.referrer_user_id for r in referrer_rows]
+    if not referrer_ids:
+        return []
+
+    # Fetch referrer display info
+    referrer_users_q = await db.execute(
+        select(User.id, User.display_name, User.privy_user_id)
+        .where(User.id.in_(referrer_ids))
+    )
+    referrer_map = {u.id: u for u in referrer_users_q.all()}
+
+    # Fetch referred users with their stats
+    referred_q = await db.execute(
+        select(
+            User.id,
+            User.display_name,
+            User.privy_user_id,
+            User.referrer_user_id,
+            User.trading_volume,
+            User.referral_reward_usdc,
+        )
+        .where(User.referrer_user_id.in_(referrer_ids))
+        .order_by(User.trading_volume.desc())
+    )
+    referred_users = referred_q.all()
+
+    # Build referred users per referrer — referral_reward_usdc on referred user
+    # represents fees paid by that user that were credited to referrer
+    from collections import defaultdict
+    referred_by_referrer: dict[str, list] = defaultdict(list)
+    for u in referred_users:
+        referred_by_referrer[u.referrer_user_id].append({
+            "user_id": u.id,
+            "display_name": u.display_name or u.privy_user_id or u.id[:8],
+            "volume": round(u.trading_volume or 0.0, 2),
+            "referrer_earned": round(u.referral_reward_usdc or 0.0, 2),
+        })
+
+    result = []
+    for r in referrer_rows:
+        ru = referrer_map.get(r.referrer_user_id)
+        result.append({
+            "referrer_id": r.referrer_user_id,
+            "display_name": (ru.display_name if ru else None) or (ru.privy_user_id if ru else None) or r.referrer_user_id[:8],
+            "referral_count": r.referral_count or 0,
+            "referred_volume": round(r.referred_volume or 0.0, 2),
+            "referrer_earnings": round(r.referrer_earnings or 0.0, 2),
+            "referrals": referred_by_referrer.get(r.referrer_user_id, []),
+        })
+    return result
