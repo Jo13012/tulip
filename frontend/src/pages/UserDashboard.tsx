@@ -235,22 +235,29 @@ export default function UserDashboard({ user, onSignOut }: Props) {
       })()}
       {/* Migration v2 banner */}
       {!migrationDismissed && (
-        <div className="flex-shrink-0 flex items-center justify-between gap-3 px-5 py-2 bg-orange-950/50 border-b border-orange-500/15">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-[11px] font-semibold text-orange-400 tracking-widest uppercase shrink-0">Notice</span>
-            <span className="text-[11px] text-white/30 shrink-0">·</span>
-            <span className="text-[11px] text-white/65">
-              Polymarket v2 migration on <span className="font-semibold text-white/85">April 28</span> — the app may be temporarily unavailable during the migration.
+        <div className="flex-shrink-0 flex items-center justify-between gap-3 px-4 py-2 bg-[#1a1206] border-b border-amber-500/[0.12]">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="flex-shrink-0 text-amber-400/70 mt-px">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                <path d="M6 1L11 10H1L6 1Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+                <path d="M6 4.5v2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                <circle cx="6" cy="8.5" r="0.6" fill="currentColor"/>
+              </svg>
+            </span>
+            <span className="text-[11px] text-white/45 leading-snug">
+              Polymarket v2 migration <span className="text-amber-300/80 font-semibold">April 28</span>
+              <span className="text-white/25"> · </span>
+              Tulip may be briefly unavailable.
             </span>
           </div>
           <button
             type="button"
             onClick={() => { setMigrationDismissed(true); try { localStorage.setItem(MIGRATION_BANNER_KEY, '1') } catch {} }}
-            className="flex-shrink-0 text-white/25 hover:text-white/60 transition-colors p-1"
+            className="flex-shrink-0 text-white/18 hover:text-white/50 transition-colors p-1 rounded"
             aria-label="Dismiss"
           >
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-              <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            <svg width="9" height="9" viewBox="0 0 9 9" fill="none">
+              <path d="M1 1l7 7M8 1L1 8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
             </svg>
           </button>
         </div>

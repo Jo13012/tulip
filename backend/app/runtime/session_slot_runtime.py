@@ -435,6 +435,9 @@ class SessionSlotRuntime:
         await self._set_state(SlotState.REPLACEMENT_QUEUED, "force-replace by admin")
         label = (effective.question or effective.polymarket_url) if effective else "idle (archived)"
         await self._log("INFO", f"[FORCE_REPLACE] Done — replacement queued → {label}")
+        # Lots force-closed above → is_clean is True, switch immediately
+        if self.is_clean:
+            await self._execute_switch()
 
     async def queue_replacement(self, new_config: Optional[SlotMarketConfig]):
         """
@@ -448,10 +451,15 @@ class SessionSlotRuntime:
         self._stop_new_entries = True
         await self._set_state(SlotState.REPLACEMENT_QUEUED, "replacement queued by admin")
         await self._cancel_all_buys()
+        # Force-clear buy tracking immediately — cancels sent, don't wait for CLOB ACK
+        self._buy_orders.clear()
+        self._pending_buy_capital.clear()
+        self._buy_size_matched.clear()
+        self._cancel_sent.clear()
         label = (new_config.question or new_config.polymarket_url) if new_config else "idle (archived)"
         await self._log("INFO", f"Slot replacement queued → {label}")
-        # If no market loop is running (slot was IDLE), switch immediately
-        if not self._running and self.is_clean:
+        # If no loop running OR already clean (no open lots), switch immediately
+        if not self._running or self.is_clean:
             await self._execute_switch()
 
     def set_allocated_capital(self, capital: float):
