@@ -119,6 +119,10 @@ export default function UserDashboard({ user, onSignOut }: Props) {
   const [warnEth, setWarnEth] = useState(false)
   const [warnDismissed, setWarnDismissed] = useState(false)
   const [fundingMessage, setFundingMessage] = useState('')
+  const MIGRATION_BANNER_KEY = 'migration_v2_banner_dismissed'
+  const [migrationDismissed, setMigrationDismissed] = useState(() => {
+    try { return localStorage.getItem(MIGRATION_BANNER_KEY) === '1' } catch { return false }
+  })
 
   async function refreshFundingStatus() {
     let status: any
@@ -229,6 +233,28 @@ export default function UserDashboard({ user, onSignOut }: Props) {
           </div>
         )
       })()}
+      {/* Migration v2 banner */}
+      {!migrationDismissed && (
+        <div className="flex-shrink-0 flex items-center justify-between gap-3 px-5 py-2 bg-orange-950/50 border-b border-orange-500/15">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[11px] font-semibold text-orange-400 tracking-widest uppercase shrink-0">Notice</span>
+            <span className="text-[11px] text-white/30 shrink-0">·</span>
+            <span className="text-[11px] text-white/65">
+              Polymarket v2 migration on <span className="font-semibold text-white/85">April 28</span> — the app may be temporarily unavailable during the migration.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => { setMigrationDismissed(true); try { localStorage.setItem(MIGRATION_BANNER_KEY, '1') } catch {} }}
+            className="flex-shrink-0 text-white/25 hover:text-white/60 transition-colors p-1"
+            aria-label="Dismiss"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+          </button>
+        </div>
+      )}
       {/* Top bar */}
       <div className="flex-shrink-0 flex items-center justify-between px-5 h-12 border-b border-white/[0.06]">
         <div className="flex items-center gap-3">

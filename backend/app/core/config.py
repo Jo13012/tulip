@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     BRIDGE_MIN_USDC: float = 5.0              # Minimum bridgeable amount
     ARB_BALANCE_CHECK_INTERVAL: int = 60      # Seconds between Arbitrum balance checks in session engine
     ARBITRUM_CHAIN_ID: int = 42161
-    ARBITRUM_RPC_URLS: str = "https://arb1.arbitrum.io/rpc,https://rpc.ankr.com/arbitrum,https://1rpc.io/arb"
+    ARBITRUM_RPC_URLS: str = "https://arbitrum-one-rpc.publicnode.com,https://arb1.arbitrum.io/rpc,https://rpc.ankr.com/arbitrum,https://arbitrum.llamarpc.com,https://1rpc.io/arb"
     ARBITRUM_USDC_ADDRESS: str = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
 
     @property

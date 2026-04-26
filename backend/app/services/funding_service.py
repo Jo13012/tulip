@@ -19,7 +19,7 @@ log = logging.getLogger("uvicorn.error")
 # One client per RPC host — keeps TCP+TLS connections alive across calls.
 # Limits: 10 connections per host, 2s connect timeout, 6s read timeout.
 _LIMITS = httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=30)
-_TIMEOUT = httpx.Timeout(connect=2.0, read=6.0, write=2.0, pool=1.0)
+_TIMEOUT = httpx.Timeout(connect=4.0, read=10.0, write=2.0, pool=1.0)
 
 _arb_client: httpx.AsyncClient | None = None
 _rust_client: httpx.AsyncClient | None = None

@@ -21,6 +21,38 @@ interface HistorySession {
   order_count:    number
 }
 
+function fmtDurShort(seconds: number): string {
+  const d = Math.floor(seconds / 86400)
+  const h = Math.floor((seconds % 86400) / 3600)
+  if (d > 0) return `${d}d ${h}h`
+  const m = Math.floor((seconds % 3600) / 60)
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
+}
+
+function fmtProgressCell(s: HistorySession): { line1: string; pct: string } {
+  if (s.stop_mode === 'days' && s.stop_days) {
+    const startMs  = s.started_at  ? new Date(s.started_at).getTime()  : null
+    const endMs    = s.stopped_at  ? new Date(s.stopped_at).getTime()  : Date.now()
+    const elapsedS = startMs ? (endMs - startMs) / 1000 : 0
+    const totalS   = s.stop_days * 86400
+    const pct      = totalS > 0 ? Math.min(100, (elapsedS / totalS) * 100) : 0
+    return {
+      line1: `${fmtDurShort(elapsedS)} / ${s.stop_days}d`,
+      pct:   `(${pct.toFixed(0)}%)`,
+    }
+  }
+  if (s.stop_mode === 'volume' && s.target_volume) {
+    const pct = Math.min(100, (s.total_volume / s.target_volume) * 100)
+    const fmtK = (v: number) => v >= 1000 ? `$${(v / 1000).toFixed(0)}k` : `$${v.toFixed(0)}`
+    return {
+      line1: `${fmtK(s.total_volume)} / ${fmtK(s.target_volume)}`,
+      pct:   `(${pct.toFixed(0)}%)`,
+    }
+  }
+  return { line1: 'vol', pct: '' }
+}
+
 function fmtShortDate(iso: string | null): string {
   if (!iso) return '—'
   const d = new Date(iso)
@@ -40,7 +72,7 @@ function turnoverSub(s: HistorySession): { total: string; daily: string } | null
   }
 }
 
-const HEADERS = ['Finished', 'Capital', 'Objective', 'Volume', 'Gross PnL', 'Fees', 'Net PnL', 'CPM', 'Orders']
+const HEADERS = ['Finished', 'Capital', 'Progress', 'Volume', 'Gross PnL', 'Fees', 'Net PnL', 'CPM', 'Orders']
 
 export function HistoryTab() {
   const [sessions, setSessions] = useState<HistorySession[]>([])
@@ -122,10 +154,11 @@ export function HistoryTab() {
               <div className="flex items-center">
                 <span className="text-[11px] font-mono font-semibold text-white/55">{fmtUsd(s.gross_capital, 0)}</span>
               </div>
-              <div className="flex items-center">
-                <span className="text-[10px] font-mono text-white/25">
-                  {s.stop_mode === 'days' ? `${s.stop_days}d` : s.target_volume ? `$${(s.target_volume / 1000).toFixed(0)}k` : 'vol'}
-                </span>
+              <div className="flex flex-col justify-center gap-0.5">
+                {(() => { const p = fmtProgressCell(s); return <>
+                  <span className="text-[10px] font-mono text-white/30">{p.line1}</span>
+                  {p.pct && <span className="text-[9px] font-mono text-white/18">{p.pct}</span>}
+                </> })()}
               </div>
               <div className="flex flex-col justify-center gap-0.5">
                 <span className="text-[11px] font-mono text-white/50">{fmtUsd(s.total_volume, 0)}</span>
@@ -184,9 +217,9 @@ export function HistoryTab() {
                   {isError && <span className="text-[9px] font-mono text-red-400/60">{s.stop_reason || 'error'}</span>}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-[9px] font-mono text-white/25">
-                    {s.stop_mode === 'days' ? `${s.stop_days}d` : s.target_volume ? `$${(s.target_volume / 1000).toFixed(0)}k vol` : 'vol'}
-                  </span>
+                  {(() => { const p = fmtProgressCell(s); return (
+                    <span className="text-[9px] font-mono text-white/25">{p.line1} {p.pct}</span>
+                  ) })()}
                   <span className="text-[11px] font-mono font-semibold text-white/55">{fmtUsd(s.gross_capital, 0)}</span>
                 </div>
               </div>

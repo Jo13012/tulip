@@ -353,10 +353,12 @@ class SessionSlotRuntime:
         self._market_epoch += 1
         m = self._market_config
         if not m or not m.active_token_id:
-            # Nothing running, just queue
+            # Nothing running, just queue then switch immediately
             if new_config is not None:
                 self._pending_replacement = new_config
             await self._set_state(SlotState.REPLACEMENT_QUEUED, "force-replace by admin (no market)")
+            if not self._running and self.is_clean:
+                await self._execute_switch()
             return
 
         token_id = m.active_token_id
@@ -448,6 +450,9 @@ class SessionSlotRuntime:
         await self._cancel_all_buys()
         label = (new_config.question or new_config.polymarket_url) if new_config else "idle (archived)"
         await self._log("INFO", f"Slot replacement queued → {label}")
+        # If no market loop is running (slot was IDLE), switch immediately
+        if not self._running and self.is_clean:
+            await self._execute_switch()
 
     def set_allocated_capital(self, capital: float):
         self._allocated_capital = capital
@@ -650,6 +655,16 @@ class SessionSlotRuntime:
 
         await self._set_state(SlotState.ACTIVE, f"switched to {new_config.question or new_config.polymarket_url}")
         await self._log("SUCCESS", f"Slot switched → {(new_config.question or new_config.polymarket_url)[:60]}")
+
+        # If the loop wasn't running (slot was IDLE), start it now
+        if not self._running:
+            self._running = True
+            self._loop_task = asyncio.create_task(
+                self._market_loop(), name=f"slot_{self._session_slot_id[:8]}"
+            )
+            self._poll_task = asyncio.create_task(
+                self._poll_maker_fills_loop(), name=f"poll_{self._session_slot_id[:8]}"
+            )
 
     # ── Rebalance ─────────────────────────────────────────────────────────────
 
