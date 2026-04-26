@@ -15,6 +15,7 @@ interface SlotMarket {
   polymarket_url: string; question: string | null; side: string
   price_min: number; price_max: number; number_of_lots: number
   sl_ticks: number; spread_from_ask: boolean
+  token_id_yes?: string; token_id_no?: string
 }
 
 interface Slot {
@@ -102,7 +103,7 @@ function isSubMarketUrl(url: string) {
 
 // ── Live orderbook widget ─────────────────────────────────────────────────────
 
-function OrderbookWidget({ tokenId, side }: { tokenId: string; side: string }) {
+function OrderbookWidget({ tokenId, side, onBestBid }: { tokenId: string; side: string; onBestBid?: (bid: number | null) => void }) {
   const [book, setBook] = useState<{ bids: any[]; asks: any[] } | null>(null)
   const [err, setErr]   = useState(false)
 
@@ -118,8 +119,9 @@ function OrderbookWidget({ tokenId, side }: { tokenId: string; side: string }) {
         if (!cancelled) {
           console.debug(`[book] fetched in ${Math.round(performance.now() - t0)}ms`)
           setBook(data)
+          onBestBid?.(data?.bids?.[0]?.price ?? null)
         }
-      } catch { if (!cancelled) setErr(true) }
+      } catch { if (!cancelled) { setErr(true); onBestBid?.(null) } }
     }
 
     fetchBook()
@@ -508,9 +510,22 @@ function diffSlot(draft: Slot, pub: any): { field: string; from: string; to: str
   return diffs
 }
 
+// Derive slot health badge from best bid vs price range
+function slotHealthBadge(market: SlotMarket, bestBid: number | null): { label: string; cls: string } | null {
+  if (bestBid === null) return null
+  const bid = bestBid * 100 // convert to cents
+  const min = market.price_min * 100
+  const max = market.price_max * 100
+  if (bid >= 99.0 || bid > max) return { label: 'ALREADY MAX', cls: 'bg-orange-500/20 text-orange-400' }
+  if (bid < min) return { label: 'OUT OF RANGE', cls: 'bg-yellow-500/20 text-yellow-400' }
+  return null
+}
+
 function SlotRow({ slot, onRefresh, published }: { slot: Slot; onRefresh: () => void; published: any | null }) {
   const addToast = useAppStore(s => s.addToast)
   const [editing, setEditing] = useState(false)
+  const [showOb, setShowOb]   = useState(false)
+  const [obBestBid, setObBestBid] = useState<number | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [allocEdit, setAllocEdit] = useState(false)
@@ -561,16 +576,25 @@ function SlotRow({ slot, onRefresh, published }: { slot: Slot; onRefresh: () => 
   const diffs = published ? diffSlot(slot, published) : []
   const isNew = !published
   const hasDiff = isNew || diffs.length > 0
+  const badge = slot.market ? slotHealthBadge(slot.market, obBestBid) : null
+
+  // Resolve token id for OB from slot market data
+  const obTokenId = slot.market
+    ? (slot.market.side === 'YES' ? (slot.market.token_id_yes ?? '') : (slot.market.token_id_no ?? ''))
+    : ''
 
   return (
     <div className="border-b border-white/[0.04] last:border-0">
       <div className="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.015] transition-colors group">
         <div className={cls('w-1.5 h-1.5 rounded-full flex-shrink-0', slot.enabled ? 'bg-green-500' : 'bg-white/20')} />
         <div className="w-28 flex-shrink-0">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <div className="text-xs font-medium text-white/80">{slot.label}</div>
             {isNew && <span className="text-[8px] px-1 py-0.5 rounded bg-brand/15 text-brand font-semibold uppercase tracking-wider">new</span>}
             {!isNew && hasDiff && <span className="text-[8px] px-1 py-0.5 rounded bg-amber-400/15 text-amber-400 font-semibold uppercase tracking-wider">modified</span>}
+            {badge && badge.label !== 'In range' && (
+              <span className={`text-[8px] px-1 py-0.5 rounded font-semibold uppercase tracking-wider ${badge.cls}`}>{badge.label}</span>
+            )}
           </div>
           {allocEdit ? (
             <input
@@ -595,9 +619,12 @@ function SlotRow({ slot, onRefresh, published }: { slot: Slot; onRefresh: () => 
           {slot.market ? (
             <div>
               <div className="text-[11px] text-white/60 truncate">{slot.market.question || slot.market.polymarket_url}</div>
-              <div className="flex gap-2 mt-0.5 text-[10px] text-white/30">
+              <div className="flex gap-2 mt-0.5 text-[10px] text-white/30 flex-wrap">
                 <span className={slot.market.side === 'YES' ? 'text-green-400' : 'text-red-400'}>{slot.market.side}</span>
                 <span>{formatPriceCents(slot.market.price_min)}–{formatPriceCents(slot.market.price_max)}¢</span>
+                {obBestBid !== null && (
+                  <span className="text-white/50 font-mono">bid <span className="text-white/70">{(obBestBid * 100).toFixed(1)}¢</span></span>
+                )}
                 <span>{slot.market.number_of_lots} lots</span>
                 {slot.market.sl_ticks > 0 && <span>SL {slot.market.sl_ticks}t</span>}
                 {slot.market.spread_from_ask && <span className="text-orange-400/70">ask</span>}
@@ -647,17 +674,32 @@ function SlotRow({ slot, onRefresh, published }: { slot: Slot; onRefresh: () => 
                   revert
                 </button>
               )}
-              <button className="btn-ghost text-[10px]" onClick={() => setEditing(e => !e)}>
+              {slot.market && (
+                <button
+                  className={cls('text-[10px] px-2 py-0.5 rounded transition-colors',
+                    showOb ? 'bg-white/[0.08] text-white/60' : 'text-white/25 hover:text-white/55 hover:bg-white/[0.05]'
+                  )}
+                  onClick={() => { setShowOb(v => !v); setEditing(false) }}
+                >
+                  OB
+                </button>
+              )}
+              <button className="btn-ghost text-[10px]" onClick={() => { setEditing(e => !e); setShowOb(false) }}>
                 {editing ? 'close' : slot.market ? 'edit' : '+ market'}
               </button>
               <button className="text-[10px] px-2 py-0.5 rounded text-white/20 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                onClick={() => { setConfirmDelete(true); setEditing(false) }}>
+                onClick={() => { setConfirmDelete(true); setEditing(false); setShowOb(false) }}>
                 ✕
               </button>
             </>
           )}
         </div>
       </div>
+      {showOb && obTokenId && (
+        <div className="px-4 pb-3">
+          <OrderbookWidget tokenId={obTokenId} side={slot.market!.side} onBestBid={setObBestBid} />
+        </div>
+      )}
       {editing && (
         <div className="px-4 pb-4">
           <MarketPanel

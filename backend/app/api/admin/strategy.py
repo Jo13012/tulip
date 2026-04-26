@@ -64,6 +64,8 @@ async def _strategy_detail(db, strat: Strategy) -> dict:
                 "number_of_lots": sv.max_spread_ticks + 1,
                 "sl_ticks": sv.sl_ticks,
                 "spread_from_ask": sv.spread_from_ask,
+                "token_id_yes": sv.token_id_yes,
+                "token_id_no": sv.token_id_no,
             } if sv and sv.polymarket_url else None,
         })
 

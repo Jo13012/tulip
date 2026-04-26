@@ -762,7 +762,7 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
           const uptime = rt!.uptime_s ?? 0
           const totalX = session.gross_capital > 0 ? vol / session.gross_capital : null
           const dailyX = totalX != null && uptime > 0 ? totalX / (uptime / 86400) : null
-          const cpm = vol > 0 ? (netPnl / vol) * 1_000_000 : null
+          const cpm = vol > 0 ? (netPnl / vol) * 1_000_000 : 0
           const cpmSign = cpm != null && cpm > 0 ? '+' : ''
           const fmtX = (x: number) => `${x.toFixed(2)}×`
           return (
@@ -794,7 +794,7 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
                   <InfoTip content="Net PnL extrapolated to $1M of volume." title="Cost per Million" />
                 </div>
                 <span className={`block text-[12px] font-bold font-mono tabular-nums leading-none ${cpm != null ? pnlColor(cpm) : 'text-white/25'}`}>
-                  {cpm != null ? `${cpmSign}${fmtUsd(cpm, 0)}` : '$—'}
+                  {cpm != null ? `${cpmSign}${fmtUsd(cpm, 0)}` : '$0.00'}
                 </span>
               </div>
             </div>
