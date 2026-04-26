@@ -119,43 +119,35 @@ function AnimatedLinePath({ d, color = 'rgba(52,211,153,' }: { d: string; color?
     el.style.transition = 'none'
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        el.style.transition = 'stroke-dashoffset 1.2s cubic-bezier(0.4,0,0.2,1)'
+        el.style.transition = 'stroke-dashoffset 1.4s cubic-bezier(0.4,0,0.2,1)'
         el.style.strokeDashoffset = '0'
       })
     })
   }, [d])
   return (
     <>
-      {/* outer glow halo */}
-      <path d={d} stroke={`${color}0.08)`} strokeWidth={10} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-      {/* mid glow */}
-      <path d={d} stroke={`${color}0.18)`} strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      {/* single soft glow — thin, low opacity */}
+      <path d={d} stroke={`${color}0.12)`} strokeWidth={6} fill="none" strokeLinecap="round" strokeLinejoin="round" />
       {/* crisp line */}
-      <path ref={ref} d={d} stroke={`${color}0.92)`} strokeWidth={2.2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      <path ref={ref} d={d} stroke={`${color}0.75)`} strokeWidth={1.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
     </>
   )
 }
 
 function GlowDot({ cx, cy, active, color = 'rgba(52,211,153,' }: { cx: number; cy: number; active: boolean; color?: string }) {
   return (
-    <g style={{ transition: 'opacity 0.1s' }}>
-      {/* always-on subtle halo on every dot */}
-      <circle cx={cx} cy={cy} r={6} fill={`${color}1)`} opacity={0.07} />
+    <g>
       {active && (
-        <>
-          <circle cx={cx} cy={cy} r={20} fill={`${color}1)`} opacity={0.04} />
-          <circle cx={cx} cy={cy} r={12} fill={`${color}1)`} opacity={0.09} />
-          <circle cx={cx} cy={cy} r={7} fill={`${color}1)`} opacity={0.15} />
-        </>
+        <circle cx={cx} cy={cy} r={10} fill={`${color}1)`} opacity={0.07} />
       )}
       <circle
         cx={cx}
         cy={cy}
-        r={active ? 5 : 3.2}
-        fill={`${color}0.95)`}
-        stroke={active ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.12)'}
-        strokeWidth={active ? 1.8 : 1.2}
-        style={{ transition: 'r 0.12s' }}
+        r={active ? 3.5 : 2}
+        fill={active ? `${color}0.9)` : `${color}0.35)`}
+        stroke={active ? 'rgba(255,255,255,0.5)' : 'none'}
+        strokeWidth={active ? 1 : 0}
+        style={{ transition: 'r 0.15s, opacity 0.15s' }}
       />
     </g>
   )
@@ -463,9 +455,6 @@ function CpmChart({ data, mode }: { data: DayCpm[]; mode: 'gross' | 'net' }) {
             {Math.round(mode === 'gross' ? tooltip.d.gross_cpm! : tooltip.d.net_cpm!)}
             <span style={{ fontSize: 11, fontWeight: 500, marginLeft: 4, color: 'rgba(52,211,153,0.55)' }}>CPM</span>
           </div>
-          <div style={{ fontSize: 9, fontFamily: 'monospace', color: 'rgba(255,255,255,0.2)', marginTop: 4 }}>
-            vol {fmtUsd(tooltip.d.volume, 0)}
-          </div>
         </TooltipShell>
       )}
     </div>
@@ -618,10 +607,6 @@ function MultipleChart({ data, mode }: { data: SessionMultiple[]; mode: 'gross' 
           <div style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 22, lineHeight: 1.1, color: 'rgba(52,211,153,0.95)' }}>
             {(mode === 'gross' ? tooltip.d.gross_multiple : tooltip.d.net_multiple).toFixed(2)}
             <span style={{ fontSize: 11, fontWeight: 500, marginLeft: 4, color: 'rgba(52,211,153,0.5)' }}>× / day</span>
-          </div>
-          <div style={{ fontSize: 9, fontFamily: 'monospace', color: 'rgba(255,255,255,0.2)', marginTop: 4, lineHeight: 1.6 }}>
-            <div>vol {fmtUsd(tooltip.d.volume, 0)}</div>
-            <div>capital {fmtUsd(tooltip.d.capital, 0)} · {tooltip.d.run_days.toFixed(1)}d</div>
           </div>
         </TooltipShell>
       )}
