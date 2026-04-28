@@ -97,7 +97,9 @@ impl LiveClientHandle {
             .asset_type(AssetType::Collateral)
             .build();
         let resp = self.client.balance_allowance(req).await.context("balance_allowance(pUSD)")?;
-        Ok(resp.balance.to_string().parse().unwrap_or(0.0))
+        // CLOB API returns balance in microunits (6 decimals). Convert to human-readable.
+        let raw: f64 = resp.balance.to_string().parse().unwrap_or(0.0);
+        Ok(raw / 1_000_000.0)
     }
 
     pub async fn token_balance(&self, token_id: &str) -> Result<f64> {
@@ -108,7 +110,9 @@ impl LiveClientHandle {
             .token_id(tid)
             .build();
         let resp = self.client.balance_allowance(req).await.context("balance_allowance(token)")?;
-        Ok(resp.balance.to_string().parse().unwrap_or(0.0))
+        // CLOB API returns balance in microunits (6 decimals). Convert to human-readable.
+        let raw: f64 = resp.balance.to_string().parse().unwrap_or(0.0);
+        Ok(raw / 1_000_000.0)
     }
 
     pub async fn update_balance_allowance(&self, token_id: &str) -> Result<()> {
@@ -171,12 +175,16 @@ impl LiveClientHandle {
         let signed = self.client.sign(&self.signer, signable).await.context("sign order")?;
         let resp = self.client.post_order(signed).await.context("post_order")?;
 
+        // making_amount and taking_amount from the CLOB API are in microunits (6 decimals).
+        // Divide by 1e6 to get human-readable values before returning to Python.
+        let making = resp.making_amount.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
+        let taking = resp.taking_amount.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
         Ok(json!({
             "orderID": resp.order_id,
             "status": resp.status.to_string(),
             "success": resp.success,
-            "makingAmount": resp.making_amount.to_string().parse::<f64>().unwrap_or(0.0),
-            "takingAmount": resp.taking_amount.to_string().parse::<f64>().unwrap_or(0.0),
+            "makingAmount": making,
+            "takingAmount": taking,
             "errorMsg": resp.error_msg,
         }))
     }
