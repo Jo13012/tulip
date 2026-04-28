@@ -23,7 +23,7 @@ impl Settings {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(8020),
             clob_host: env::var("CLOB_HOST")
-                .unwrap_or_else(|_| "https://clob-v2.polymarket.com".to_string()),
+                .unwrap_or_else(|_| "https://clob.polymarket.com".to_string()),
             gamma_host: env::var("GAMMA_HOST")
                 .unwrap_or_else(|_| "https://gamma-api.polymarket.com".to_string()),
             privy_app_id: env::var("PRIVY_APP_ID").unwrap_or_default(),

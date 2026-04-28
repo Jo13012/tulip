@@ -38,7 +38,7 @@ log = logging.getLogger("onboarding")
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 RELAYER_URL = settings.POLYMARKET_RELAYER_URL
-CLOB_URL = "https://clob-v2.polymarket.com"
+CLOB_URL = "https://clob.polymarket.com"
 CHAIN_ID = 137
 
 SAFE_FACTORY = "0xaacFeEa03eb1561C4e67d661e40682Bd20E3541b"
