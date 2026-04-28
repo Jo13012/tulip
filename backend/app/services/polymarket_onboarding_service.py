@@ -6,14 +6,14 @@ Flow (runs once per wallet at first login):
   2. Check if Safe already deployed via relayer
   3. If not: deploy Safe via relayer (uses platform builder creds)
   4. Derive or create CLOB API credentials (signed by Privy server wallet)
-  5. Execute the 8 token approvals (USDC + ERC1155 × 4 spenders) via Safe
+  5. Execute the 6 token approvals (pUSD + ERC1155 × 3 spenders) via Safe
   6. Store proxy_address + clob creds in DB, set onboarding_state = ready
 
-Contract addresses (Polygon mainnet, from Polymarket contracts):
-  USDC:                0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174
+Contract addresses (Polygon mainnet, Polymarket V2 — live from 2026-04-28):
+  pUSD:                0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB  (replaces USDC.e)
   CTF:                 0x4d97dcd97ec945f40cf65f87097ace5ea0476045
-  CTF Exchange:        0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E
-  Neg Risk CTF Exch:   0xC5d563A36AE78145C45a50134d48A1215220f80a
+  CTF Exchange V2:     0xE111180000d2663C0091e4f400237545B87B996B
+  Neg Risk CTF Exch V2:0xe2222d279d744050d28e00520010520000310F59
   Neg Risk Adapter:    0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296
 """
 from __future__ import annotations
@@ -38,7 +38,7 @@ log = logging.getLogger("onboarding")
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 RELAYER_URL = settings.POLYMARKET_RELAYER_URL
-CLOB_URL = "https://clob.polymarket.com"
+CLOB_URL = "https://clob-v2.polymarket.com"
 CHAIN_ID = 137
 
 SAFE_FACTORY = "0xaacFeEa03eb1561C4e67d661e40682Bd20E3541b"
@@ -46,11 +46,10 @@ SAFE_MULTISEND = "0xA238CBeb142c10Ef7Ad8442C6D1f9E89e07e7761"
 SAFE_INIT_CODE_HASH = "0x2bce2127ff07fb632d16c8347c4ebf501f4841168bed00d9e6ef715ddb6fcecf"
 SAFE_FACTORY_NAME = "Polymarket Contract Proxy Factory"
 
-USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
-PUSD = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
+PUSD = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"  # V2 collateral token (replaces USDC.e)
 CTF  = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
-CTF_EXCHANGE        = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
-NEG_RISK_CTF_EXCH   = "0xC5d563A36AE78145C45a50134d48A1215220f80a"
+CTF_EXCHANGE        = "0xE111180000d2663C0091e4f400237545B87B996B"  # V2
+NEG_RISK_CTF_EXCH   = "0xe2222d279d744050d28e00520010520000310F59"  # V2
 NEG_RISK_ADAPTER    = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
 
 MAX_UINT256 = 2**256 - 1
@@ -61,7 +60,7 @@ APPROVE_SELECTOR = bytes.fromhex("095ea7b3")
 # ERC-1155 setApprovalForAll(address,bool) selector
 SET_APPROVAL_FOR_ALL_SELECTOR = bytes.fromhex("a22cb465")
 
-# Spenders that need ERC-20 (USDC) approval
+# Spenders that need ERC-20 (pUSD) approval
 ERC20_SPENDERS = [CTF_EXCHANGE, NEG_RISK_CTF_EXCH, NEG_RISK_ADAPTER]
 # Spenders that need ERC-1155 (CTF token) approval
 ERC1155_SPENDERS = [CTF_EXCHANGE, NEG_RISK_CTF_EXCH, NEG_RISK_ADAPTER]
@@ -137,7 +136,7 @@ def _build_approval_txns() -> list[dict]:
     """Build the 6 approval transactions (3 ERC20 + 3 ERC1155)."""
     txns = []
     for spender in ERC20_SPENDERS:
-        txns.append({"to": USDC, "data": _erc20_approve_data(spender), "value": "0", "operation": 0})
+        txns.append({"to": PUSD, "data": _erc20_approve_data(spender), "value": "0", "operation": 0})
     for spender in ERC1155_SPENDERS:
         txns.append({"to": CTF, "data": _erc1155_approve_data(spender), "value": "0", "operation": 0})
     return txns

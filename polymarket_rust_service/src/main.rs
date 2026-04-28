@@ -28,6 +28,9 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{error, info};
 use uuid::Uuid;
 
+// pUSD on Polygon — V2 collateral token (replaces USDC.e from 2026-04-28)
+const PUSD_POLYGON: &str = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB";
+
 #[derive(Clone)]
 struct AppState {
     settings: Settings,
@@ -268,6 +271,10 @@ async fn client_open(
     if !state.clients.contains_key(&client_id) {
         let proxy = body.proxy_address.as_deref();
         let sig_type = body.signature_type.unwrap_or(0);
+        // Per-request builder_code overrides global setting; fall back to settings
+        let builder_code = body.builder_code.as_deref()
+            .filter(|s| !s.is_empty())
+            .or_else(|| state.settings.builder_code.as_deref());
         let handle = live::open_live_client(
             &body.privy_wallet_id,
             &body.wallet_address,
@@ -279,6 +286,7 @@ async fn client_open(
             &state.settings.privy_authorization_key_id,
             proxy,
             sig_type,
+            builder_code,
             state.http.clone(),
         )
         .await
@@ -367,8 +375,7 @@ async fn wallet_usdc_balance(
     State(state): State<AppState>,
     Path(address): Path<String>,
 ) -> AppResult<Json<Value>> {
-    // USDC on Polygon — used by Polymarket, 6 decimals
-    const USDC: &str = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+    // pUSD on Polygon — V2 collateral token (ERC-20, 6 decimals)
     const RPCS: &[&str] = &[
         "https://polygon-bor-rpc.publicnode.com",
         "https://rpc.ankr.com/polygon",
@@ -382,7 +389,7 @@ async fn wallet_usdc_balance(
 
     let payload = serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": "eth_call",
-        "params": [{"to": USDC, "data": data}, "latest"]
+        "params": [{"to": PUSD_POLYGON, "data": data}, "latest"]
     });
 
     for rpc in RPCS {

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import Response
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.deps import DbSession
 from app.db.models import Strategy, StrategyVersion
 from app.services.analytics_service import analytics_service
@@ -21,7 +22,7 @@ _gamma_client = httpx.AsyncClient(timeout=8.0)
 @router.get("/market-image")
 async def proxy_market_image(conditionId: str = Query(...)):
     """Proxy CLOB API market image to avoid CORS in browser."""
-    url = f"https://clob.polymarket.com/markets/{conditionId}"
+    url = f"{settings.CLOB_HOST}/markets/{conditionId}"
     try:
         r = await _gamma_client.get(url)
         if r.status_code == 200:

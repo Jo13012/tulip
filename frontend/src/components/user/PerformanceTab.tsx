@@ -615,8 +615,8 @@ function MultipleChart({ data, mode }: { data: SessionMultiple[]; mode: 'gross' 
 }
 
 export function PerformanceTab() {
-  const [cpmDays, setCpmDays] = useState<DaysOption>(30)
-  const [multDays, setMultDays] = useState<DaysOption>(60)
+  const [cpmDays, setCpmDays] = useState<DaysOption>(7)
+  const [multDays, setMultDays] = useState<DaysOption>(7)
   const [cpmMode, setCpmMode] = useState<'gross' | 'net'>('gross')
   const [multMode, setMultMode] = useState<'gross' | 'net'>('gross')
 

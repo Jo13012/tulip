@@ -51,6 +51,7 @@ class ExecutionClient:
                     "chain_id": self._chain_id,
                     "proxy_address": self._proxy_address or None,
                     "signature_type": self._signature_type,
+                    "builder_code": settings.POLYMARKET_BUILDER_CODE or None,
                 },
             )
             if not resp.is_success:
@@ -190,8 +191,8 @@ class ExecutionClient:
             )
             resp.raise_for_status()
             raw = float(resp.json().get("balance", 0.0))
-            # Polymarket conditional tokens use 6 decimals — SDK returns raw wei
-            return raw / 1_000_000.0
+            # V2 SDK returns human-readable token balance (not raw wei)
+            return raw
         except Exception:
             return None
 

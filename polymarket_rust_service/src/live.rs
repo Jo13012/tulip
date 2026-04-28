@@ -1,14 +1,15 @@
-//! live.rs — Real Polymarket CLOB client backed by polymarket-client-sdk + Privy Server Wallets.
+//! live.rs — Polymarket CLOB V2 client backed by polymarket_client_sdk_v2 + Privy Server Wallets.
 
 use alloy::signers::Signer as _;
 use anyhow::{Context, Result};
-use polymarket_client_sdk::clob::types::request::{
-    BalanceAllowanceRequest, OrderBookSummaryRequest, OrdersRequest,
+use polymarket_client_sdk_v2::clob::types::request::{
+    BalanceAllowanceRequest, OrdersRequest,
 };
-use polymarket_client_sdk::clob::types::{AssetType, Side, SignatureType};
-use polymarket_client_sdk::clob::{Client, Config};
-use polymarket_client_sdk::auth::state::Authenticated;
-use polymarket_client_sdk::auth::Normal;
+use polymarket_client_sdk_v2::clob::types::{AssetType, OrderType, Side, SignatureType};
+use polymarket_client_sdk_v2::clob::{Client, Config};
+use polymarket_client_sdk_v2::auth::state::Authenticated;
+use polymarket_client_sdk_v2::auth::Normal;
+use polymarket_client_sdk_v2::types::B256;
 use reqwest::Client as HttpClient;
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
@@ -33,6 +34,7 @@ pub async fn open_live_client(
     privy_authorization_key_id: &str,
     proxy_address: Option<&str>,
     signature_type_int: i32,
+    builder_code: Option<&str>,
     http: HttpClient,
 ) -> Result<LiveClientHandle> {
     let mut signer = PrivySigner::new(
@@ -53,8 +55,23 @@ pub async fn open_live_client(
         _ => SignatureType::Eoa,
     };
 
-    let unauth = Client::new(clob_host, Config::default()).context("build clob client")?;
-    let mut auth_builder = unauth
+    let config = {
+        let base = Config::builder().use_server_time(true);
+        if let Some(code_str) = builder_code.filter(|s| !s.is_empty()) {
+            match B256::from_str(code_str) {
+                Ok(code) => base.builder_code(code).build(),
+                Err(e) => {
+                    tracing::warn!("Invalid builder_code '{code_str}': {e} — skipping");
+                    base.build()
+                }
+            }
+        } else {
+            base.build()
+        }
+    };
+
+    let mut auth_builder = Client::new(clob_host, config)
+        .context("build clob v2 client")?
         .authentication_builder(&signer)
         .signature_type(sig_type);
 
@@ -69,7 +86,7 @@ pub async fn open_live_client(
     let client = auth_builder
         .authenticate()
         .await
-        .context("CLOB authentication failed")?;
+        .context("CLOB V2 authentication failed")?;
 
     Ok(LiveClientHandle { client, signer, signature_type: sig_type })
 }
@@ -78,27 +95,29 @@ impl LiveClientHandle {
     pub async fn usdc_balance(&self) -> Result<f64> {
         let req = BalanceAllowanceRequest::builder()
             .asset_type(AssetType::Collateral)
-            .signature_type(self.signature_type)
             .build();
-        let resp = self.client.balance_allowance(req).await.context("balance_allowance(USDC)")?;
+        let resp = self.client.balance_allowance(req).await.context("balance_allowance(pUSD)")?;
         Ok(resp.balance.to_string().parse().unwrap_or(0.0))
     }
 
     pub async fn token_balance(&self, token_id: &str) -> Result<f64> {
+        use polymarket_client_sdk_v2::types::U256;
+        let tid = U256::from_str(token_id).context("parse token_id")?;
         let req = BalanceAllowanceRequest::builder()
             .asset_type(AssetType::Conditional)
-            .token_id(token_id.to_string())
-            .signature_type(self.signature_type)
+            .token_id(tid)
             .build();
         let resp = self.client.balance_allowance(req).await.context("balance_allowance(token)")?;
         Ok(resp.balance.to_string().parse().unwrap_or(0.0))
     }
 
     pub async fn update_balance_allowance(&self, token_id: &str) -> Result<()> {
-        let req = BalanceAllowanceRequest::builder()
+        use polymarket_client_sdk_v2::clob::types::request::UpdateBalanceAllowanceRequest;
+        use polymarket_client_sdk_v2::types::U256;
+        let tid = U256::from_str(token_id).context("parse token_id")?;
+        let req = UpdateBalanceAllowanceRequest::builder()
             .asset_type(AssetType::Conditional)
-            .token_id(token_id.to_string())
-            .signature_type(self.signature_type)
+            .token_id(tid)
             .build();
         self.client.update_balance_allowance(req).await.context("update_balance_allowance")?;
         Ok(())
@@ -113,7 +132,9 @@ impl LiveClientHandle {
         tick_size: Option<&str>,
         neg_risk: bool,
     ) -> Result<Value> {
-        use polymarket_client_sdk::clob::types::OrderType;
+        use polymarket_client_sdk_v2::types::U256;
+
+        let _ = neg_risk; // V2 SDK infers neg_risk from the token's market info
 
         let side_enum = match side.to_uppercase().as_str() {
             "BUY" => Side::Buy,
@@ -121,30 +142,24 @@ impl LiveClientHandle {
             other => anyhow::bail!("unknown side: {other}"),
         };
 
-        // Fetch actual tick_size from SDK (which caches it) so we snap price to correct precision.
-        // Fall back to caller-provided tick_size if the API call fails.
-        let sdk_tick = self.client.tick_size(token_id).await
+        let tid = U256::from_str(token_id).context("parse token_id")?;
+
+        // Snap price to tick precision
+        let sdk_tick = self.client.tick_size(tid).await
             .map(|r| r.minimum_tick_size.to_string())
             .unwrap_or_else(|_| tick_size.unwrap_or("0.001").to_string());
 
-        let tick_str = sdk_tick.as_str();
-        let decimals = tick_str.find('.').map(|dot| tick_str.len() - dot - 1).unwrap_or(3);
-
-        // Snap price to tick_size precision (truncate extra decimals)
-        let tick_dec = Decimal::from_str(tick_str).unwrap_or_else(|_| Decimal::from_str("0.001").unwrap());
+        let tick_dec = Decimal::from_str(&sdk_tick)
+            .unwrap_or_else(|_| Decimal::from_str("0.001").unwrap());
         let price_raw = Decimal::from_str(&format!("{price:.6}")).context("parse price")?;
         let price_dec = (price_raw / tick_dec).trunc() * tick_dec;
-        // Clamp to [tick, 1 - tick]
         let price_dec = price_dec.max(tick_dec).min(Decimal::ONE - tick_dec);
 
-        let size_str = format!("{size:.2}");
-        let size_dec = Decimal::from_str(&size_str).context("parse size")?;
-
-        let _ = decimals; // used via sdk_tick above
+        let size_dec = Decimal::from_str(&format!("{size:.2}")).context("parse size")?;
 
         let signable = self.client
             .limit_order()
-            .token_id(token_id)
+            .token_id(tid)
             .side(side_enum)
             .price(price_dec)
             .size(size_dec)
@@ -168,7 +183,7 @@ impl LiveClientHandle {
 
     pub async fn open_orders(&self) -> Result<Value> {
         use std::collections::HashMap;
-        let req = OrdersRequest::builder().build();
+        let req = OrdersRequest::default();
         let page = self.client.orders(&req, None).await.context("fetch orders")?;
         let mut map: HashMap<String, Value> = HashMap::new();
         for order in &page.data {
@@ -179,7 +194,7 @@ impl LiveClientHandle {
                 "side": order.side.to_string(),
                 "original_size": order.original_size.to_string().parse::<f64>().unwrap_or(0.0),
                 "size_matched": order.size_matched.to_string().parse::<f64>().unwrap_or(0.0),
-                "asset_id": order.asset_id,
+                "asset_id": order.asset_id.to_string(),
             }));
         }
         Ok(serde_json::to_value(map)?)
@@ -194,7 +209,7 @@ impl LiveClientHandle {
             "side": resp.side.to_string(),
             "original_size": resp.original_size.to_string().parse::<f64>().unwrap_or(0.0),
             "size_matched": resp.size_matched.to_string().parse::<f64>().unwrap_or(0.0),
-            "asset_id": resp.asset_id,
+            "asset_id": resp.asset_id.to_string(),
         }))
     }
 
@@ -210,7 +225,10 @@ impl LiveClientHandle {
 
     #[allow(dead_code)]
     pub async fn order_book(&self, token_id: &str) -> Result<Value> {
-        let req = OrderBookSummaryRequest::builder().token_id(token_id.to_string()).build();
+        use polymarket_client_sdk_v2::clob::types::request::OrderBookSummaryRequest;
+        use polymarket_client_sdk_v2::types::U256;
+        let tid = U256::from_str(token_id).context("parse token_id")?;
+        let req = OrderBookSummaryRequest::builder().token_id(tid).build();
         let resp = self.client.order_book(&req).await.context("order_book")?;
         let bids: Vec<Value> = resp.bids.iter().map(|l| json!({
             "price": l.price.to_string().parse::<f64>().unwrap_or(0.0),

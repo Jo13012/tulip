@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     DEV_USER_EMAIL: str = "user@dev.local"
 
     # Polymarket
-    CLOB_HOST: str = "https://clob.polymarket.com"
+    CLOB_HOST: str = "https://clob-v2.polymarket.com"
     GAMMA_HOST: str = "https://gamma-api.polymarket.com"
     DATA_API_HOST: str = "https://data-api.polymarket.com"
     CHAIN_ID: int = 137
@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     POLYMARKET_BUILDER_API_KEY: str = ""
     POLYMARKET_BUILDER_SECRET: str = ""
     POLYMARKET_BUILDER_PASSPHRASE: str = ""
+    # V2: builder code (bytes32) attached to every order for builder attribution
+    # Copy from polymarket.com/settings?tab=builder
+    POLYMARKET_BUILDER_CODE: str = ""
 
     # Platform fee wallet
     PLATFORM_FEE_WALLET: str = "0x0000000000000000000000000000000000000000"

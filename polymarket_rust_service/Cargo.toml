@@ -18,7 +18,7 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1.18", features = ["serde", "v4"] }
-polymarket-client-sdk = { version = "0.3.3", features = ["gamma", "ws"] }
+polymarket_client_sdk_v2 = { version = "0.5.1", features = ["clob", "gamma"] }
 
 # Required for live.rs + privy_signer.rs
 alloy = { version = "1.2.1", default-features = false, features = ["signer-local", "signers"] }
