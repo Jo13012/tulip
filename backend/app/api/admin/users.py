@@ -342,17 +342,17 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
 @router.post("/reapprove-all")
 async def reapprove_all_wallets(db: DbSession, admin: AdminUser):
     """Bulk V2 migration: re-run approvals for all onboarded wallets."""
-    from datetime import datetime, timezone
-    V2_CUTOVER = datetime(2026, 4, 28, tzinfo=timezone.utc)
     wallets_q = await db.execute(
         select(Wallet).where(
             Wallet.onboarding_complete == True,
-            Wallet.proxy_address != None,
-            (Wallet.onboarding_completed_at == None) | (Wallet.onboarding_completed_at < V2_CUTOVER),
+            Wallet.proxy_address.isnot(None),
+            Wallet.privy_wallet_id.isnot(None),
         )
     )
     wallets = wallets_q.scalars().all()
     results = []
+    import logging; _log = logging.getLogger("uvicorn.error")
+    _log.info("[reapprove-all] found %d eligible wallets", len(wallets))
     for w in wallets:
         try:
             # Reuse per-user endpoint logic inline

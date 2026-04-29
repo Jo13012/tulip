@@ -537,7 +537,7 @@ export default function AdminUsers() {
                         hard stop
                       </button>
                     </>)}
-                    {u.onboarding_complete && (!u.onboarding_completed_at || u.onboarding_completed_at < '2026-04-28') && (
+                    {u.onboarding_complete && (
                       <button
                         className="text-[10px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400/50 hover:text-amber-300 hover:bg-amber-500/20 border border-amber-500/20 transition-colors disabled:opacity-30"
                         onClick={() => handleReapprove(u.id)}
