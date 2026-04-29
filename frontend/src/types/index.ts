@@ -71,6 +71,7 @@ export interface AdminUser {
   wallet_address:      string | null
   proxy_address:       string | null
   onboarding_complete: boolean
+  onboarding_completed_at: string | null
   wallet_usdc:         number | null   // live Arb USDC balance
   wallet_eth:          number | null   // live Arb ETH balance
   trading_balance:     number | null   // live Polymarket trading balance

@@ -145,6 +145,7 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
             "wallet_id":           wallet.id if wallet else None,
             "proxy_address":       wallet.proxy_address if wallet else None,
             "onboarding_complete": wallet.onboarding_complete if wallet else False,
+            "onboarding_completed_at": wallet.onboarding_completed_at.isoformat() if wallet and wallet.onboarding_completed_at else None,
             "wallet_usdc":         bal.wallet_usdc,
             "wallet_eth":          bal.wallet_eth,
             "trading_balance":     bal.trading_balance,
@@ -341,8 +342,14 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
 @router.post("/reapprove-all")
 async def reapprove_all_wallets(db: DbSession, admin: AdminUser):
     """Bulk V2 migration: re-run approvals for all onboarded wallets."""
+    from datetime import datetime, timezone
+    V2_CUTOVER = datetime(2026, 4, 28, tzinfo=timezone.utc)
     wallets_q = await db.execute(
-        select(Wallet).where(Wallet.onboarding_complete == True, Wallet.proxy_address != None)
+        select(Wallet).where(
+            Wallet.onboarding_complete == True,
+            Wallet.proxy_address != None,
+            (Wallet.onboarding_completed_at == None) | (Wallet.onboarding_completed_at < V2_CUTOVER),
+        )
     )
     wallets = wallets_q.scalars().all()
     results = []

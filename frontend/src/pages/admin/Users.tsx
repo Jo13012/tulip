@@ -537,14 +537,16 @@ export default function AdminUsers() {
                         hard stop
                       </button>
                     </>)}
-                    <button
-                      className="text-[10px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400/50 hover:text-amber-300 hover:bg-amber-500/20 border border-amber-500/20 transition-colors disabled:opacity-30"
-                      onClick={() => handleReapprove(u.id)}
-                      disabled={reapproving === u.id}
-                      title="Re-run V2 token approvals for this wallet"
-                    >
-                      {reapproving === u.id ? '…' : '⚡ reapprove'}
-                    </button>
+                    {u.onboarding_complete && (!u.onboarding_completed_at || u.onboarding_completed_at < '2026-04-28') && (
+                      <button
+                        className="text-[10px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400/50 hover:text-amber-300 hover:bg-amber-500/20 border border-amber-500/20 transition-colors disabled:opacity-30"
+                        onClick={() => handleReapprove(u.id)}
+                        disabled={reapproving === u.id}
+                        title="Re-run V2 token approvals for this wallet"
+                      >
+                        {reapproving === u.id ? '…' : '⚡ reapprove'}
+                      </button>
+                    )}
                     <button
                       className="text-[10px] px-2 py-0.5 rounded bg-red-900/30 text-red-400/50 hover:text-red-300 hover:bg-red-900/50 border border-red-500/20 transition-colors"
                       onClick={() => setNuclearUser(u)}

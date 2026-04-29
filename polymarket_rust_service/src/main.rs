@@ -406,7 +406,7 @@ async fn wallet_usdc_balance(
                                 let raw = i128::from_str_radix(hex.trim_start_matches("0x"), 16)
                                     .unwrap_or(0);
                                 let balance = raw as f64 / 1_000_000.0;
-                                tracing::debug!("wallet_balance OK address={} balance={}", address, balance);
+                                tracing::info!("wallet_balance address={} raw_hex={} balance={}", address, hex, balance);
                                 return Ok(Json(json!({ "balance": balance, "address": address })));
                             }
                         }
