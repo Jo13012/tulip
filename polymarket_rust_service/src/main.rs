@@ -104,7 +104,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/client/cancel-order", post(client_cancel_order))
         .route("/api/v1/wallet-balance/{address}", get(wallet_usdc_balance))
         .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .on_failure(tower_http::trace::DefaultOnFailure::new().level(tracing::Level::DEBUG))
+        )
         .with_state(state);
 
     let addr: SocketAddr = format!("{}:{}", settings.host, settings.port).parse()?;
