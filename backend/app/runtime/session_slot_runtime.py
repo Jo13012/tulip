@@ -41,7 +41,7 @@ from app.runtime.runtime_models import (
     real_tick, norm, h, grid_levels,
 )
 from app.integrations.polymarket.execution_client import ExecutionClient
-from app.runtime.market_data_service import market_data_service
+from app.runtime.market_data_service import market_data_service, MarketClosedError
 
 # ── Constants (identical to mono_user_bot) ────────────────────────────────────
 
@@ -568,6 +568,10 @@ class SessionSlotRuntime:
 
                 try:
                     book = await market_data_service.get_order_book(m.active_token_id)
+                except MarketClosedError as e:
+                    await self._log("INFO", f"[MARKET] {e} — market resolved, slot idle")
+                    await self._set_state(SlotState.IDLE, "market resolved")
+                    return
                 except Exception:
                     await asyncio.sleep(POLL_S)
                     continue

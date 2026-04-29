@@ -437,7 +437,11 @@ async fn fetch_book(state: &AppState, token_id: &str) -> AppResult<OrderBookResp
             Ok(normalize_book(value))
         }
         Ok(resp) => {
-            error!("book request failed with status {}", resp.status());
+            if resp.status().as_u16() == 404 {
+                tracing::debug!("book 404 (market resolved): {token_id}");
+            } else {
+                error!("book request failed with status {}", resp.status());
+            }
             Err(AppError::Internal(format!("book request failed: {}", resp.status())))
         }
         Err(err) => {

@@ -12,6 +12,11 @@ import httpx
 from app.core.config import settings
 
 
+class MarketClosedError(Exception):
+    """Raised when the orderbook returns 404 — market resolved or delisted."""
+    pass
+
+
 class MarketDataService:
     BOOK_CACHE_TTL = 1.0
 
@@ -42,15 +47,19 @@ class MarketDataService:
             resp = await self._http.get(
                 f"{settings.POLYMARKET_RUST_URL}/api/v1/book/{token_id}"
             )
+            if resp.status_code == 404:
+                raise MarketClosedError(f"Market closed/resolved: {token_id[:16]}…")
             resp.raise_for_status()
             book = resp.json()
+        except MarketClosedError:
+            raise
         except Exception:
             async with self._cache_lock:
                 cached = self._book_cache.get(token_id)
             book = cached[0] if cached else {"bids": [], "asks": []}
-
-        async with self._cache_lock:
-            self._book_cache[token_id] = (book, time.time())
+        else:
+            async with self._cache_lock:
+                self._book_cache[token_id] = (book, time.time())
 
         return book
 
