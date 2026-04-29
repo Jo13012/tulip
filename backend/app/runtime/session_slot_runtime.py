@@ -989,6 +989,10 @@ class SessionSlotRuntime:
             elif permanent:
                 await self._log("ERROR", f"[BUY] Permanent error @ {h(level)}: {e} — slot to error")
                 await self._set_state(SlotState.ERROR, str(e)[:120])
+            elif "does not exist" in err_str and "orderbook" in err_str:
+                await self._log("INFO", f"[BUY] Orderbook gone @ {h(level)} — market resolved, slot idle")
+                await self._set_state(SlotState.IDLE, "market resolved")
+                return
             elif "not enough balance" in err_str or "balance is not enough" in err_str:
                 await self._log("WARN", f"[BUY] Balance unavailable @ {h(level)} — retry in {BUY_FAIL_COOLDOWN:.0f}s")
                 self._buy_fail_time[level] = time.monotonic()

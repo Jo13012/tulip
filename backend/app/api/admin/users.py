@@ -350,18 +350,18 @@ async def reapprove_all_wallets(db: DbSession, admin: AdminUser):
         )
     )
     wallets = wallets_q.scalars().all()
-    results = []
     import logging; _log = logging.getLogger("uvicorn.error")
     _log.info("[reapprove-all] found %d eligible wallets", len(wallets))
-    for w in wallets:
+
+    from app.services.polymarket_onboarding_service import (
+        _build_approval_txns, _encode_multisend, _relayer_post_authed,
+        _get_safe_nonce, _sign_safe_tx, SAFE_MULTISEND,
+    )
+    import httpx
+
+    async def _submit_one(w) -> dict:
         try:
-            # Reuse per-user endpoint logic inline
-            from app.services.polymarket_onboarding_service import (
-                _build_approval_txns, _encode_multisend, _relayer_post_authed,
-                _get_safe_nonce, _sign_safe_tx, _poll_transaction, SAFE_MULTISEND,
-            )
-            import httpx
-            async with httpx.AsyncClient(timeout=60.0, trust_env=False) as http:
+            async with httpx.AsyncClient(timeout=30.0, trust_env=False) as http:
                 txns = _build_approval_txns()
                 multisend_data = _encode_multisend(txns)
                 agg = {"to": SAFE_MULTISEND, "data": multisend_data, "value": "0", "operation": 1}
@@ -371,12 +371,9 @@ async def reapprove_all_wallets(db: DbSession, admin: AdminUser):
                     agg["to"], agg["data"], agg["value"], 1, nonce,
                 )
                 body_payload = {
-                    "from": w.wallet_address,
-                    "to": agg["to"],
-                    "proxyWallet": w.proxy_address,
-                    "data": agg["data"],
-                    "nonce": nonce,
-                    "signature": sig,
+                    "from": w.wallet_address, "to": agg["to"],
+                    "proxyWallet": w.proxy_address, "data": agg["data"],
+                    "nonce": nonce, "signature": sig,
                     "signatureParams": {
                         "gasPrice": "0", "operation": "1", "safeTxnGas": "0",
                         "baseGas": "0", "gasToken": "0x0000000000000000000000000000000000000000",
@@ -387,11 +384,13 @@ async def reapprove_all_wallets(db: DbSession, admin: AdminUser):
                 }
                 resp = await _relayer_post_authed(http, "/submit", body_payload)
                 tx_id = resp.get("transactionID")
-                result = await _poll_transaction(http, tx_id, max_polls=40)
-                ok = result is not None
-            results.append({"wallet_id": w.id, "address": w.wallet_address, "ok": ok, "tx_id": tx_id})
+                _log.info("[reapprove-all] submitted %s tx=%s", w.wallet_address[:12], tx_id)
+                return {"wallet_id": w.id, "address": w.wallet_address, "ok": True, "tx_id": tx_id}
         except Exception as e:
-            results.append({"wallet_id": w.id, "address": w.wallet_address, "ok": False, "error": str(e)})
+            _log.warning("[reapprove-all] failed %s: %s", w.wallet_address[:12] if w.wallet_address else "?", e)
+            return {"wallet_id": w.id, "address": w.wallet_address, "ok": False, "error": str(e)}
+
+    results = await asyncio.gather(*[_submit_one(w) for w in wallets])
 
     db.add(AuditLog(
         actor_id=admin["sub"], actor_role="admin",
