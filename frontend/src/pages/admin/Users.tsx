@@ -332,8 +332,9 @@ export default function AdminUsers() {
   const [users, setUsers]         = useState<AdminUser[]>([])
   const [loading, setLoading]     = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [stopping, setStopping]   = useState<string | null>(null)
+  const [stopping, setStopping]       = useState<string | null>(null)
   const [nuclearUser, setNuclearUser] = useState<AdminUser | null>(null)
+  const [reapproving, setReapproving] = useState<string | null>(null)  // userId or 'all'
   const addToast = useAppStore(s => s.addToast)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -359,6 +360,32 @@ export default function AdminUsers() {
     setUsers(prev => prev.map(u => u.id === id ? { ...u, fee_override_bps: override } : u))
   }
 
+  async function handleReapprove(userId: string) {
+    setReapproving(userId)
+    try {
+      await api.admin.reapproveWallet(userId)
+      addToast({ type: 'success', message: 'Approvals submitted' })
+    } catch (e: any) {
+      addToast({ type: 'error', message: e.message })
+    } finally {
+      setReapproving(null)
+    }
+  }
+
+  async function handleReapproveAll() {
+    setReapproving('all')
+    try {
+      const res: any = await api.admin.reapproveAll()
+      const ok = res.results?.filter((r: any) => r.ok).length ?? 0
+      const fail = (res.total ?? 0) - ok
+      addToast({ type: fail > 0 ? 'error' : 'success', message: `Reapprove all: ${ok} ok, ${fail} failed` })
+    } catch (e: any) {
+      addToast({ type: 'error', message: e.message })
+    } finally {
+      setReapproving(null)
+    }
+  }
+
   async function handleStop(userId: string, mode: 'soft' | 'hard') {
     setStopping(userId + mode)
     try {
@@ -381,6 +408,14 @@ export default function AdminUsers() {
         <div className="flex items-center gap-3">
           {refreshing && <span className="text-[10px] text-white/25 animate-pulse">refreshing…</span>}
           <span className="text-xs text-white/25">{users.length} total</span>
+          <button
+            className="text-[10px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400/60 hover:text-amber-300 hover:bg-amber-500/20 border border-amber-500/20 transition-colors disabled:opacity-30"
+            onClick={handleReapproveAll}
+            disabled={reapproving === 'all'}
+            title="Re-run V2 token approvals for all wallets"
+          >
+            {reapproving === 'all' ? '…' : '⚡ reapprove all'}
+          </button>
           <button
             className="text-[10px] text-white/30 hover:text-white/60 transition-colors"
             onClick={() => fetchUsers()}
@@ -502,6 +537,14 @@ export default function AdminUsers() {
                         hard stop
                       </button>
                     </>)}
+                    <button
+                      className="text-[10px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400/50 hover:text-amber-300 hover:bg-amber-500/20 border border-amber-500/20 transition-colors disabled:opacity-30"
+                      onClick={() => handleReapprove(u.id)}
+                      disabled={reapproving === u.id}
+                      title="Re-run V2 token approvals for this wallet"
+                    >
+                      {reapproving === u.id ? '…' : '⚡ reapprove'}
+                    </button>
                     <button
                       className="text-[10px] px-2 py-0.5 rounded bg-red-900/30 text-red-400/50 hover:text-red-300 hover:bg-red-900/50 border border-red-500/20 transition-colors"
                       onClick={() => setNuclearUser(u)}

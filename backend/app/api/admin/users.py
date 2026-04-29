@@ -338,6 +338,141 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
         await client.close()
 
 
+@router.post("/reapprove-all")
+async def reapprove_all_wallets(db: DbSession, admin: AdminUser):
+    """Bulk V2 migration: re-run approvals for all onboarded wallets."""
+    wallets_q = await db.execute(
+        select(Wallet).where(Wallet.onboarding_complete == True, Wallet.proxy_address != None)
+    )
+    wallets = wallets_q.scalars().all()
+    results = []
+    for w in wallets:
+        try:
+            # Reuse per-user endpoint logic inline
+            from app.services.polymarket_onboarding_service import (
+                _build_approval_txns, _encode_multisend, _relayer_post_authed,
+                _get_safe_nonce, _sign_safe_tx, _poll_transaction, SAFE_MULTISEND,
+            )
+            import httpx
+            async with httpx.AsyncClient(timeout=60.0, trust_env=False) as http:
+                txns = _build_approval_txns()
+                multisend_data = _encode_multisend(txns)
+                agg = {"to": SAFE_MULTISEND, "data": multisend_data, "value": "0", "operation": 1}
+                nonce = await _get_safe_nonce(http, w.proxy_address)
+                sig = await _sign_safe_tx(
+                    w.privy_wallet_id, w.proxy_address,
+                    agg["to"], agg["data"], agg["value"], 1, nonce,
+                )
+                body_payload = {
+                    "from": w.wallet_address,
+                    "to": agg["to"],
+                    "proxyWallet": w.proxy_address,
+                    "data": agg["data"],
+                    "nonce": nonce,
+                    "signature": sig,
+                    "signatureParams": {
+                        "gasPrice": "0", "operation": "1", "safeTxnGas": "0",
+                        "baseGas": "0", "gasToken": "0x0000000000000000000000000000000000000000",
+                        "refundReceiver": "0x0000000000000000000000000000000000000000",
+                    },
+                    "type": "SAFE",
+                    "metadata": "v2 migration: reapprove all token spenders",
+                }
+                resp = await _relayer_post_authed(http, "/submit", body_payload)
+                tx_id = resp.get("transactionID")
+                result = await _poll_transaction(http, tx_id, max_polls=40)
+                ok = result is not None
+            results.append({"wallet_id": w.id, "address": w.wallet_address, "ok": ok, "tx_id": tx_id})
+        except Exception as e:
+            results.append({"wallet_id": w.id, "address": w.wallet_address, "ok": False, "error": str(e)})
+
+    db.add(AuditLog(
+        actor_id=admin["sub"], actor_role="admin",
+        action="wallet.reapprove_all",
+        detail=f"total={len(wallets)} ok={sum(1 for r in results if r['ok'])}",
+    ))
+    await db.commit()
+    return {"total": len(wallets), "results": results}
+
+
+@router.post("/{user_id}/reapprove")
+async def reapprove_wallet(user_id: str, db: DbSession, admin: AdminUser):
+    """
+    Re-run token approvals for an existing wallet (V2 migration).
+    Submits pUSD ERC-20 + CTF ERC-1155 approvals for all V2 spenders
+    (Exchange V2 + Neg Risk V2 + Adapter) via the Safe relayer.
+    """
+    from app.services.polymarket_onboarding_service import (
+        _build_approval_txns, _encode_multisend, _relayer_post_authed,
+        _relayer_get, _get_safe_nonce, _sign_safe_tx, _poll_transaction,
+        SAFE_MULTISEND,
+    )
+    import httpx
+    from app.core.config import settings
+    from app.services.privy_wallet_service import privy_wallet_service
+
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    w_q = await db.execute(
+        select(Wallet).where(Wallet.user_id == user_id, Wallet.is_primary == True).limit(1)
+    )
+    wallet = w_q.scalars().first()
+    if not wallet or not wallet.proxy_address:
+        raise HTTPException(400, "No primary wallet or proxy_address not set")
+    if not wallet.privy_wallet_id:
+        raise HTTPException(400, "privy_wallet_id not set")
+
+    safe_address = wallet.proxy_address
+    eoa_address  = wallet.wallet_address
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0, trust_env=False) as http:
+            txns = _build_approval_txns()
+            multisend_data = _encode_multisend(txns)
+            agg = {"to": SAFE_MULTISEND, "data": multisend_data, "value": "0", "operation": 1}
+
+            nonce = await _get_safe_nonce(http, safe_address)
+            sig = await _sign_safe_tx(
+                wallet.privy_wallet_id, safe_address,
+                agg["to"], agg["data"], agg["value"], 1, nonce,
+            )
+            body_payload = {
+                "from": eoa_address,
+                "to": agg["to"],
+                "proxyWallet": safe_address,
+                "data": agg["data"],
+                "nonce": nonce,
+                "signature": sig,
+                "signatureParams": {
+                    "gasPrice": "0", "operation": "1", "safeTxnGas": "0",
+                    "baseGas": "0", "gasToken": "0x0000000000000000000000000000000000000000",
+                    "refundReceiver": "0x0000000000000000000000000000000000000000",
+                },
+                "type": "SAFE",
+                "metadata": "v2 migration: reapprove all token spenders",
+            }
+            resp = await _relayer_post_authed(http, "/submit", body_payload)
+            tx_id = resp.get("transactionID")
+            result = await _poll_transaction(http, tx_id, max_polls=40)
+            if not result:
+                raise HTTPException(500, f"Approval tx {tx_id} failed or timed out")
+
+        db.add(AuditLog(
+            actor_id=admin["sub"], actor_role="admin",
+            action="wallet.reapprove", entity_type="wallet", entity_id=wallet.id,
+            detail=f"V2 migration reapprove tx={tx_id}",
+        ))
+        await db.commit()
+        return {"ok": True, "tx_id": tx_id, "safe": safe_address}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Reapprove failed: {e}")
+
+
 class NuclearCloseRequest(BaseModel):
     cancel_orders: bool = True
     cancel_order_ids: List[str] = Field(default_factory=list)  # specific order IDs; if set, only these are cancelled
