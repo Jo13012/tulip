@@ -28,6 +28,14 @@ async def ensure_user_profile_columns() -> None:
     log.info("Ensured user profile columns are available")
 
 
+async def ensure_wallet_v2_migration_column() -> None:
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            "ALTER TABLE wallets ADD COLUMN IF NOT EXISTS v2_migration_done BOOLEAN DEFAULT FALSE"
+        ))
+    log.info("Ensured wallets.v2_migration_done column")
+
+
 async def ensure_wallet_funding_columns() -> None:
     statements = [
         "ALTER TABLE wallets ADD COLUMN IF NOT EXISTS funding_state VARCHAR DEFAULT 'idle'",

@@ -77,6 +77,7 @@ class Wallet(Base):
     onboarding_error_detail = Column(Text, nullable=True)
     onboarding_complete = Column(Boolean, nullable=False, default=False)
     onboarding_completed_at = Column(DateTime(timezone=True), nullable=True)
+    v2_migration_done = Column(Boolean, nullable=False, default=False)
 
     # Funding automation state (Arbitrum -> Polymarket)
     funding_state = Column(String, nullable=False, default="idle")

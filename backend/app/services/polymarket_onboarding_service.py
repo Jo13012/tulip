@@ -516,4 +516,45 @@ async def onboard_wallet(
         }
 
 
+async def run_v2_approvals(privy_wallet_id: str, eoa_address: str, safe_address: str) -> str:
+    """
+    Submit V2 token approvals (pUSD ERC-20 + CTF ERC-1155) for an existing Safe.
+    No polling — fire-and-forget. Returns transaction ID.
+    """
+    async with httpx.AsyncClient(timeout=30.0, trust_env=False) as http:
+        txns = _build_approval_txns()
+        multisend_data = _encode_multisend(txns)
+        agg = {"to": SAFE_MULTISEND, "data": multisend_data, "value": "0", "operation": 1}
+        nonce = await _get_safe_nonce(http, safe_address)
+        sig = await _sign_safe_tx(
+            privy_wallet_id, safe_address,
+            agg["to"], agg["data"], agg["value"], 1, nonce,
+        )
+        body_payload = {
+            "from": eoa_address,
+            "to": agg["to"],
+            "proxyWallet": safe_address,
+            "data": agg["data"],
+            "nonce": nonce,
+            "signature": sig,
+            "signatureParams": {
+                "gasPrice": "0", "operation": "1", "safeTxnGas": "0",
+                "baseGas": "0",
+                "gasToken": ZERO_ADDRESS,
+                "refundReceiver": ZERO_ADDRESS,
+            },
+            "type": "SAFE",
+            "metadata": "v2 auto-migration: token approvals",
+        }
+        resp = await _relayer_post_authed(http, "/submit", body_payload)
+        tx_id = resp.get("transactionID", "")
+        log.info("V2 approvals submitted safe=%s tx=%s", safe_address, tx_id)
+
+        result = await _poll_transaction(http, tx_id, max_polls=40)
+        if not result:
+            raise RuntimeError(f"V2 approval tx {tx_id} failed or timed out")
+
+        return tx_id
+
+
 polymarket_onboarding_service = None  # singleton placeholder — just import and call onboard_wallet()

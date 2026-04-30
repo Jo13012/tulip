@@ -390,7 +390,16 @@ async def reapprove_all_wallets(db: DbSession, admin: AdminUser):
             _log.warning("[reapprove-all] failed %s: %s", w.wallet_address[:12] if w.wallet_address else "?", e)
             return {"wallet_id": w.id, "address": w.wallet_address, "ok": False, "error": str(e)}
 
+    wallet_map = {w.id: w for w in wallets}
     results = await asyncio.gather(*[_submit_one(w) for w in wallets])
+
+    # Mark successful wallets as v2-migrated
+    for r in results:
+        if r.get("ok"):
+            w = wallet_map.get(r["wallet_id"])
+            if w:
+                w.v2_migration_done = True
+                db.add(w)
 
     db.add(AuditLog(
         actor_id=admin["sub"], actor_role="admin",
@@ -465,6 +474,7 @@ async def reapprove_wallet(user_id: str, db: DbSession, admin: AdminUser):
             if not result:
                 raise HTTPException(500, f"Approval tx {tx_id} failed or timed out")
 
+        wallet.v2_migration_done = True
         db.add(AuditLog(
             actor_id=admin["sub"], actor_role="admin",
             action="wallet.reapprove", entity_type="wallet", entity_id=wallet.id,

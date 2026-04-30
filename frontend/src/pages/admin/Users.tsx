@@ -335,6 +335,7 @@ export default function AdminUsers() {
   const [stopping, setStopping]       = useState<string | null>(null)
   const [nuclearUser, setNuclearUser] = useState<AdminUser | null>(null)
   const [reapproving, setReapproving] = useState<string | null>(null)  // userId or 'all'
+  const [onboardedOnly, setOnboardedOnly] = useState(true)
   const addToast = useAppStore(s => s.addToast)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -407,7 +408,14 @@ export default function AdminUsers() {
         <h1 className="text-base font-semibold">Users</h1>
         <div className="flex items-center gap-3">
           {refreshing && <span className="text-[10px] text-white/25 animate-pulse">refreshing…</span>}
-          <span className="text-xs text-white/25">{users.length} total</span>
+          <button
+            className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${onboardedOnly ? 'bg-brand/20 text-brand border-brand/30' : 'bg-white/[0.04] text-white/30 border-white/10 hover:text-white/60'}`}
+            onClick={() => setOnboardedOnly(v => !v)}
+            title="Show only onboarded users"
+          >
+            onboarded only
+          </button>
+          <span className="text-xs text-white/25">{users.filter(u => !onboardedOnly || u.onboarding_complete).length} / {users.length}</span>
           <button
             className="text-[10px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400/60 hover:text-amber-300 hover:bg-amber-500/20 border border-amber-500/20 transition-colors disabled:opacity-30"
             onClick={handleReapproveAll}
@@ -439,7 +447,7 @@ export default function AdminUsers() {
             </tr>
           </thead>
           <tbody>
-            {users.map(u => (
+            {users.filter(u => !onboardedOnly || u.onboarding_complete).map(u => (
               <tr key={u.id} className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
                 {/* Status dot */}
                 <td className="px-3 py-2.5">
