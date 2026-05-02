@@ -22,6 +22,8 @@ from app.db.bootstrap import (
     ensure_user_profile_columns,
     ensure_wallet_funding_columns,
     ensure_wallet_v2_migration_column,
+    ensure_strategy_free_fee_column,
+    ensure_user_free_fee_ends_at_column,
     ensure_global_strategy,
     ensure_funding_transactions_table,
     ensure_strategy_slot_version_columns,
@@ -111,6 +113,8 @@ async def lifespan(app: FastAPI):
         await ensure_user_profile_columns()
         await ensure_wallet_funding_columns()
         await ensure_wallet_v2_migration_column()
+        await ensure_strategy_free_fee_column()
+        await ensure_user_free_fee_ends_at_column()
         await ensure_funding_transactions_table()
         await ensure_strategy_slot_version_columns()
         await ensure_global_strategy()

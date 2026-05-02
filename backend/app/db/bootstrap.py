@@ -28,6 +28,22 @@ async def ensure_user_profile_columns() -> None:
     log.info("Ensured user profile columns are available")
 
 
+async def ensure_user_free_fee_ends_at_column() -> None:
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS free_fee_ends_at TIMESTAMPTZ"
+        ))
+    log.info("Ensured users.free_fee_ends_at column")
+
+
+async def ensure_strategy_free_fee_column() -> None:
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            "ALTER TABLE strategies ADD COLUMN IF NOT EXISTS new_user_free_fee_days INTEGER DEFAULT 0"
+        ))
+    log.info("Ensured strategies.new_user_free_fee_days column")
+
+
 async def ensure_wallet_v2_migration_column() -> None:
     async with engine.begin() as conn:
         await conn.execute(text(

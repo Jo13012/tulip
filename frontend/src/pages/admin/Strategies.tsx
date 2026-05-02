@@ -757,7 +757,7 @@ function StrategyDetail({ onRefreshList }: { onRefreshList?: () => void }) {
   const [creatingSlot, setCreatingSlot] = useState(false)
 
   // Settings
-  const [settings, setSettings] = useState({ name: '', reserve_pct: 5, fee_side: 'none' })
+  const [settings, setSettings] = useState({ name: '', reserve_pct: 5, fee_side: 'none', new_user_free_fee_days: 0 })
   const [savingSettings, setSavingSettings] = useState(false)
   const [publishedSlots, setPublishedSlots] = useState<Record<string, any>>({})  // slot_id → published slot data
 
@@ -769,7 +769,7 @@ function StrategyDetail({ onRefreshList }: { onRefreshList?: () => void }) {
     ]).then(([d, pub]: any[]) => {
       console.debug(`[global strategy] loaded in ${Math.round(performance.now()-t0)}ms`)
       setS(d)
-      setSettings({ name: d.name, reserve_pct: d.reserve_pct, fee_side: d.fee_side })
+      setSettings({ name: d.name, reserve_pct: d.reserve_pct, fee_side: d.fee_side, new_user_free_fee_days: d.new_user_free_fee_days ?? 0 })
       console.debug('[published-slots]', pub)
       if (pub?.slots?.length) {
         const map: Record<string, any> = {}
@@ -1255,6 +1255,12 @@ function StrategyDetail({ onRefreshList }: { onRefreshList?: () => void }) {
                 <option value="sell">Sell only</option>
                 <option value="both">Both</option>
               </select>
+            </div>
+            <div>
+              <div className="label-dense mb-1">Free fee period <span className="text-white/30">(days for new users)</span></div>
+              <input className="input-sm w-full" type="number" step="1" min={0} max={365} value={settings.new_user_free_fee_days}
+                onChange={e => setSettings(s => ({ ...s, new_user_free_fee_days: +e.target.value }))} />
+              <div className="text-[10px] text-white/25 mt-1">0 = disabled. New users get fee_override=0 for this many days after onboarding.</div>
             </div>
           </div>
           <div className="flex justify-end">

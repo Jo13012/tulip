@@ -50,6 +50,8 @@ class UserProfile(BaseModel):
     wallet_id: str = ""
     wallet_address: str = ""
     onboarding_complete: bool = False
+    fee_override_bps: int | None = None
+    free_fee_active: bool = False
 
 
 class UpdateDisplayNameRequest(BaseModel):
@@ -89,6 +91,12 @@ def _can_change_username(db_user: User | None) -> bool:
     if not current_display_name or _is_auto_display_name(current_display_name):
         return True
     return int(db_user.display_name_change_count or 0) < 1
+
+
+def _free_fee_active(user: User | None) -> bool:
+    if not user or user.free_fee_ends_at is None:
+        return False
+    return datetime.now(timezone.utc) < user.free_fee_ends_at
 
 
 # ── Dev token (local dev only) ────────────────────────────────────────────────
@@ -318,6 +326,20 @@ async def sync_user(request: Request, body: SyncRequest):
                     target_wallet.clob_api_passphrase = onboarding["clob_api_passphrase"]
                     target_wallet.onboarding_state = "ready"
                     target_wallet.v2_migration_done = True
+                    target_wallet.onboarding_completed_at = datetime.now(timezone.utc)
+                    # Auto free-fee: set override=0 if platform has free-fee period configured
+                    try:
+                        from sqlalchemy import select as _sel
+                        from app.db.models import Strategy as _Strategy
+                        strat_q = await db.execute(_sel(_Strategy).limit(1))
+                        _strat = strat_q.scalars().first()
+                        if _strat and (_strat.new_user_free_fee_days or 0) > 0:
+                            import datetime as _dt
+                            user.fee_override_bps = 0
+                            user.free_fee_ends_at = datetime.now(timezone.utc) + _dt.timedelta(days=_strat.new_user_free_fee_days)
+                            log.info("Free-fee period applied to new user %s (%d days)", user.id[:8], _strat.new_user_free_fee_days)
+                    except Exception as _e:
+                        log.warning("Could not apply free-fee: %s", _e)
                     # Cache Polymarket deposit address once for future bridges
                     try:
                         from app.integrations.polymarket.bridge_client import bridge_client
@@ -356,6 +378,8 @@ async def sync_user(request: Request, body: SyncRequest):
         wallet_id=primary_wallet_id,
         wallet_address=primary_wallet_address,
         onboarding_complete=existing_wallet.onboarding_complete if existing_wallet else False,
+        fee_override_bps=user.fee_override_bps,
+        free_fee_active=_free_fee_active(user),
     )
 
 
@@ -387,6 +411,8 @@ async def get_me(user: CurrentUser):
         wallet_id=wallet.id if wallet else "",
         wallet_address=wallet.wallet_address if wallet else "",
         onboarding_complete=wallet.onboarding_complete if wallet else False,
+        fee_override_bps=db_user.fee_override_bps if db_user else None,
+        free_fee_active=_free_fee_active(db_user),
     )
 
 
@@ -434,4 +460,6 @@ async def update_profile(body: UpdateDisplayNameRequest, user: CurrentUser):
         wallet_id=wallet.id if wallet else "",
         wallet_address=wallet.wallet_address if wallet else "",
         onboarding_complete=wallet.onboarding_complete if wallet else False,
+        fee_override_bps=db_user.fee_override_bps if db_user else None,
+        free_fee_active=_free_fee_active(db_user),
     )

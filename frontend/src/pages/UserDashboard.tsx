@@ -195,9 +195,9 @@ export default function UserDashboard({ user, onSignOut }: Props) {
     }
   }, [usdcBalance, user.user_id])
 
-  // ── Event banner — edit text/emphasis here to change ────────────────────
+  // ── Event banner — shown only during active auto free-fee period ─────────
   const EVENT_BANNER = {
-    active: true,
+    active: user.free_fee_active === true,
     text: "We'll handle your trading fees for the first 7 days",
     emphasis: "first 7 days",
   }

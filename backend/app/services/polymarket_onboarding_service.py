@@ -420,7 +420,7 @@ async def onboard_wallet(
         if result is not None:
             await result
 
-    async with httpx.AsyncClient(timeout=30.0, trust_env=False) as http:
+    async with httpx.AsyncClient(timeout=30.0, trust_env=False, headers={"User-Agent": _CLOB_UA}) as http:
         safe_address = _derive_safe(eoa_address)
         log.info("Derived Safe address %s for EOA %s", safe_address, eoa_address[:10])
 
@@ -516,12 +516,15 @@ async def onboard_wallet(
         }
 
 
+_CLOB_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+
 async def run_v2_approvals(privy_wallet_id: str, eoa_address: str, safe_address: str) -> str:
     """
     Submit V2 token approvals (pUSD ERC-20 + CTF ERC-1155) for an existing Safe.
     No polling — fire-and-forget. Returns transaction ID.
     """
-    async with httpx.AsyncClient(timeout=30.0, trust_env=False) as http:
+    async with httpx.AsyncClient(timeout=30.0, trust_env=False, headers={"User-Agent": _CLOB_UA}) as http:
         txns = _build_approval_txns()
         multisend_data = _encode_multisend(txns)
         agg = {"to": SAFE_MULTISEND, "data": multisend_data, "value": "0", "operation": 1}

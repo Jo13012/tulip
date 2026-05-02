@@ -115,6 +115,7 @@ async def _strategy_detail(db, strat: Strategy) -> dict:
         "id": strat.id, "name": strat.name,
         "status": strat.status, "reserve_pct": strat.reserve_pct,
         "fee_side": strat.fee_side,
+        "new_user_free_fee_days": strat.new_user_free_fee_days,
         "global_pause": strat.global_pause,
         "version": f"{strat.current_major}.{strat.current_minor}",
         "slots": slot_data,
@@ -160,6 +161,7 @@ class UpdateStrategyRequest(BaseModel):
     name: Optional[str] = None
     reserve_pct: Optional[float] = None
     fee_side: Optional[str] = None
+    new_user_free_fee_days: Optional[int] = None
     global_pause: Optional[bool] = None
 
 

@@ -26,7 +26,6 @@ from app.runtime.runtime_models import (
 from app.runtime.session_slot_runtime import SessionSlotRuntime
 from app.integrations.polymarket.execution_client import ExecutionClient
 from app.services.fee_service import fee_service
-from app.services.fee_payment_service import FeePaymentError
 from app.services.nuclear_close_service import run_nuclear_close
 from app.services import funding_service
 from app.core.config import settings
@@ -74,10 +73,11 @@ class SessionEngine:
         fee_wallet_address: str = "",
         referrer_user_id: str = "",
         referrer_wallet_address: str = "",
-        user_fee_bps: int = 120,           # active fee at session start (override ?? XP)
-        fee_is_overridden: bool = False,  # True when fee_override_bps is set; suppresses XP live-update
-        user_trading_volume: float = 0.0, # lifetime trading volume at session start
-        db_factory=None,                  # async callable returning AsyncSession context manager
+        user_fee_bps: int = 120,                      # active fee at session start (override ?? XP)
+        fee_is_overridden: bool = False,             # True when fee_override_bps is set; suppresses XP live-update
+        user_trading_volume: float = 0.0,            # lifetime trading volume at session start
+        free_fee_ends_at: Optional[datetime] = None, # set at onboarding; monitor clears override when passed
+        db_factory=None,                             # async callable returning AsyncSession context manager
         on_broadcast: Optional[Callable[[], Awaitable[None]]] = None,
         on_snapshot: Optional[Callable[[dict], Awaitable[None]]] = None,
         on_lot_event: Optional[Callable[[str, RuntimeLot, Optional[float]], Awaitable[None]]] = None,
@@ -109,9 +109,10 @@ class SessionEngine:
         # _fee_is_overridden = True if admin override is active; XP updates are still
         #   written to effective_fee_bps in DB but do NOT change _user_fee_bps.
         self._user_fee_bps        = user_fee_bps
-        self._fee_is_overridden   = fee_is_overridden     # set by session_manager
-        self._user_trading_volume = user_trading_volume   # running total (lifetime)
-        self._db_factory          = db_factory            # injected by session_manager
+        self._fee_is_overridden   = fee_is_overridden
+        self._user_trading_volume = user_trading_volume
+        self._free_fee_ends_at    = free_fee_ends_at      # None = manual override, never auto-expire
+        self._db_factory          = db_factory
 
         self._on_broadcast       = on_broadcast
         self._on_snapshot        = on_snapshot
@@ -316,6 +317,7 @@ class SessionEngine:
     async def _monitor_loop(self):
         while self._running:
             try:
+                await self._check_free_fee_expiry()
                 await self._check_session_sl()
                 await self._check_stop_mode()
                 await self._check_arbitrum_fee_buffer()
@@ -324,6 +326,36 @@ class SessionEngine:
             except Exception as e:
                 await self._log_session("ERROR", f"Monitor error: {e}")
             await asyncio.sleep(5.0)
+
+    async def _check_free_fee_expiry(self):
+        """
+        Auto free-fee expiry — pure in-memory check, zero DB queries per tick.
+        Only fires when override=0 AND free_fee_ends_at is set (auto free-fee, not manual).
+        """
+        if not self._fee_is_overridden or self._user_fee_bps != 0:
+            return
+        if self._free_fee_ends_at is None:
+            return  # manual override=0, never auto-expire
+        if datetime.now(timezone.utc) < self._free_fee_ends_at:
+            return
+        # Expired — clear in DB then update in-memory state
+        if not self._db_factory:
+            return
+        try:
+            from app.db.models import User as _User
+            async with self._db_factory() as db:
+                user = await db.get(_User, self.user_id)
+                if not user:
+                    return
+                user.fee_override_bps = None
+                await db.commit()
+                restored = user.effective_fee_bps
+            self._user_fee_bps = restored
+            self._fee_is_overridden = False
+            self._free_fee_ends_at = None
+            await self._log_session("INFO", f"Free-fee period expired — fees restored to {restored} bps")
+        except Exception as e:
+            await self._log_session("WARN", f"free_fee_expiry clear error: {e}")
 
     async def _check_soft_stop_complete(self):
         """When soft-stopping, finalize once all slots are clean (no open lots, no pending buys)."""
@@ -492,21 +524,18 @@ class SessionEngine:
 
     async def _on_lot_opened(self, session_slot_id: str, lot: RuntimeLot):
         if self._strategy and self._privy_wallet_id and self._fee_wallet_address:
-            try:
-                await fee_service.process_lot_opened(
-                    self,
-                    lot.size,
-                    self._strategy,
-                    user_fee_bps=self._user_fee_bps,
-                    privy_wallet_id=self._privy_wallet_id,
-                    wallet_address=self._fee_wallet_address,
-                    referrer_user_id=self._referrer_user_id,
-                    referrer_wallet_address=self._referrer_wallet_address,
-                    db_factory=self._db_factory,
-                )
-            except FeePaymentError as e:
-                await self._log_session("WARN", f"Fee payment failed: {e}. Stopping session.")
-                await self.soft_stop()
+            await fee_service.process_lot_opened(
+                self,
+                lot.size,
+                self._strategy,
+                slot_id=session_slot_id,
+                user_fee_bps=self._user_fee_bps,
+                privy_wallet_id=self._privy_wallet_id,
+                wallet_address=self._fee_wallet_address,
+                referrer_user_id=self._referrer_user_id,
+                referrer_wallet_address=self._referrer_wallet_address,
+                db_factory=self._db_factory,
+            )
         # Increment lifetime trading_volume (buy-side notional)
         await self._increment_user_volume(lot.size, pnl=None)
         await self._increment_slot_volume(session_slot_id, lot.size, pnl=None)
@@ -515,21 +544,18 @@ class SessionEngine:
 
     async def _on_lot_closed(self, session_slot_id: str, lot: RuntimeLot, pnl: float):
         if self._strategy and self._privy_wallet_id and self._fee_wallet_address:
-            try:
-                await fee_service.process_lot_closed(
-                    self,
-                    lot.size,
-                    self._strategy,
-                    user_fee_bps=self._user_fee_bps,
-                    privy_wallet_id=self._privy_wallet_id,
-                    wallet_address=self._fee_wallet_address,
-                    referrer_user_id=self._referrer_user_id,
-                    referrer_wallet_address=self._referrer_wallet_address,
-                    db_factory=self._db_factory,
-                )
-            except FeePaymentError as e:
-                await self._log_session("WARN", f"Fee payment failed: {e}. Stopping session.")
-                await self.soft_stop()
+            await fee_service.process_lot_closed(
+                self,
+                lot.size,
+                self._strategy,
+                slot_id=session_slot_id,
+                user_fee_bps=self._user_fee_bps,
+                privy_wallet_id=self._privy_wallet_id,
+                wallet_address=self._fee_wallet_address,
+                referrer_user_id=self._referrer_user_id,
+                referrer_wallet_address=self._referrer_wallet_address,
+                db_factory=self._db_factory,
+            )
         # Increment lifetime trading_volume (sell-side notional) + bot_pnl
         await self._increment_user_volume(lot.size, pnl=pnl)
         await self._increment_slot_volume(session_slot_id, lot.size, pnl=pnl)
@@ -730,10 +756,9 @@ class SessionEngine:
     def recent_logs(self, n: int = 200) -> list[dict]:
         return self._log_buffer[-n:]
 
-    def charge_fee(self, amount: float):
+    def charge_fee(self, amount: float, slot_id: str | None = None):
         """Record a platform fee charge from the fee reserve."""
         self.fee_reserve_used = round(self.fee_reserve_used + amount, 6)
-        slot_id_context = ""
-        for slot in self._slot_runtimes.values():
+        slot = self._slot_runtimes.get(slot_id) if slot_id else None
+        if slot:
             slot.update_paid_fees(amount)
-            break  # Simple: charge to first slot — caller should pass slot_id for per-slot

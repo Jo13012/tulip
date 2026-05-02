@@ -14,6 +14,8 @@ export interface AppUser {
   trading_volume?: number
   bot_pnl?: number
   fee_bps?: number
+  fee_override_bps?: number | null
+  free_fee_active?: boolean
 }
 
 // ── Profile ───────────────────────────────────────────────────────────────────

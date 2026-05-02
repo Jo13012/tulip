@@ -426,11 +426,14 @@ class SessionManager:
                     )
                     user_trading_volume = user.trading_volume
                     referrer_user_id = user.referrer_user_id or ""
+                    _ffa = user.free_fee_ends_at
+                    free_fee_ends_at = _ffa if (fee_is_overridden and _ffa and datetime.now(timezone.utc) < _ffa) else None
                 else:
                     fee_is_overridden = False
                     user_fee_bps = 120
                     user_trading_volume = 0.0
                     referrer_user_id = ""
+                    free_fee_ends_at = None
 
                 referrer_wallet_address = ""
                 if referrer_user_id:
@@ -470,6 +473,7 @@ class SessionManager:
                 user_fee_bps=user_fee_bps,
                 fee_is_overridden=fee_is_overridden,
                 user_trading_volume=user_trading_volume,
+                free_fee_ends_at=free_fee_ends_at,
                 db_factory=async_session_factory,
             )
 

@@ -51,6 +51,7 @@ class User(Base):
     bot_pnl           = Column(Float,   nullable=False, default=0.0)  # cumulative realized PnL across sessions
     fee_override_bps  = Column(Integer, nullable=True,  default=None) # admin manual override; NULL = use XP fee
     effective_fee_bps = Column(Integer, nullable=False, default=120)   # XP-computed fee; updated at volume thresholds only
+    free_fee_ends_at  = Column(DateTime(timezone=True), nullable=True, default=None)  # set at onboarding; monitor clears override when passed
     created_at  = Column(DateTime(timezone=True), default=_now, nullable=False)
     updated_at  = Column(DateTime(timezone=True), default=_now, onupdate=_now, nullable=False)
 
@@ -114,6 +115,7 @@ class Strategy(Base):
     status       = Column(String, nullable=False, default="draft")  # draft | published | archived
     reserve_pct  = Column(Float, nullable=False, default=5.0)        # % of gross capital held as fee reserve
     fee_side     = Column(String, nullable=False, default="none")     # none | buy | sell | both
+    new_user_free_fee_days = Column(Integer, nullable=False, default=0)  # 0 = disabled
     global_pause = Column(Boolean, nullable=False, default=False)
     current_major = Column(Integer, nullable=False, default=1)
     current_minor = Column(Integer, nullable=False, default=0)
