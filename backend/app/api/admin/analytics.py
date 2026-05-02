@@ -32,15 +32,6 @@ async def global_strategy_analytics(db: DbSession, admin: AdminUser):
     versions = await analytics_service.version_performance(db, strat.id)
     markets  = await analytics_service.market_history_performance(db, None)
 
-    # Add live engine data (running sessions not yet in SessionSlotMarketHistory)
-    from app.runtime.session_registry import session_registry
-    engines = await session_registry.all()
-    for engine in engines:
-        sm = engine.summary
-        summary["total_volume"] = round(summary["total_volume"] + (sm.total_volume or 0), 2)
-        summary["total_pnl"]    = round(summary["total_pnl"]    + (sm.realized_pnl or 0), 2)
-        summary["total_fees"]   = round(summary["total_fees"]   + (sm.paid_fees or 0), 2)
-
     return {"summary": summary, "versions": versions, "markets": markets}
 
 

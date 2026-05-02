@@ -167,7 +167,7 @@ export const api = {
     // ── Users ─────────────────────────────────────────────────────────────────
     listUsers: (limit = 100) => request(`/api/v1/admin/users/?limit=${limit}`),
     // fee_override_bps: number to set override, -1 to clear override
-    updateUser: (id: string, patch: { fee_override_bps?: number; display_name?: string }) =>
+    updateUser: (id: string, patch: { fee_override_bps?: number; display_name?: string; free_fee_days?: number }) =>
       request(`/api/v1/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
     stopUserSession: (userId: string, mode: 'soft' | 'hard') =>
       request(`/api/v1/admin/users/${userId}/stop-session`, { method: 'POST', body: JSON.stringify({ mode }) }),

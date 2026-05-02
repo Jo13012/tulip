@@ -82,6 +82,8 @@ class PatchUserRequest(BaseModel):
     # fee_override_bps: >=0 to set override, -1 to clear
     fee_override_bps: Optional[int] = Field(None, ge=-1, le=10_000)
     display_name: Optional[str] = None
+    # free_fee_days: >0 to grant N days free fee from now, -1 to cancel
+    free_fee_days: Optional[int] = Field(None, ge=-1, le=365)
 
 
 class StopSessionRequest(BaseModel):
@@ -153,6 +155,7 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
             "session_status":      session_status,
             "session_live":        session_live,
             "created_at":          u.created_at.isoformat(),
+            "free_fee_ends_at":    u.free_fee_ends_at.isoformat() if u.free_fee_ends_at else None,
         })
     return result
 
@@ -181,6 +184,25 @@ async def patch_user(user_id: str, body: PatchUserRequest, db: DbSession, admin:
             new_fee_for_engine = body.fee_override_bps
             new_override_flag  = True
             changed.append(f"fee_override_bps={body.fee_override_bps}")
+
+    new_free_fee_ends_at = None  # for engine push
+    if body.free_fee_days is not None:
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        if body.free_fee_days == -1:
+            user.free_fee_ends_at = None
+            user.fee_override_bps = None
+            new_fee_for_engine = user.effective_fee_bps
+            new_override_flag  = False
+            clear_free_fee_ends_at = True
+            changed.append("free_fee=cancelled")
+        else:
+            ends_at = _dt.now(_tz.utc) + _td(days=body.free_fee_days)
+            user.free_fee_ends_at = ends_at
+            user.fee_override_bps = 0
+            new_free_fee_ends_at  = ends_at
+            new_fee_for_engine    = 0
+            new_override_flag     = True
+            changed.append(f"free_fee={body.free_fee_days}d")
 
     if body.display_name is not None:
         user.display_name = body.display_name
@@ -212,6 +234,8 @@ async def patch_user(user_id: str, body: PatchUserRequest, db: DbSession, admin:
                 engine._fee_is_overridden = new_override_flag
                 if clear_free_fee_ends_at:
                     engine._free_fee_ends_at = None
+                if new_free_fee_ends_at is not None:
+                    engine._free_fee_ends_at = new_free_fee_ends_at
 
     return {"ok": True, "changed": changed}
 

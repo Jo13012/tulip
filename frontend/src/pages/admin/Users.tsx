@@ -315,14 +315,90 @@ function FeeOverrideCell({ user, onUpdated }: {
   }
 
   const hasOverride = user.fee_override_bps != null
+  const freeDaysLeft = (() => {
+    if (!user.free_fee_ends_at) return 0
+    const ms = new Date(user.free_fee_ends_at).getTime() - Date.now()
+    return ms > 0 ? Math.ceil(ms / 86_400_000) : 0
+  })()
+  const isFreeFee = user.fee_override_bps === 0 && freeDaysLeft > 0
+
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        className={`text-xs font-mono transition-colors cursor-pointer ${hasOverride ? (isFreeFee ? 'text-emerald-400 hover:text-emerald-300' : 'text-amber-400 hover:text-amber-300') : 'text-white/25 hover:text-white/50'}`}
+        onClick={() => { setVal(hasOverride ? displayVal : ''); setEditing(true) }}
+        title={hasOverride ? 'Override active — click to edit or clear' : 'Click to set override'}
+      >
+        {hasOverride ? fmtStoredBps(user.fee_override_bps as number) : '—'}
+      </button>
+      {isFreeFee && (
+        <span className="text-[9px] text-emerald-400/60 font-mono">{freeDaysLeft}d</span>
+      )}
+    </div>
+  )
+}
+
+function GrantFreeFeeCell({ user, onUpdated }: {
+  user: AdminUser
+  onUpdated: (id: string, patch: Partial<AdminUser>) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [days, setDays] = useState('7')
+  const [saving, setSaving] = useState(false)
+
+  const freeDaysLeft = (() => {
+    if (!user.free_fee_ends_at) return 0
+    const ms = new Date(user.free_fee_ends_at).getTime() - Date.now()
+    return ms > 0 ? Math.ceil(ms / 86_400_000) : 0
+  })()
+  const isActive = user.fee_override_bps === 0 && freeDaysLeft > 0
+
+  const grant = async () => {
+    const n = parseInt(days)
+    if (!n || n < 1) return
+    setSaving(true)
+    try {
+      await api.admin.updateUser(user.id, { free_fee_days: n })
+      const ends = new Date(Date.now() + n * 86_400_000).toISOString()
+      onUpdated(user.id, { fee_override_bps: 0, free_fee_ends_at: ends })
+      setEditing(false)
+    } finally { setSaving(false) }
+  }
+
+  const cancel = async () => {
+    setSaving(true)
+    try {
+      await api.admin.updateUser(user.id, { free_fee_days: -1 })
+      onUpdated(user.id, { fee_override_bps: null, free_fee_ends_at: null })
+    } finally { setSaving(false) }
+  }
+
+  if (editing) return (
+    <div className="flex items-center gap-1">
+      <input
+        className="w-10 text-xs font-mono bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/80"
+        value={days} onChange={e => setDays(e.target.value)} type="number" min={1} max={365}
+        autoFocus onKeyDown={e => { if (e.key === 'Enter') grant(); if (e.key === 'Escape') setEditing(false) }}
+      />
+      <span className="text-[9px] text-white/30">d</span>
+      <button className="text-[9px] text-emerald-400 hover:text-emerald-300" onClick={grant} disabled={saving}>✓</button>
+      <button className="text-[9px] text-white/30 hover:text-white/60" onClick={() => setEditing(false)}>✕</button>
+    </div>
+  )
+
+  if (isActive) return (
+    <div className="flex items-center gap-1">
+      <span className="text-[10px] text-emerald-400/80 font-mono">{freeDaysLeft}d left</span>
+      <button className="text-[9px] text-white/20 hover:text-red-400" onClick={cancel} disabled={saving} title="Cancel free fee">✕</button>
+    </div>
+  )
+
   return (
     <button
-      className={`text-xs font-mono transition-colors cursor-pointer ${hasOverride ? 'text-amber-400 hover:text-amber-300' : 'text-white/25 hover:text-white/50'}`}
-      onClick={() => { setVal(hasOverride ? displayVal : ''); setEditing(true) }}
-      title={hasOverride ? 'Override active — click to edit or clear' : 'Click to set override'}
-    >
-      {hasOverride ? fmtStoredBps(user.fee_override_bps as number) : '—'}
-    </button>
+      className="text-[9px] text-white/20 hover:text-emerald-400 transition-colors"
+      onClick={() => setEditing(true)}
+      title="Grant free fee period"
+    >+ free</button>
   )
 }
 
@@ -358,6 +434,9 @@ export default function AdminUsers() {
 
   function handleFeeUpdated(id: string, override: number | null) {
     setUsers(prev => prev.map(u => u.id === id ? { ...u, fee_override_bps: override } : u))
+  }
+  function handleUserPatched(id: string, patch: Partial<AdminUser>) {
+    setUsers(prev => prev.map(u => u.id === id ? { ...u, ...patch } : u))
   }
 
   async function handleStop(userId: string, mode: 'soft' | 'hard') {
@@ -404,7 +483,7 @@ export default function AdminUsers() {
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-white/[0.06]">
-              {['', 'Name', 'Wallet', 'USDC', 'ETH', 'Trading Bal', 'Override fee', 'XP fee', 'Trading Vol', 'Bot PnL', 'Session', ''].map((h, i) => (
+              {['', 'Name', 'Wallet', 'USDC', 'ETH', 'Trading Bal', 'Override fee', 'Free fee', 'XP fee', 'Trading Vol', 'Bot PnL', 'Session', ''].map((h, i) => (
                 <th key={i} className="text-left px-3 py-2 text-[10px] text-white/25 font-semibold uppercase tracking-wider">
                   {h}
                 </th>
@@ -465,6 +544,11 @@ export default function AdminUsers() {
                 {/* Fee override (editable) */}
                 <td className="px-3 py-2.5">
                   <FeeOverrideCell user={u} onUpdated={handleFeeUpdated} />
+                </td>
+
+                {/* Free fee period */}
+                <td className="px-3 py-2.5">
+                  <GrantFreeFeeCell user={u} onUpdated={handleUserPatched} />
                 </td>
 
                 {/* XP-computed fee */}

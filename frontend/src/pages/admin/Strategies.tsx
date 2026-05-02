@@ -760,6 +760,14 @@ function StrategyDetail({ onRefreshList }: { onRefreshList?: () => void }) {
   const [settings, setSettings] = useState({ name: '', reserve_pct: 5, fee_side: 'none', new_user_free_fee_days: 0 })
   const [savingSettings, setSavingSettings] = useState(false)
   const [publishedSlots, setPublishedSlots] = useState<Record<string, any>>({})  // slot_id → published slot data
+  const [freeFeeUsers, setFreeFeeUsers] = useState<import('../../types').AdminUser[]>([])
+
+  const loadFreeFeeUsers = useCallback(() => {
+    api.admin.listUsers().then((users: any[]) => {
+      const now = Date.now()
+      setFreeFeeUsers(users.filter((u: any) => u.free_fee_ends_at && new Date(u.free_fee_ends_at).getTime() > now))
+    }).catch(() => {})
+  }, [])
 
   const load = useCallback(() => {
     const t0 = performance.now()
@@ -782,6 +790,7 @@ function StrategyDetail({ onRefreshList }: { onRefreshList?: () => void }) {
   }, [])
 
   useEffect(() => { load() }, [load])
+  useEffect(() => { loadFreeFeeUsers() }, [loadFreeFeeUsers])
 
   useEffect(() => {
     if (tab === 'volume') {
@@ -1257,11 +1266,27 @@ function StrategyDetail({ onRefreshList }: { onRefreshList?: () => void }) {
               </select>
             </div>
             <div>
-              <div className="label-dense mb-1">Free fee period <span className="text-white/30">(days for new users)</span></div>
+              <div className="label-dense mb-1">Free fee period <span className="text-white/30">(days for new users, 0 = disabled)</span></div>
               <input className="input-sm w-full" type="number" step="1" min={0} max={365} value={settings.new_user_free_fee_days}
                 onChange={e => setSettings(s => ({ ...s, new_user_free_fee_days: +e.target.value }))} />
-              <div className="text-[10px] text-white/25 mt-1">0 = disabled. New users get fee_override=0 for this many days after onboarding.</div>
             </div>
+            {/* Active free-fee users */}
+            {freeFeeUsers.length > 0 && (
+              <div className="col-span-2">
+                <div className="label-dense mb-2">Active free-fee users <span className="text-white/30">({freeFeeUsers.length})</span></div>
+                <div className="space-y-1">
+                  {freeFeeUsers.map(u => {
+                    const daysLeft = Math.max(1, Math.ceil((new Date(u.free_fee_ends_at!).getTime() - Date.now()) / 86_400_000))
+                    return (
+                      <div key={u.id} className="flex items-center justify-between px-2 py-1 rounded bg-emerald-950/30 border border-emerald-500/10">
+                        <span className="text-[11px] text-white/70 font-mono">{u.display_name || u.wallet_address?.slice(0, 10)}</span>
+                        <span className="text-[10px] text-emerald-400/80 font-mono">{daysLeft}d left</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
           </div>
           <div className="flex justify-end">
             <button className="btn-primary text-xs" disabled={savingSettings} onClick={saveSettings}>

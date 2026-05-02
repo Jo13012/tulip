@@ -16,6 +16,7 @@ export interface AppUser {
   fee_bps?: number
   fee_override_bps?: number | null
   free_fee_active?: boolean
+  free_fee_ends_at?: string | null
 }
 
 // ── Profile ───────────────────────────────────────────────────────────────────
@@ -81,6 +82,7 @@ export interface AdminUser {
   session_status:      string | null
   session_live:        boolean
   created_at:          string
+  free_fee_ends_at:    string | null
 }
 
 // ── Strategy ─────────────────────────────────────────────────────────────────

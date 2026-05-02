@@ -52,6 +52,7 @@ class UserProfile(BaseModel):
     onboarding_complete: bool = False
     fee_override_bps: int | None = None
     free_fee_active: bool = False
+    free_fee_ends_at: str | None = None
 
 
 class UpdateDisplayNameRequest(BaseModel):
@@ -380,6 +381,7 @@ async def sync_user(request: Request, body: SyncRequest):
         onboarding_complete=existing_wallet.onboarding_complete if existing_wallet else False,
         fee_override_bps=user.fee_override_bps,
         free_fee_active=_free_fee_active(user),
+        free_fee_ends_at=user.free_fee_ends_at.isoformat() if user and user.free_fee_ends_at else None,
     )
 
 
@@ -413,6 +415,7 @@ async def get_me(user: CurrentUser):
         onboarding_complete=wallet.onboarding_complete if wallet else False,
         fee_override_bps=db_user.fee_override_bps if db_user else None,
         free_fee_active=_free_fee_active(db_user),
+        free_fee_ends_at=db_user.free_fee_ends_at.isoformat() if db_user and db_user.free_fee_ends_at else None,
     )
 
 
@@ -462,4 +465,5 @@ async def update_profile(body: UpdateDisplayNameRequest, user: CurrentUser):
         onboarding_complete=wallet.onboarding_complete if wallet else False,
         fee_override_bps=db_user.fee_override_bps if db_user else None,
         free_fee_active=_free_fee_active(db_user),
+        free_fee_ends_at=db_user.free_fee_ends_at.isoformat() if db_user and db_user.free_fee_ends_at else None,
     )
