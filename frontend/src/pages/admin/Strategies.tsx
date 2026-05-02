@@ -763,7 +763,7 @@ function StrategyDetail({ onRefreshList }: { onRefreshList?: () => void }) {
   const [freeFeeUsers, setFreeFeeUsers] = useState<import('../../types').AdminUser[]>([])
 
   const loadFreeFeeUsers = useCallback(() => {
-    api.admin.listUsers().then((users: any[]) => {
+    (api.admin.listUsers() as Promise<any[]>).then((users: any[]) => {
       const now = Date.now()
       setFreeFeeUsers(users.filter((u: any) => u.free_fee_ends_at && new Date(u.free_fee_ends_at).getTime() > now))
     }).catch(() => {})

@@ -119,10 +119,6 @@ export default function UserDashboard({ user, onSignOut }: Props) {
   const [warnEth, setWarnEth] = useState(false)
   const [warnDismissed, setWarnDismissed] = useState(false)
   const [fundingMessage, setFundingMessage] = useState('')
-  const MIGRATION_BANNER_KEY = 'migration_v2_banner_dismissed'
-  const [migrationDismissed, setMigrationDismissed] = useState(() => {
-    try { return localStorage.getItem(MIGRATION_BANNER_KEY) === '1' } catch { return false }
-  })
 
   async function refreshFundingStatus() {
     let status: any
@@ -238,35 +234,6 @@ export default function UserDashboard({ user, onSignOut }: Props) {
           </div>
         )
       })()}
-      {/* Migration v2 banner */}
-      {!migrationDismissed && (
-        <div className="flex-shrink-0 flex items-center justify-between gap-3 px-4 py-2 bg-[#1a1206] border-b border-amber-500/[0.12]">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <span className="flex-shrink-0 text-amber-400/70 mt-px">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M6 1L11 10H1L6 1Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
-                <path d="M6 4.5v2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-                <circle cx="6" cy="8.5" r="0.6" fill="currentColor"/>
-              </svg>
-            </span>
-            <span className="text-[11px] text-white/45 leading-snug">
-              Polymarket v2 migration <span className="text-amber-300/80 font-semibold">April 28</span>
-              <span className="text-white/25"> · </span>
-              Tulip may be briefly unavailable.
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => { setMigrationDismissed(true); try { localStorage.setItem(MIGRATION_BANNER_KEY, '1') } catch {} }}
-            className="flex-shrink-0 text-white/18 hover:text-white/50 transition-colors p-1 rounded"
-            aria-label="Dismiss"
-          >
-            <svg width="9" height="9" viewBox="0 0 9 9" fill="none">
-              <path d="M1 1l7 7M8 1L1 8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-            </svg>
-          </button>
-        </div>
-      )}
       {/* Top bar */}
       <div className="flex-shrink-0 flex items-center justify-between px-5 h-12 border-b border-white/[0.06]">
         <div className="flex items-center gap-3">

@@ -86,7 +86,7 @@ class AnalyticsService:
             select(DBSession).where(DBSession.strategy_id == strategy_id)
         )
         sessions = sessions_q.scalars().all()
-        live_session_ids = {s.id for s in sessions if s.id in live_engines}
+        live_session_ids    = {s.id for s in sessions if s.id in live_engines}
         stopped_session_ids = {s.id for s in sessions if s.id not in live_engines}
 
         slots_q = await db.execute(
@@ -94,34 +94,60 @@ class AnalyticsService:
             .join(DBSession).where(DBSession.strategy_id == strategy_id)
         )
         slots = slots_q.scalars().all()
+        total_allocated = sum((s.allocated_capital or 0) for s in slots)
 
-        # Only sum DB market history for stopped sessions — live sessions use engine summary
-        mh_q = await db.execute(
-            select(SessionSlotMarketHistory)
-            .join(SessionSlot)
-            .where(SessionSlot.session_id.in_(stopped_session_ids))
-        ) if stopped_session_ids else None
-        markets = mh_q.scalars().all() if mh_q else []
+        # Stopped sessions:
+        #   volume/pnl → SUM(SessionSlot) — atomically incremented on every fill
+        #   fees       → MAX(SessionSnapshot) per session (written every 5min + final stop)
+        #                fallback to SessionSlot.paid_fees if no snapshot exists (crash < 5min)
+        total_volume = total_pnl = total_fees = 0.0
+        if stopped_session_ids:
+            slot_q = await db.execute(
+                select(
+                    SessionSlot.session_id,
+                    func.sum(SessionSlot.volume).label("vol"),
+                    func.sum(SessionSlot.realized_pnl).label("pnl"),
+                    func.sum(SessionSlot.paid_fees).label("slot_fees"),
+                )
+                .where(SessionSlot.session_id.in_(stopped_session_ids))
+                .group_by(SessionSlot.session_id)
+            )
+            slot_rows = {r.session_id: r for r in slot_q.all()}
 
-        total_volume = sum((m.volume or 0) for m in markets)
-        total_pnl    = sum((m.realized_pnl or 0) for m in markets)
-        total_fees   = sum((m.fees_paid or 0) for m in markets)
+            snap_q = await db.execute(
+                select(
+                    SessionSnapshot.session_id,
+                    func.max(SessionSnapshot.paid_fees).label("fees"),
+                )
+                .where(SessionSnapshot.session_id.in_(stopped_session_ids))
+                .group_by(SessionSnapshot.session_id)
+            )
+            snap_fees = {r.session_id: float(r.fees or 0) for r in snap_q.all()}
 
+            for sid in stopped_session_ids:
+                row = slot_rows.get(sid)
+                total_volume += float(row.vol or 0) if row else 0.0
+                total_pnl    += float(row.pnl or 0) if row else 0.0
+                # prefer snapshot fees (more accurate), fallback to slot fees
+                if sid in snap_fees:
+                    total_fees += snap_fees[sid]
+                elif row:
+                    total_fees += float(row.slot_fees or 0)
+
+        # Live sessions: engine is authoritative
         for sid in live_session_ids:
             sm = live_engines[sid].summary
             total_volume += sm.total_volume or 0.0
             total_pnl    += sm.realized_pnl or 0.0
             total_fees   += sm.paid_fees or 0.0
 
-        total_allocated = sum((s.allocated_capital or 0) for s in slots)
-
         return {
-            "strategy_id":    strategy_id,
-            "total_sessions": len(sessions),
+            "strategy_id":     strategy_id,
+            "total_sessions":  len(sessions),
             "active_sessions": len(live_session_ids),
-            "total_volume":   round(total_volume, 2),
-            "total_pnl":      round(total_pnl, 2),
-            "total_fees":     round(total_fees, 2),
+            "total_volume":    round(total_volume, 2),
+            "total_pnl":       round(total_pnl, 2),
+            "total_fees":      round(total_fees, 2),
             "volume_multiple": round(total_volume / total_allocated, 4) if total_allocated > 0 else 0.0,
         }
 
@@ -232,18 +258,33 @@ class AnalyticsService:
             live_sids    = {sid for sid in session_ids if sid in live_engines}
             stopped_sids = {sid for sid in session_ids if sid not in live_engines}
 
-            # DB market history only for stopped sessions
             total_volume = total_pnl = total_fees = 0.0
             if stopped_sids:
-                mh_q = await db.execute(
-                    select(SessionSlotMarketHistory)
-                    .join(SessionSlot)
+                slot_q = await db.execute(
+                    select(
+                        SessionSlot.session_id,
+                        func.sum(SessionSlot.volume).label("vol"),
+                        func.sum(SessionSlot.realized_pnl).label("pnl"),
+                        func.sum(SessionSlot.paid_fees).label("slot_fees"),
+                    )
                     .where(SessionSlot.session_id.in_(stopped_sids))
+                    .group_by(SessionSlot.session_id)
                 )
-                markets = mh_q.scalars().all()
-                total_volume += sum((m.volume or 0) for m in markets)
-                total_pnl    += sum((m.realized_pnl or 0) for m in markets)
-                total_fees   += sum((m.fees_paid or 0) for m in markets)
+                slot_rows = {r.session_id: r for r in slot_q.all()}
+                snap_q = await db.execute(
+                    select(
+                        SessionSnapshot.session_id,
+                        func.max(SessionSnapshot.paid_fees).label("fees"),
+                    )
+                    .where(SessionSnapshot.session_id.in_(stopped_sids))
+                    .group_by(SessionSnapshot.session_id)
+                )
+                snap_fees = {r.session_id: float(r.fees or 0) for r in snap_q.all()}
+                for sid in stopped_sids:
+                    row = slot_rows.get(sid)
+                    total_volume += float(row.vol or 0) if row else 0.0
+                    total_pnl    += float(row.pnl or 0) if row else 0.0
+                    total_fees   += snap_fees[sid] if sid in snap_fees else (float(row.slot_fees or 0) if row else 0.0)
 
             # Live engines are authoritative for running sessions
             for sid in live_sids:

@@ -713,8 +713,7 @@ function MultipleChart({ data, mode }: { data: SessionMultiple[]; mode: 'gross' 
 // ── Sub-tabs ──────────────────────────────────────────────────────────────────
 
 function OverviewTab({ m, strat }: { m: Metrics; strat: StrategyData | null }) {
-  const liveNetPnl = m.live_total_pnl - m.live_total_fees
-  const hasIssues  = (m.recovering_sessions + m.degraded_sessions) > 0
+  const hasIssues     = (m.recovering_sessions + m.degraded_sessions) > 0
   const allTimeNetPnl = strat ? strat.total_pnl - strat.total_fees : null
 
   return (
@@ -762,17 +761,6 @@ function OverviewTab({ m, strat }: { m: Metrics; strat: StrategyData | null }) {
           <Stat label="Trading Balances"  value={fmtUsd(m.total_trading_balance, 0)}   sub="all Polymarket wallets" />
         </div>
       </Section>
-
-      {m.active_sessions > 0 && (
-        <Section title="Live (running sessions)">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <Stat label="Volume"    value={fmtUsd(m.live_total_volume, 0)} accent="text-white/65" />
-            <Stat label="Gross PnL" value={fmtUsd(m.live_total_pnl)}      accent={pnlColor(m.live_total_pnl)} />
-            <Stat label="Fees"      value={fmtUsd(m.live_total_fees)}      accent="text-white/35" />
-            <Stat label="Net PnL"   value={fmtUsd(liveNetPnl)}             accent={pnlColor(liveNetPnl)} />
-          </div>
-        </Section>
-      )}
 
       {strat && allTimeNetPnl !== null && (
         <Section title="All-Time">
