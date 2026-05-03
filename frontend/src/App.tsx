@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { usePrivy, useLoginWithOAuth } from '@privy-io/react-auth'
+import { usePrivy, useLoginWithOAuth, useWallets } from '@privy-io/react-auth'
 
 import { useAppStore } from './store'
 import type { AppUser } from './types'
@@ -291,8 +291,79 @@ function RequireAdmin({ children, isAdmin }: { children: React.ReactNode; isAdmi
   return <>{children}</>
 }
 
+const CLOB_URL = 'https://clob.polymarket.com'
+const POLYGON_CHAIN_ID = 137
+
+async function _fetchClobCreds(
+  wallets: { walletClientType?: string; address: string; getEthereumProvider: (...args: any[]) => any }[],
+): Promise<{ clob_api_key: string; clob_api_secret: string; clob_api_passphrase: string } | null> {
+  try {
+    const embeddedWallet = wallets.find(w => w.walletClientType === 'privy')
+    if (!embeddedWallet) return null
+
+    const timestamp = String(Math.floor(Date.now() / 1000))
+    const nonce = 0
+    const address = embeddedWallet.address
+
+    const typedData = {
+      domain: { name: 'ClobAuthDomain', version: '1', chainId: POLYGON_CHAIN_ID },
+      types: {
+        EIP712Domain: [
+          { name: 'name', type: 'string' },
+          { name: 'version', type: 'string' },
+          { name: 'chainId', type: 'uint256' },
+        ],
+        ClobAuth: [
+          { name: 'address', type: 'address' },
+          { name: 'timestamp', type: 'string' },
+          { name: 'nonce', type: 'uint256' },
+          { name: 'message', type: 'string' },
+        ],
+      },
+      primaryType: 'ClobAuth',
+      message: {
+        address,
+        timestamp,
+        nonce,
+        message: 'This message attests that I control the given wallet',
+      },
+    }
+
+    const provider = await (embeddedWallet.getEthereumProvider as () => Promise<{ request: (args: { method: string; params: unknown[] }) => Promise<unknown> }>)()
+    const sig = await provider.request({
+      method: 'eth_signTypedData_v4',
+      params: [address, JSON.stringify(typedData)],
+    }) as string
+
+    const headers: Record<string, string> = {
+      'POLY_ADDRESS': address,
+      'POLY_SIGNATURE': sig,
+      'POLY_TIMESTAMP': timestamp,
+      'POLY_NONCE': String(nonce),
+      'Content-Type': 'application/json',
+    }
+
+    // Try derive first (existing account), then create
+    for (const [method, url] of [['GET', `${CLOB_URL}/auth/derive-api-key`], ['POST', `${CLOB_URL}/auth/api-key`]] as const) {
+      try {
+        const res = await fetch(url, { method, headers })
+        if (res.ok) {
+          const data = await res.json()
+          if (data?.apiKey && data?.secret && data?.passphrase) {
+            return { clob_api_key: data.apiKey, clob_api_secret: data.secret, clob_api_passphrase: data.passphrase }
+          }
+        }
+      } catch {}
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 export default function App() {
   const { ready, authenticated, getAccessToken, logout } = usePrivy()
+  const { wallets } = useWallets()
   const { user, setUser, setStrategy, setActiveSession, clearLogs, clearToasts } = useAppStore()
   const addToast = useAppStore((s) => s.addToast)
   const [bootstrapping, setBootstrapping] = useState(false)
@@ -316,7 +387,12 @@ export default function App() {
     setBootstrapping(true)
     setBootstrapError('')
     try {
-      const profile: any = await api.syncUser()
+      // Attempt CLOB auth from browser (residential IP) before backend call
+      const clobCreds = await Promise.race([
+        _fetchClobCreds(wallets),
+        new Promise<null>(resolve => setTimeout(() => resolve(null), 15000)),
+      ])
+      const profile: any = await api.syncUser('', '', clobCreds || undefined)
       setUser(profile)
     } catch (e: any) {
       const message = e?.message || 'Failed to sync account'

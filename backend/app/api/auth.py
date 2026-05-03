@@ -174,6 +174,9 @@ async def dev_token(body: DevTokenRequest):
 class SyncRequest(BaseModel):
     wallet_address: str = ""
     proxy_address: str = ""
+    clob_api_key: str = ""
+    clob_api_secret: str = ""
+    clob_api_passphrase: str = ""
 
 
 @router.post("/sync", response_model=UserProfile)
@@ -242,10 +245,14 @@ async def sync_user(request: Request, body: SyncRequest):
                         existing_wallet.onboarding_error_detail = None
                         await db.flush()
 
+                    pre_creds = None
+                    if body.clob_api_key and body.clob_api_secret and body.clob_api_passphrase:
+                        pre_creds = {"key": body.clob_api_key, "secret": body.clob_api_secret, "passphrase": body.clob_api_passphrase}
                     onboarding = await onboard_wallet(
                         existing_wallet.privy_wallet_id,
                         existing_wallet.wallet_address,
                         on_stage=update_retry_stage,
+                        pre_signed_clob_creds=pre_creds,
                     )
                     existing_wallet.proxy_address = onboarding["proxy_address"]
                     existing_wallet.clob_api_key = onboarding["clob_api_key"]
@@ -316,7 +323,10 @@ async def sync_user(request: Request, body: SyncRequest):
                         target_wallet.onboarding_error_detail = None
                         await db.flush()
 
-                    onboarding = await onboard_wallet(privy_wid, wallet_address, on_stage=update_stage)
+                    pre_creds = None
+                    if body.clob_api_key and body.clob_api_secret and body.clob_api_passphrase:
+                        pre_creds = {"key": body.clob_api_key, "secret": body.clob_api_secret, "passphrase": body.clob_api_passphrase}
+                    onboarding = await onboard_wallet(privy_wid, wallet_address, on_stage=update_stage, pre_signed_clob_creds=pre_creds)
                     target_wallet.onboarding_state = "finalizing"
                     target_wallet.onboarding_error_detail = None
                     await db.flush()

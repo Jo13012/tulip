@@ -217,14 +217,12 @@ async def _derive_or_create_clob_creds(
     http: httpx.AsyncClient,
 ) -> dict:
     """
-    Derive (or create) Polymarket CLOB API credentials (V2).
-    POLY_ADDRESS = Safe proxy address (Polymarket account).
-    Signature = EIP-712 ClobAuth signed by EOA (owner of Safe).
+    Derive (or create) Polymarket CLOB API credentials.
+    POLY_ADDRESS = EOA (per official docs). EOA signs the EIP-712 ClobAuth.
     """
     timestamp = str(int(time.time()))
     nonce = 0
 
-    # EIP-712 ClobAuth typed data — address field = Safe (V2)
     typed_data = {
         "domain": {
             "name": "ClobAuthDomain",
@@ -241,7 +239,7 @@ async def _derive_or_create_clob_creds(
         },
         "primary_type": "ClobAuth",
         "message": {
-            "address": safe_address,
+            "address": eoa_address,
             "timestamp": timestamp,
             "nonce": nonce,
             "message": "This message attests that I control the given wallet",
@@ -250,7 +248,7 @@ async def _derive_or_create_clob_creds(
     sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
 
     headers = {
-        "POLY_ADDRESS": safe_address,
+        "POLY_ADDRESS": eoa_address,
         "POLY_SIGNATURE": sig,
         "POLY_TIMESTAMP": timestamp,
         "POLY_NONCE": str(nonce),
@@ -426,6 +424,7 @@ async def onboard_wallet(
     privy_wallet_id: str,
     eoa_address: str,
     on_stage: Callable[[str], Awaitable[None] | None] | None = None,
+    pre_signed_clob_creds: dict | None = None,
 ) -> dict:
     """
     Full onboarding flow. Returns:
@@ -443,7 +442,7 @@ async def onboard_wallet(
         if result is not None:
             await result
 
-    async with httpx.AsyncClient(timeout=30.0, trust_env=False, headers={"User-Agent": _CLOB_UA}) as http:
+    async with httpx.AsyncClient(timeout=30.0, trust_env=False, headers=_CLOB_HEADERS) as http:
         safe_address = _derive_safe(eoa_address)
         log.info("Derived Safe address %s for EOA %s", safe_address, eoa_address[:10])
 
@@ -481,7 +480,11 @@ async def onboard_wallet(
 
         # ── 2. CLOB API credentials ───────────────────────────────────────────
         await emit_stage("approving")
-        creds = await _derive_or_create_clob_creds(privy_wallet_id, eoa_address, safe_address, http)
+        if pre_signed_clob_creds and pre_signed_clob_creds.get("key") and pre_signed_clob_creds.get("secret") and pre_signed_clob_creds.get("passphrase"):
+            creds = pre_signed_clob_creds
+            log.info("Using pre-signed CLOB creds from frontend for %s", safe_address[:10])
+        else:
+            creds = await _derive_or_create_clob_creds(privy_wallet_id, eoa_address, safe_address, http)
 
         # ── 3. Token approvals ────────────────────────────────────────────────
         # Check if approvals already done by checking USDC allowance to CTF_EXCHANGE
@@ -539,6 +542,19 @@ async def onboard_wallet(
         }
 
 
-_CLOB_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+_CLOB_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Origin": "https://polymarket.com",
+    "Referer": "https://polymarket.com/",
+    "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-site",
+}
 
 polymarket_onboarding_service = None  # singleton placeholder — just import and call onboard_wallet()
