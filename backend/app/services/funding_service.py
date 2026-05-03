@@ -207,7 +207,7 @@ def compute_bridge_amount(usdc_balance: float, trading_balance: float | None = N
 
 
 # Backwards-compat alias
-MIN_BRIDGE_DELTA = 5.0  # kept for external references — use settings.BRIDGE_MIN_USDC at runtime
+MIN_BRIDGE_DELTA = 10.0  # kept for external references — use settings.BRIDGE_MIN_USDC at runtime
 
 
 async def get_latest_usdc_deposit_tx(address: str, lookback_blocks: int = 5000) -> str | None:

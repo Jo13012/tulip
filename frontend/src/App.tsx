@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { usePrivy, useLoginWithOAuth, useWallets } from '@privy-io/react-auth'
+import { usePrivy, useLoginWithOAuth } from '@privy-io/react-auth'
 
 import { useAppStore } from './store'
 import type { AppUser } from './types'
@@ -295,11 +295,11 @@ const CLOB_URL = 'https://clob.polymarket.com'
 const POLYGON_CHAIN_ID = 137
 
 async function _signAndFetchClobCreds(
-  wallet: { address: string; getEthereumProvider: (...args: any[]) => any },
+  address: string,
+  signTypedData: (input: any) => Promise<{ signature: string }>,
 ): Promise<{ clob_api_key: string; clob_api_secret: string; clob_api_passphrase: string } | null> {
   const timestamp = String(Math.floor(Date.now() / 1000))
   const nonce = 0
-  const address = wallet.address
 
   const typedData = {
     domain: { name: 'ClobAuthDomain', version: '1', chainId: POLYGON_CHAIN_ID },
@@ -320,11 +320,7 @@ async function _signAndFetchClobCreds(
     },
   }
 
-  const provider = await (wallet.getEthereumProvider as () => Promise<{ request: (args: { method: string; params: unknown[] }) => Promise<unknown> }>)()
-  const sig = await provider.request({
-    method: 'eth_signTypedData_v4',
-    params: [address, JSON.stringify(typedData)],
-  }) as string
+  const { signature: sig } = await signTypedData(typedData)
 
   const headers: Record<string, string> = {
     'POLY_ADDRESS': address,
@@ -349,35 +345,8 @@ async function _signAndFetchClobCreds(
   return null
 }
 
-async function _fetchClobCreds(
-  getWallets: () => { walletClientType?: string; address: string; getEthereumProvider: (...args: any[]) => any }[],
-  timeoutMs = 10000,
-): Promise<{ clob_api_key: string; clob_api_secret: string; clob_api_passphrase: string } | null> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    const all = getWallets()
-    const embeddedWallet = all.find(w => w.walletClientType === 'privy')
-    if (embeddedWallet) {
-      try {
-        const result = await _signAndFetchClobCreds(embeddedWallet)
-        console.log('[clob] signing result=', !!result)
-        return result
-      } catch (e) {
-        console.error('[clob] signing error=', e)
-        return null
-      }
-    }
-    await new Promise(r => setTimeout(r, 1000))
-  }
-  console.warn('[clob] timeout: no embedded wallet after', timeoutMs, 'ms')
-  return null
-}
-
 export default function App() {
-  const { ready, authenticated, getAccessToken, logout } = usePrivy()
-  const { wallets } = useWallets()
-  const walletsRef = useRef(wallets)
-  walletsRef.current = wallets
+  const { ready, authenticated, getAccessToken, logout, signTypedData } = usePrivy()
   const { user, setUser, setStrategy, setActiveSession, clearLogs, clearToasts } = useAppStore()
   const addToast = useAppStore((s) => s.addToast)
   const [bootstrapping, setBootstrapping] = useState(false)
@@ -397,14 +366,13 @@ export default function App() {
     } catch {}
   }, [])
 
-  async function _submitClobCredsWhenReady() {
-    // Poll until embedded wallet available (max 90s), then sign and submit CLOB creds
-    const creds = await _fetchClobCreds(() => walletsRef.current, 90000)
-    if (!creds) {
-      console.warn('[clob] could not get CLOB creds to submit')
-      return
-    }
+  async function _submitClobCreds(walletAddress: string) {
     try {
+      const creds = await _signAndFetchClobCreds(walletAddress, signTypedData)
+      if (!creds) {
+        console.warn('[clob] signing returned null')
+        return
+      }
       await api.submitClobCreds(creds)
       console.log('[clob] creds submitted to backend')
     } catch (e) {
@@ -416,14 +384,11 @@ export default function App() {
     setBootstrapping(true)
     setBootstrapError('')
     try {
-      // Try fast path: get CLOB creds before syncUser (wallet already available)
-      const clobCreds = await _fetchClobCreds(() => walletsRef.current, 3000)
-      console.log('[bootstrap] clob_from_frontend=', !!clobCreds)
-      const profile: any = await api.syncUser('', '', clobCreds || undefined)
+      const profile: any = await api.syncUser()
       setUser(profile)
-      // If we didn't get creds yet, submit them async while onboarding runs in background
-      if (!clobCreds) {
-        _submitClobCredsWhenReady()
+      // Submit CLOB creds if onboarding not yet complete (new user or retry)
+      if (profile?.wallet_address && !profile?.onboarding_complete) {
+        _submitClobCreds(profile.wallet_address)
       }
     } catch (e: any) {
       const message = e?.message || 'Failed to sync account'
