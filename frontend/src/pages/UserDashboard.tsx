@@ -18,9 +18,10 @@ import { HistoryTab } from '../components/user/HistoryTab'
 import { PerformanceTab } from '../components/user/PerformanceTab'
 import { SettingsTab } from '../components/user/SettingsTab'
 import { ProfileTab } from '../components/user/ProfileTab'
+import { ReferralTab } from '../components/user/ReferralTab'
 import { FaqTab } from '../components/user/FaqTab'
 
-type Tab = 'run' | 'history' | 'performance' | 'profile' | 'settings' | 'faq'
+type Tab = 'run' | 'history' | 'performance' | 'profile' | 'referral' | 'settings' | 'faq'
 
 interface Props {
   user: AppUser
@@ -256,7 +257,7 @@ export default function UserDashboard({ user, onSignOut }: Props) {
             </Link>
           )}
           <button
-            onClick={() => setTab('profile')}
+            onClick={() => setTab('referral')}
             className="group flex items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-500/[0.12] px-2.5 py-1 text-emerald-300/90 hover:bg-emerald-500/[0.16] hover:border-emerald-300/30 transition-colors"
             title="Open rewards"
           >
@@ -343,7 +344,7 @@ export default function UserDashboard({ user, onSignOut }: Props) {
       {/* Tab bar */}
       <div className="flex-shrink-0 border-b border-white/[0.06]">
         <div className="w-[80%] mx-auto flex">
-          {(['run', 'history', 'performance', 'profile', 'settings'] as Tab[]).map((t) => (
+          {(['run', 'history', 'performance', 'profile', 'referral', 'settings'] as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -388,6 +389,7 @@ export default function UserDashboard({ user, onSignOut }: Props) {
           {tab === 'history' && <HistoryTab />}
           {tab === 'performance' && <PerformanceTab />}
           {tab === 'profile' && <ProfileTab user={user} />}
+          {tab === 'referral' && <ReferralTab user={user} />}
           {tab === 'settings' && <SettingsTab user={user} onSignOut={onSignOut} />}
           {tab === 'faq' && <FaqTab />}
         </div>

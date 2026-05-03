@@ -3,10 +3,9 @@ import { usePrivy } from '@privy-io/react-auth'
 import type { AppUser, ProfileData } from '../../types'
 import { useAppStore } from '../../store'
 import { api } from '../../utils/api'
-import { fmtUsd, pnlColor, fmtStoredBps, fmtStoredBpsPct } from '../../utils/format'
+import { pnlColor, fmtStoredBps, fmtStoredBpsPct, fmtUsd } from '../../utils/format'
 import { XPModal } from './XPModal'
 import { BridgeHistoryModal } from './BridgeHistoryModal'
-import { ReferralHistoryModal } from './ReferralHistoryModal'
 import { FundingModal } from './OnboardingModal'
 import { Section, Row, AddressField, GhostButton } from '../ui/Field'
 
@@ -33,7 +32,6 @@ function writeCache(uid: string, data: ProfileData) {
 
 export function ProfileTab({ user }: Props) {
   const addToast = useAppStore(s => s.addToast)
-  const setUser = useAppStore(s => s.setUser)
   const fundingStatus = useAppStore(s => s.fundingStatus)
   usePrivy()
 
@@ -42,12 +40,9 @@ export function ProfileTab({ user }: Props) {
   const [loading, setLoading] = useState(!cached)
   const [xpOpen, setXpOpen] = useState(false)
   const [bridgeHistoryOpen, setBridgeHistoryOpen] = useState(false)
-  const [referralHistoryOpen, setReferralHistoryOpen] = useState(false)
   const [fundingModalOpen, setFundingModalOpen] = useState(false)
   const [forcingFunding, setForcingFunding] = useState(false)
   const [fundTab, setFundTab] = useState<'deposit' | 'withdraw'>('deposit')
-  const [referrerInput, setReferrerInput] = useState(user.referrer_username || '')
-  const [savingReferrer, setSavingReferrer] = useState(false)
 
   useEffect(() => {
     api.getProfile().then((d: any) => {
@@ -55,10 +50,6 @@ export function ProfileTab({ user }: Props) {
       writeCache(user.user_id, d)
     }).catch(() => {}).finally(() => setLoading(false))
   }, [user.user_id])
-
-  useEffect(() => {
-    setReferrerInput(user.referrer_username || profile?.referrer_username || '')
-  }, [user.referrer_username, profile?.referrer_username])
 
   async function handleForceFunding() {
     setForcingFunding(true)
@@ -70,40 +61,6 @@ export function ProfileTab({ user }: Props) {
       addToast({ type: 'error', message: e?.message ?? 'Funding fix failed' })
     } finally {
       setForcingFunding(false)
-    }
-  }
-
-  async function handleSaveReferrer() {
-    const username = referrerInput.trim()
-    if (!username) {
-      addToast({ type: 'error', message: 'Enter a referrer username' })
-      return
-    }
-    setSavingReferrer(true)
-    try {
-      await api.lookupReferrer(username)
-      const assigned = await api.assignReferrer(username) as any
-      const nextReferrer = assigned.referrer_username || username
-      const nextProfile: ProfileData = {
-        trading_volume: profile?.trading_volume ?? 0,
-        bot_pnl: profile?.bot_pnl ?? 0,
-        fee_bps: profile?.fee_bps ?? 120,
-        fee_is_overridden: profile?.fee_is_overridden ?? false,
-        wallet_volume: profile?.wallet_volume ?? 0,
-        wallet_pnl: profile?.wallet_pnl ?? 0,
-        referrer_username: nextReferrer,
-        can_set_referrer: false,
-        referral_reward_usdc: profile?.referral_reward_usdc ?? 0,
-      }
-      setProfile(nextProfile)
-      writeCache(user.user_id, nextProfile)
-      setUser({ ...user, referrer_username: nextReferrer })
-      setReferrerInput(nextReferrer)
-      addToast({ type: 'success', message: 'Referrer saved' })
-    } catch (e: any) {
-      addToast({ type: 'warning', message: e?.message || 'Unable to set this referrer.' })
-    } finally {
-      setSavingReferrer(false)
     }
   }
 
@@ -124,9 +81,6 @@ export function ProfileTab({ user }: Props) {
   const needsAction = Boolean(fundingStatus?.needs_usdc || fundingStatus?.needs_eth || fundingStatus?.funding_state === 'failed')
   const isSuggested = Boolean((fundingStatus?.warn_usdc || fundingStatus?.warn_eth) && !needsAction)
   const isReady = !needsAction && !isSuggested && fundingStatus != null
-  const resolvedReferrer = profile?.referrer_username || user.referrer_username || ''
-  const canSetReferrer = Boolean(profile?.can_set_referrer && !resolvedReferrer)
-  const referralLink = user.display_name ? `${window.location.origin}/?r=${encodeURIComponent(user.display_name)}` : ''
 
   const statusLabel = needsAction ? 'Action needed' : isSuggested ? 'Top up suggested' : isReady ? 'Ready' : 'Checking...'
   const statusColor = needsAction
@@ -196,62 +150,6 @@ export function ProfileTab({ user }: Props) {
                 </span>
               </Row>
             )}
-          </Section>
-
-          <Section title="Referral">
-            <Row label="Your referrer">
-              {canSetReferrer ? (
-                <>
-                  <input
-                    type="text"
-                    value={referrerInput}
-                    onChange={(e) => setReferrerInput(e.target.value.replace(/[^A-Za-z0-9]/g, ''))}
-                    placeholder="Enter username"
-                    maxLength={15}
-                    className="w-full max-w-[220px] bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[12px] text-white placeholder-white/20 outline-none transition-colors focus:border-white/20"
-                  />
-                  <button
-                    disabled={savingReferrer || !referrerInput.trim()}
-                    onClick={handleSaveReferrer}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.09] text-white/40 hover:text-white/70 transition-all text-[10px] font-semibold disabled:opacity-30 disabled:cursor-not-allowed"
-                  >
-                    {savingReferrer ? 'Saving...' : 'Set referrer'}
-                  </button>
-                </>
-              ) : (
-                <span className="text-[12px] font-mono font-semibold text-white/65">
-                  {resolvedReferrer || dots}
-                </span>
-              )}
-              {canSetReferrer ? (<p className="text-[11px] text-white/40 leading-relaxed">
-                Enter your referrer&apos;s username to link your account. Referrer can only be set once.
-              </p>) : (<></>)}
-            
-            </Row>
-
-            <Row label="Rewards">
-              <span className="text-[12px] font-mono font-semibold text-emerald-400">
-                {fmtUsd(profile?.referral_reward_usdc ?? user.referral_reward_usdc ?? 0)}
-              </span>
-
-              <button
-                onClick={() => setReferralHistoryOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.09] text-white/40 hover:text-white/70 transition-all text-[10px] font-semibold"
-              >
-                <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-                  <rect x="1" y="1.5" width="10" height="1.5" rx=".75" fill="currentColor" opacity=".5"/>
-                  <rect x="1" y="5.25" width="7" height="1.5" rx=".75" fill="currentColor" opacity=".7"/>
-                  <rect x="1" y="9" width="4.5" height="1.5" rx=".75" fill="currentColor"/>
-                </svg>
-                View referrals
-              </button>  
-            </Row>
-            <Row label="Custom Link">
-              {referralLink
-                ? <AddressField value={referralLink} />
-                : <span className="text-[11px] text-white/20 font-mono">Set your username first</span>
-              }
-            </Row>
           </Section>
         </div>
 
@@ -423,9 +321,6 @@ export function ProfileTab({ user }: Props) {
       )}
       {bridgeHistoryOpen && (
         <BridgeHistoryModal onClose={() => setBridgeHistoryOpen(false)} />
-      )}
-      {referralHistoryOpen && (
-        <ReferralHistoryModal onClose={() => setReferralHistoryOpen(false)} />
       )}
       {fundingModalOpen && (
         <FundingModal

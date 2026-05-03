@@ -396,7 +396,11 @@ async def sync_user(request: Request, body: SyncRequest):
 
     # Launch onboarding AFTER commit so background task sees committed data
     if _onboard_task_args:
-        _onboard_log.info("Scheduling background onboarding for wallet %s", _onboard_task_args["wallet_id"])
+        _onboard_log.info(
+            "Scheduling background onboarding for wallet %s clob_from_frontend=%s",
+            _onboard_task_args["wallet_id"],
+            bool(_onboard_task_args.get("pre_creds")),
+        )
         asyncio.create_task(_run_onboarding_background(**_onboard_task_args))
 
     return UserProfile(

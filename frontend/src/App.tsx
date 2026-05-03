@@ -355,16 +355,22 @@ async function _fetchClobCreds(
   // Wait up to 6s for embedded wallet to appear (Privy loads it async)
   const deadline = Date.now() + 6000
   while (Date.now() < deadline) {
-    const embeddedWallet = getWallets().find(w => w.walletClientType === 'privy')
+    const all = getWallets()
+    const embeddedWallet = all.find(w => w.walletClientType === 'privy')
+    console.log('[clob] wallets=', all.map(w => w.walletClientType), 'embedded=', !!embeddedWallet)
     if (embeddedWallet) {
       try {
-        return await _signAndFetchClobCreds(embeddedWallet)
-      } catch {
+        const result = await _signAndFetchClobCreds(embeddedWallet)
+        console.log('[clob] signing result=', !!result)
+        return result
+      } catch (e) {
+        console.error('[clob] signing error=', e)
         return null
       }
     }
     await new Promise(r => setTimeout(r, 500))
   }
+  console.warn('[clob] timeout: no embedded wallet after 6s')
   return null
 }
 
@@ -399,6 +405,7 @@ export default function App() {
       // Attempt CLOB auth from browser (residential IP, bypasses Cloudflare block on server IP)
       // _fetchClobCreds polls until the Privy embedded wallet is ready (it loads async)
       const clobCreds = await _fetchClobCreds(() => walletsRef.current)
+      console.log('[bootstrap] clob_from_frontend=', !!clobCreds)
       const profile: any = await api.syncUser('', '', clobCreds || undefined)
       setUser(profile)
     } catch (e: any) {

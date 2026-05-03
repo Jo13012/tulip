@@ -981,9 +981,9 @@ function ReferralsTab() {
     <div className="space-y-1">
       <div className="grid grid-cols-[1fr_60px_110px_110px] gap-2 px-3 py-1.5 text-[9px] font-semibold uppercase tracking-widest text-white/20">
         <span>Referrer</span>
-        <span className="text-right">Filleuls</span>
-        <span className="text-right">Vol. apporté</span>
-        <span className="text-right">Gains</span>
+        <span className="text-right">Referred</span>
+        <span className="text-right">Vol. generated</span>
+        <span className="text-right">Earnings</span>
       </div>
       {rows.map((r, i) => (
         <div key={r.referrer_id}>
@@ -1002,9 +1002,9 @@ function ReferralsTab() {
           {expanded === r.referrer_id && r.referrals.length > 0 && (
             <div className="ml-7 mt-1 mb-1 border-l border-white/[0.05] pl-3 space-y-0.5">
               <div className="grid grid-cols-[1fr_110px_110px] gap-2 px-2 py-1 text-[9px] font-semibold uppercase tracking-widest text-white/15">
-                <span>Filleul</span>
+                <span>Referred user</span>
                 <span className="text-right">Volume</span>
-                <span className="text-right">Parrain gagne</span>
+                <span className="text-right">Referrer earns</span>
               </div>
               {r.referrals.map(u => (
                 <div key={u.user_id} className="grid grid-cols-[1fr_110px_110px] gap-2 px-2 py-1.5 bg-white/[0.02] rounded-lg">
