@@ -352,8 +352,8 @@ async function _signAndFetchClobCreds(
 async function _fetchClobCreds(
   getWallets: () => { walletClientType?: string; address: string; getEthereumProvider: (...args: any[]) => any }[],
 ): Promise<{ clob_api_key: string; clob_api_secret: string; clob_api_passphrase: string } | null> {
-  // Wait up to 12s for embedded wallet to appear (Privy loads it async)
-  const deadline = Date.now() + 12000
+  // Wait up to 6s for embedded wallet to appear (Privy loads it async)
+  const deadline = Date.now() + 6000
   while (Date.now() < deadline) {
     const embeddedWallet = getWallets().find(w => w.walletClientType === 'privy')
     if (embeddedWallet) {
