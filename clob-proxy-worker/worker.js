@@ -12,17 +12,20 @@ export default {
 
     const targetUrl = TARGET + url.pathname + url.search
 
+    const reqHeaders = new Headers(request.headers)
+    reqHeaders.set('Accept-Encoding', 'identity')
+
     const proxiedRequest = new Request(targetUrl, {
       method: request.method,
-      headers: request.headers,
+      headers: reqHeaders,
       body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
     })
 
     const response = await fetch(proxiedRequest)
 
-    // Pass-through avec CORS pour le backend
     const newHeaders = new Headers(response.headers)
     newHeaders.set('Access-Control-Allow-Origin', '*')
+    newHeaders.delete('Content-Encoding')
 
     return new Response(response.body, {
       status: response.status,

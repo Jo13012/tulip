@@ -269,16 +269,24 @@ async def _derive_or_create_clob_creds(
             headers["POLY_SIGNATURE"] = sig
             headers["POLY_TIMESTAMP"] = timestamp
 
+        derive_ok = False
         try:
             resp = await http.get(f"{CLOB_URL}/auth/derive-api-key", headers=headers, timeout=15.0)
             log.info("derive-api-key → %d %s", resp.status_code, resp.text[:200])
+            derive_ok = True
             if resp.is_success:
                 data = resp.json()
                 if data.get("apiKey") and data.get("secret") and data.get("passphrase"):
                     log.info("Derived existing CLOB creds for %s", safe_address[:10])
                     return {"key": data["apiKey"], "secret": data["secret"], "passphrase": data["passphrase"]}
         except Exception as e:
-            log.warning("derive-api-key exception: %s", e)
+            log.warning("derive-api-key exception: %s — will retry", e)
+            last_err = str(e)
+            continue  # don't attempt create if derive errored (proxy/network issue)
+
+        # Only attempt create after a successful derive call (Safe indexed by CLOB)
+        if not derive_ok:
+            continue
 
         try:
             resp = await http.post(f"{CLOB_URL}/auth/api-key", headers=headers, timeout=15.0)
