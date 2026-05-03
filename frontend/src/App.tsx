@@ -291,62 +291,8 @@ function RequireAdmin({ children, isAdmin }: { children: React.ReactNode; isAdmi
   return <>{children}</>
 }
 
-const CLOB_URL = 'https://clob.polymarket.com'
-const POLYGON_CHAIN_ID = 137
-
-async function _signAndFetchClobCreds(
-  address: string,
-  signTypedData: (input: any) => Promise<{ signature: string }>,
-): Promise<{ clob_api_key: string; clob_api_secret: string; clob_api_passphrase: string } | null> {
-  const timestamp = String(Math.floor(Date.now() / 1000))
-  const nonce = 0
-
-  const typedData = {
-    domain: { name: 'ClobAuthDomain', version: '1', chainId: POLYGON_CHAIN_ID },
-    types: {
-      ClobAuth: [
-        { name: 'address', type: 'address' },
-        { name: 'timestamp', type: 'string' },
-        { name: 'nonce', type: 'uint256' },
-        { name: 'message', type: 'string' },
-      ],
-    },
-    primaryType: 'ClobAuth',
-    message: {
-      address,
-      timestamp,
-      nonce,
-      message: 'This message attests that I control the given wallet',
-    },
-  }
-
-  const { signature: sig } = await signTypedData(typedData)
-
-  const headers: Record<string, string> = {
-    'POLY_ADDRESS': address,
-    'POLY_SIGNATURE': sig,
-    'POLY_TIMESTAMP': timestamp,
-    'POLY_NONCE': String(nonce),
-    'Content-Type': 'application/json',
-  }
-
-  // Try derive first (returning user), then create (new user)
-  for (const [method, url] of [['GET', `${CLOB_URL}/auth/derive-api-key`], ['POST', `${CLOB_URL}/auth/api-key`]] as const) {
-    try {
-      const res = await fetch(url, { method, headers })
-      if (res.ok) {
-        const data = await res.json()
-        if (data?.apiKey && data?.secret && data?.passphrase) {
-          return { clob_api_key: data.apiKey, clob_api_secret: data.secret, clob_api_passphrase: data.passphrase }
-        }
-      }
-    } catch {}
-  }
-  return null
-}
-
 export default function App() {
-  const { ready, authenticated, getAccessToken, logout, signTypedData } = usePrivy()
+  const { ready, authenticated, getAccessToken, logout } = usePrivy()
   const { user, setUser, setStrategy, setActiveSession, clearLogs, clearToasts } = useAppStore()
   const addToast = useAppStore((s) => s.addToast)
   const [bootstrapping, setBootstrapping] = useState(false)
@@ -366,30 +312,12 @@ export default function App() {
     } catch {}
   }, [])
 
-  async function _submitClobCreds(walletAddress: string) {
-    try {
-      const creds = await _signAndFetchClobCreds(walletAddress, signTypedData)
-      if (!creds) {
-        console.warn('[clob] signing returned null')
-        return
-      }
-      await api.submitClobCreds(creds)
-      console.log('[clob] creds submitted to backend')
-    } catch (e) {
-      console.error('[clob] failed to submit creds', e)
-    }
-  }
-
   async function bootstrap() {
     setBootstrapping(true)
     setBootstrapError('')
     try {
       const profile: any = await api.syncUser()
       setUser(profile)
-      // Submit CLOB creds if onboarding not yet complete (new user or retry)
-      if (profile?.wallet_address && !profile?.onboarding_complete) {
-        _submitClobCreds(profile.wallet_address)
-      }
     } catch (e: any) {
       const message = e?.message || 'Failed to sync account'
       setBootstrapError(message)

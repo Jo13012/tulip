@@ -38,7 +38,8 @@ log = logging.getLogger("onboarding")
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 RELAYER_URL = settings.POLYMARKET_RELAYER_URL
-CLOB_URL = "https://clob.polymarket.com"
+# Use Cloudflare Worker proxy if configured (bypasses datacenter IP block on clob.polymarket.com)
+CLOB_URL = settings.CLOB_PROXY_URL.rstrip("/") if settings.CLOB_PROXY_URL else "https://clob.polymarket.com"
 CHAIN_ID = 137
 
 SAFE_FACTORY = "0xaacFeEa03eb1561C4e67d661e40682Bd20E3541b"

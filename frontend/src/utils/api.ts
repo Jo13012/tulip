@@ -59,21 +59,8 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  syncUser: (walletAddress = '', proxyAddress = '', clobCreds?: { clob_api_key: string; clob_api_secret: string; clob_api_passphrase: string }) =>
-    request('/api/v1/auth/sync', {
-      method: 'POST',
-      body: JSON.stringify({
-        wallet_address: walletAddress,
-        proxy_address:  proxyAddress,
-        ...(clobCreds || {}),
-      }),
-    }),
-
-  submitClobCreds: (creds: { clob_api_key: string; clob_api_secret: string; clob_api_passphrase: string }) =>
-    request('/api/v1/auth/clob-creds', {
-      method: 'POST',
-      body: JSON.stringify(creds),
-    }),
+  syncUser: () =>
+    request('/api/v1/auth/sync', { method: 'POST', body: JSON.stringify({}) }),
 
   getMe: () => request('/api/v1/auth/me'),
   updateProfile: (displayName: string) =>

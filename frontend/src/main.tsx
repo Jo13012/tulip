@@ -17,7 +17,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           accentColor: '#6366f1',
         },
         embeddedWallets: {
-          showWalletUIs: false,
           ethereum: {
             createOnLogin: 'off',
           },
