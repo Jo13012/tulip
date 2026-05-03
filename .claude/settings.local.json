@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import ast; ast.parse\\(open\\('app/api/auth.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(npx tsc *)"
+    ]
+  }
+}

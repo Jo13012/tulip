@@ -69,6 +69,12 @@ export const api = {
       }),
     }),
 
+  submitClobCreds: (creds: { clob_api_key: string; clob_api_secret: string; clob_api_passphrase: string }) =>
+    request('/api/v1/auth/clob-creds', {
+      method: 'POST',
+      body: JSON.stringify(creds),
+    }),
+
   getMe: () => request('/api/v1/auth/me'),
   updateProfile: (displayName: string) =>
     request('/api/v1/auth/profile', {

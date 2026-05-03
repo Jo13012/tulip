@@ -184,6 +184,19 @@ class SyncRequest(BaseModel):
     clob_api_passphrase: str = ""
 
 
+async def _wait_for_clob_creds(wallet_id: str, timeout: float = 120.0) -> dict | None:
+    """Poll DB until frontend submits CLOB creds, or timeout."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        await asyncio.sleep(3)
+        async with async_session_factory() as db:
+            wq = await db.execute(select(Wallet.clob_api_key, Wallet.clob_api_secret, Wallet.clob_api_passphrase).where(Wallet.id == wallet_id))
+            row = wq.first()
+            if row and row[0] and row[1] and row[2]:
+                return {"key": row[0], "secret": row[1], "passphrase": row[2]}
+    return None
+
+
 async def _run_onboarding_background(
     wallet_id: str,
     privy_wallet_id: str,
@@ -207,13 +220,34 @@ async def _run_onboarding_background(
             wallet.onboarding_state = "deploying"
             wallet.onboarding_error_detail = None
             await db.flush()
-            _onboard_log.info("Background onboarding started for wallet %s", wallet_id)
+            _onboard_log.info("Background onboarding started for wallet %s clob_from_frontend=%s", wallet_id, bool(pre_creds))
+
+            # If no pre_creds from frontend, wait for frontend to submit them while Safe deploys
+            if not pre_creds:
+                _onboard_log.info("No CLOB creds yet for %s — will wait for frontend submission (max 120s)", wallet_id)
 
             onboarding = await onboard_wallet(
                 privy_wallet_id, wallet_address,
                 on_stage=update_stage,
                 pre_signed_clob_creds=pre_creds,
             )
+
+            # If CLOB creds missing (frontend didn't send in time), wait for them
+            clob_key = onboarding.get("clob_api_key") or ""
+            if not clob_key:
+                _onboard_log.info("Safe done for %s, waiting for frontend CLOB creds...", wallet_id)
+                wallet.onboarding_state = "finalizing"
+                wallet.onboarding_error_detail = None
+                await db.flush()
+                waited = await _wait_for_clob_creds(wallet_id, timeout=120.0)
+                if waited:
+                    onboarding["clob_api_key"] = waited["key"]
+                    onboarding["clob_api_secret"] = waited["secret"]
+                    onboarding["clob_api_passphrase"] = waited["passphrase"]
+                    _onboard_log.info("Got CLOB creds from frontend for %s", wallet_id)
+                else:
+                    raise RuntimeError("Timed out waiting for CLOB credentials from frontend (120s)")
+
             wallet.proxy_address = onboarding["proxy_address"]
             wallet.clob_api_key = onboarding["clob_api_key"]
             wallet.clob_api_secret = onboarding["clob_api_secret"]
@@ -452,6 +486,29 @@ async def get_me(user: CurrentUser):
         free_fee_active=_free_fee_active(db_user),
         free_fee_ends_at=db_user.free_fee_ends_at.isoformat() if db_user and db_user.free_fee_ends_at else None,
     )
+
+
+class ClobCredsRequest(BaseModel):
+    clob_api_key: str
+    clob_api_secret: str
+    clob_api_passphrase: str
+
+
+@router.post("/clob-creds", status_code=204)
+async def submit_clob_creds(body: ClobCredsRequest, user: CurrentUser):
+    """Frontend submits CLOB creds signed from browser (residential IP). Stored immediately so background onboarding can proceed."""
+    if not body.clob_api_key or not body.clob_api_secret or not body.clob_api_passphrase:
+        raise HTTPException(status_code=422, detail="All three CLOB credential fields required")
+    async with async_session_factory() as db:
+        wq = await db.execute(select(Wallet).where(Wallet.user_id == user["sub"], Wallet.is_primary == True))
+        wallet = wq.scalars().first()
+        if not wallet:
+            raise HTTPException(status_code=404, detail="Wallet not found")
+        wallet.clob_api_key = body.clob_api_key
+        wallet.clob_api_secret = body.clob_api_secret
+        wallet.clob_api_passphrase = body.clob_api_passphrase
+        await db.commit()
+    _onboard_log.info("CLOB creds submitted by frontend for user %s", user["sub"][:8])
 
 
 @router.patch("/profile", response_model=UserProfile)

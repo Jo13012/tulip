@@ -351,13 +351,12 @@ async function _signAndFetchClobCreds(
 
 async function _fetchClobCreds(
   getWallets: () => { walletClientType?: string; address: string; getEthereumProvider: (...args: any[]) => any }[],
+  timeoutMs = 10000,
 ): Promise<{ clob_api_key: string; clob_api_secret: string; clob_api_passphrase: string } | null> {
-  // Wait up to 6s for embedded wallet to appear (Privy loads it async)
-  const deadline = Date.now() + 6000
+  const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     const all = getWallets()
     const embeddedWallet = all.find(w => w.walletClientType === 'privy')
-    console.log('[clob] wallets=', all.map(w => w.walletClientType), 'embedded=', !!embeddedWallet)
     if (embeddedWallet) {
       try {
         const result = await _signAndFetchClobCreds(embeddedWallet)
@@ -368,9 +367,9 @@ async function _fetchClobCreds(
         return null
       }
     }
-    await new Promise(r => setTimeout(r, 500))
+    await new Promise(r => setTimeout(r, 1000))
   }
-  console.warn('[clob] timeout: no embedded wallet after 6s')
+  console.warn('[clob] timeout: no embedded wallet after', timeoutMs, 'ms')
   return null
 }
 
@@ -398,16 +397,34 @@ export default function App() {
     } catch {}
   }, [])
 
+  async function _submitClobCredsWhenReady() {
+    // Poll until embedded wallet available (max 90s), then sign and submit CLOB creds
+    const creds = await _fetchClobCreds(() => walletsRef.current, 90000)
+    if (!creds) {
+      console.warn('[clob] could not get CLOB creds to submit')
+      return
+    }
+    try {
+      await api.submitClobCreds(creds)
+      console.log('[clob] creds submitted to backend')
+    } catch (e) {
+      console.error('[clob] failed to submit creds', e)
+    }
+  }
+
   async function bootstrap() {
     setBootstrapping(true)
     setBootstrapError('')
     try {
-      // Attempt CLOB auth from browser (residential IP, bypasses Cloudflare block on server IP)
-      // _fetchClobCreds polls until the Privy embedded wallet is ready (it loads async)
-      const clobCreds = await _fetchClobCreds(() => walletsRef.current)
+      // Try fast path: get CLOB creds before syncUser (wallet already available)
+      const clobCreds = await _fetchClobCreds(() => walletsRef.current, 3000)
       console.log('[bootstrap] clob_from_frontend=', !!clobCreds)
       const profile: any = await api.syncUser('', '', clobCreds || undefined)
       setUser(profile)
+      // If we didn't get creds yet, submit them async while onboarding runs in background
+      if (!clobCreds) {
+        _submitClobCredsWhenReady()
+      }
     } catch (e: any) {
       const message = e?.message || 'Failed to sync account'
       setBootstrapError(message)
