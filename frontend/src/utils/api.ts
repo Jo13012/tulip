@@ -11,14 +11,12 @@ export async function getAuthToken(): Promise<string | null> {
 }
 
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
-  const t0 = performance.now()
   const token = await Promise.race([
     _getToken(),
     new Promise<string | null>((_, reject) => {
       setTimeout(() => reject(new Error('Auth token fetch timed out')), 8000)
     }),
   ])
-  const tokenMs = performance.now() - t0
 
   // Keep a fresh snapshot for the WS hook (can't do async in WS constructor)
   if (token) {
@@ -31,14 +29,8 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   }
   if (token) headers['Authorization'] = `Bearer ${token}`
 
-  const t1 = performance.now()
   let res = await fetch(`${BASE}${path}`, { ...opts, headers })
-  const fetchMs = performance.now() - t1
-  const serverMs = res.headers.get('X-Response-Time-Ms') || '?'
 
-  console.debug(
-    `[api] ${opts.method || 'GET'} ${path} — total=${Math.round(performance.now() - t0)}ms fetch=${Math.round(fetchMs)}ms server=${serverMs}ms token=${Math.round(tokenMs)}ms`
-  )
 
   if (res.status === 401) {
     // Retry once with a fresh token (Privy occasionally expires mid-session).

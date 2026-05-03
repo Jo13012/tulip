@@ -245,26 +245,6 @@ class SessionManager:
             if not wallet or wallet.user_id != user_id:
                 raise SessionLaunchError("Wallet not found or not owned by user")
 
-            # V2 migration: auto-run approvals if not done yet
-            if (
-                wallet.onboarding_complete
-                and not wallet.v2_migration_done
-                and wallet.proxy_address
-                and wallet.privy_wallet_id
-            ):
-                import logging as _logging
-                _log = _logging.getLogger("uvicorn.error")
-                _log.info("[session_launch] running V2 approvals for wallet %s", wallet.wallet_address[:12] if wallet.wallet_address else "?")
-                try:
-                    from app.services.polymarket_onboarding_service import run_v2_approvals
-                    await run_v2_approvals(wallet.privy_wallet_id, wallet.wallet_address, wallet.proxy_address)
-                    wallet.v2_migration_done = True
-                    db.add(wallet)
-                    await db.flush()
-                    _log.info("[session_launch] V2 approvals done for wallet %s", wallet.wallet_address[:12] if wallet.wallet_address else "?")
-                except Exception as _e:
-                    _log.warning("[session_launch] V2 approvals failed (continuing): %s", _e)
-
             # Latest published version
             ver_q = await db.execute(
                 select(StrategyVersion)

@@ -114,10 +114,8 @@ function OrderbookWidget({ tokenId, side, onBestBid }: { tokenId: string; side: 
 
     async function fetchBook() {
       try {
-        const t0 = performance.now()
         const data: any = await api.admin.getBook(tokenId)
         if (!cancelled) {
-          console.debug(`[book] fetched in ${Math.round(performance.now() - t0)}ms`)
           setBook(data)
           onBestBid?.(data?.bids?.[0]?.price ?? null)
         }
@@ -277,9 +275,7 @@ function MarketPanel({
         // Direct sub-market URL → extract event slug (first segment after /event/), then find the sub-market
         const eventSlug = extractEventSlug(raw)
         const subMarketSlug = extractSlug(raw)
-        const t0 = performance.now()
         const data: any = await api.admin.resolveEvent(eventSlug)
-        console.debug(`[resolveEvent] ${Math.round(performance.now()-t0)}ms`)
         const match = data.sub_markets?.find((m: SubMarket) => m.slug === subMarketSlug)
         if (match) {
           setChosen(match)
@@ -292,9 +288,7 @@ function MarketPanel({
       } else {
         // Event URL or slug → list sub-markets
         const slug = raw.includes('/') ? extractSlug(raw) : raw
-        const t0 = performance.now()
         const data: any = await api.admin.resolveEvent(slug)
-        console.debug(`[resolveEvent] ${Math.round(performance.now()-t0)}ms`)
         setEventTitle(data.title || '')
         const markets = data.sub_markets || []
         if (markets.length === 1) {
@@ -770,15 +764,12 @@ function StrategyDetail({ onRefreshList }: { onRefreshList?: () => void }) {
   }, [])
 
   const load = useCallback(() => {
-    const t0 = performance.now()
     Promise.all([
       api.admin.getGlobalStrategy(),
       api.admin.getPublishedSlots().catch(() => null),
     ]).then(([d, pub]: any[]) => {
-      console.debug(`[global strategy] loaded in ${Math.round(performance.now()-t0)}ms`)
       setS(d)
       setSettings({ name: d.name, reserve_pct: d.reserve_pct, fee_side: d.fee_side, new_user_free_fee_days: d.new_user_free_fee_days ?? 0 })
-      console.debug('[published-slots]', pub)
       if (pub?.slots?.length) {
         const map: Record<string, any> = {}
         for (const sl of pub.slots) map[sl.id] = sl

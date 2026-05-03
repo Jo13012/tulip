@@ -225,16 +225,20 @@ async def admin_launch_for_user(body: AdminLaunchSessionRequest, admin: AdminUse
     if not strat:
         raise HTTPException(503, "No published strategy available")
 
-    session = await session_manager.launch_session(
-        user_id=body.user_id,
-        wallet_id=body.wallet_id,
-        strategy_id=strat.id,
-        gross_capital=body.gross_capital,
-        stop_mode=body.stop_mode,
-        stop_days=body.stop_days,
-        target_volume=body.target_volume,
-        session_sl_pct=body.session_sl_pct,
-    )
+    from app.runtime.session_manager import SessionLaunchError
+    try:
+        session = await session_manager.launch_session(
+            user_id=body.user_id,
+            wallet_id=body.wallet_id,
+            strategy_id=strat.id,
+            gross_capital=body.gross_capital,
+            stop_mode=body.stop_mode,
+            stop_days=body.stop_days,
+            target_volume=body.target_volume,
+            session_sl_pct=body.session_sl_pct,
+        )
+    except SessionLaunchError as e:
+        raise HTTPException(400, str(e))
 
     db.add(AuditLog(
         actor_id=admin["sub"], actor_role="admin",

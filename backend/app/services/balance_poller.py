@@ -127,7 +127,6 @@ class BalancePoller:
             trading = trading_results[i] if isinstance(trading_results[i], (float, int, type(None))) else None
             self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, trading_balance=trading)
 
-        log.debug("[balance_poller] refreshed %d wallets (1 batch RPC)", len(wallet_rows))
 
     async def _fetch_trading(self, proxy_address: str) -> float | None:
         if not proxy_address:

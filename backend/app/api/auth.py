@@ -255,7 +255,6 @@ async def sync_user(request: Request, body: SyncRequest):
                     existing_wallet.onboarding_error_detail = None
                     await db.flush()
                     existing_wallet.onboarding_state = "ready"
-                    existing_wallet.v2_migration_done = True
                     log.info("Onboarding retry succeeded for wallet %s", existing_wallet.id)
                 except Exception as ob_err:
                     existing_wallet.onboarding_state = "failed"
@@ -326,7 +325,6 @@ async def sync_user(request: Request, body: SyncRequest):
                     target_wallet.clob_api_secret = onboarding["clob_api_secret"]
                     target_wallet.clob_api_passphrase = onboarding["clob_api_passphrase"]
                     target_wallet.onboarding_state = "ready"
-                    target_wallet.v2_migration_done = True
                     target_wallet.onboarding_completed_at = datetime.now(timezone.utc)
                     # Auto free-fee: set override=0 if platform has free-fee period configured
                     try:
