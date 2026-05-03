@@ -255,23 +255,44 @@ async def _derive_or_create_clob_creds(
         "Content-Type": "application/json",
     }
 
-    # Try derive first (returning user)
-    try:
-        resp = await http.get(f"{CLOB_URL}/auth/derive-api-key", headers=headers, timeout=15.0)
-        if resp.is_success:
-            data = resp.json()
-            if data.get("apiKey") and data.get("secret") and data.get("passphrase"):
-                log.info("Derived existing CLOB creds for %s", wallet_address[:10])
-                return {"key": data["apiKey"], "secret": data["secret"], "passphrase": data["passphrase"]}
-    except Exception as e:
-        log.warning("derive-api-key failed: %s", e)
+    # Try derive first (returning user), then create — retry loop for CLOB indexing lag
+    last_err: str = ""
+    for attempt in range(6):
+        if attempt > 0:
+            wait = 5 * attempt
+            log.info("CLOB creds attempt %d/6 — waiting %ds (CLOB indexing lag)...", attempt + 1, wait)
+            await _async_sleep(wait)
+            # Refresh signature timestamp on each retry
+            timestamp = str(int(time.time()))
+            typed_data["message"]["timestamp"] = timestamp
+            sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
+            headers["POLY_SIGNATURE"] = sig
+            headers["POLY_TIMESTAMP"] = timestamp
 
-    # Create new
-    resp = await http.post(f"{CLOB_URL}/auth/api-key", headers=headers, timeout=15.0)
-    resp.raise_for_status()
-    data = resp.json()
-    log.info("Created new CLOB creds for %s", wallet_address[:10])
-    return {"key": data["apiKey"], "secret": data["secret"], "passphrase": data["passphrase"]}
+        try:
+            resp = await http.get(f"{CLOB_URL}/auth/derive-api-key", headers=headers, timeout=15.0)
+            log.info("derive-api-key → %d %s", resp.status_code, resp.text[:200])
+            if resp.is_success:
+                data = resp.json()
+                if data.get("apiKey") and data.get("secret") and data.get("passphrase"):
+                    log.info("Derived existing CLOB creds for %s", wallet_address[:10])
+                    return {"key": data["apiKey"], "secret": data["secret"], "passphrase": data["passphrase"]}
+        except Exception as e:
+            log.warning("derive-api-key exception: %s", e)
+
+        try:
+            resp = await http.post(f"{CLOB_URL}/auth/api-key", headers=headers, timeout=15.0)
+            log.info("create api-key → %d %s", resp.status_code, resp.text[:200])
+            if resp.is_success:
+                data = resp.json()
+                log.info("Created new CLOB creds for %s", wallet_address[:10])
+                return {"key": data["apiKey"], "secret": data["secret"], "passphrase": data["passphrase"]}
+            last_err = f"HTTP {resp.status_code}: {resp.text[:300]}"
+        except Exception as e:
+            last_err = str(e)
+            log.warning("create api-key exception: %s", e)
+
+    raise RuntimeError(f"Failed to create CLOB API key after 6 attempts: {last_err}")
 
 
 # ── Safe deployment + approvals ────────────────────────────────────────────────

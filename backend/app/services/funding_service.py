@@ -105,6 +105,61 @@ async def get_balances(address: str) -> tuple[float | None, float | None]:
     return usdc, eth
 
 
+async def get_balances_batch(addresses: list[str]) -> dict[str, tuple[float | None, float | None]]:
+    """
+    Fetch USDC + ETH balances for multiple addresses in a single JSON-RPC batch call.
+    Returns {address: (usdc, eth)}.
+    """
+    if not addresses:
+        return {}
+
+    usdc_contract = settings.ARBITRUM_USDC_ADDRESS
+    if not usdc_contract:
+        # fallback: individual calls
+        results = await asyncio.gather(*[get_balances(a) for a in addresses], return_exceptions=True)
+        return {a: (r if isinstance(r, tuple) else (None, None)) for a, r in zip(addresses, results)}
+
+    batch: list[dict] = []
+    for i, addr in enumerate(addresses):
+        clean = addr.strip().lower().replace("0x", "").zfill(40)
+        batch.append({
+            "jsonrpc": "2.0", "id": f"usdc_{i}",
+            "method": "eth_call",
+            "params": [{"to": usdc_contract, "data": "0x70a08231" + clean.zfill(64)}, "latest"],
+        })
+        batch.append({
+            "jsonrpc": "2.0", "id": f"eth_{i}",
+            "method": "eth_getBalance",
+            "params": [addr.strip(), "latest"],
+        })
+
+    http = _get_arb_client()
+    raw_results: list[dict] = []
+    for rpc in _arb_rpc_urls():
+        try:
+            resp = await http.post(rpc, json=batch, timeout=10.0)
+            if resp.is_success:
+                raw_results = resp.json()
+                break
+        except Exception:
+            continue
+
+    # Parse results by id
+    by_id: dict[str, str | None] = {}
+    for item in raw_results:
+        if isinstance(item, dict):
+            by_id[str(item.get("id", ""))] = item.get("result")
+
+    out: dict[str, tuple[float | None, float | None]] = {}
+    for i, addr in enumerate(addresses):
+        usdc_hex = by_id.get(f"usdc_{i}")
+        eth_hex  = by_id.get(f"eth_{i}")
+        usdc = (int(usdc_hex, 16) / 1_000_000) if usdc_hex and usdc_hex != "0x" else None
+        eth  = (int(eth_hex, 16) / 1e18)        if eth_hex  and eth_hex  != "0x" else None
+        out[addr] = (usdc, eth)
+    return out
+
+
 async def get_trading_balance(proxy_address: str) -> float | None:
     """Trading balance (USDC on Polymarket) via Rust service."""
     if not proxy_address:

@@ -37,6 +37,7 @@ from app.integrations.polymarket.bridge_client import bridge_client
 from app.services.recovery_service import recovery_service
 from app.services.privy_wallet_service import validate_authorization_config
 from app.services.balance_poller import balance_poller
+from app.services.fee_service import fee_service
 
 # ── API routers ───────────────────────────────────────────────────────────────
 from app.api.auth import router as auth_router
@@ -140,9 +141,14 @@ async def lifespan(app: FastAPI):
     # Start live wallet balance poller (30s TTL cache for admin/users)
     balance_poller.start()
 
+    # Start fee batch flush (1 tx/wallet/60s instead of 1 tx/fill)
+    from app.db.session import async_session_factory
+    fee_service.start(async_session_factory)
+
     yield
 
     # Shutdown
+    await fee_service.stop()
     await balance_poller.stop()
     await market_data_service.close()
     await market_resolver.close()

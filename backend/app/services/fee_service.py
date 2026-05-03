@@ -1,26 +1,25 @@
 """
-fee_service.py — Platform fee logic.
+fee_service.py — Platform fee logic with batched payment.
 
-Fees are charged:
-  - on executed fills only
-  - based on executed notional (USDC)
-  - proportionally for partial fills
-  - from the fee_reserve, not from engaged trading capital
-  - never on placement, never on session creation
-
-fee_side: none | buy | sell | both   (on Strategy)
-fee_bps:  per-user fee stored as bps x10 (on User.effective_fee_bps)
-
-In V1: fees are tracked in-memory and DB.
-Transfer mechanism: pending backend implementation
-(Polymarket does not currently support embedded integrator fees in CLOB orders.
- Platform-side accounting is the safe supported approach for V1.)
+Fees are computed per-fill (immediate, in-memory) but paid in batch every
+FEE_FLUSH_INTERVAL seconds — 1 Privy/Arbitrum tx per wallet per interval
+instead of 1 tx per fill. This prevents RPC flooding with many concurrent sessions.
 """
 from __future__ import annotations
+
+import asyncio
+import logging
+from collections import defaultdict
+from dataclasses import dataclass, field
 from sqlalchemy import update
 
-from app.db.models import Strategy, User
+from app.db.models import User
 from app.services.fee_payment_service import pay_fee, FeePaymentError
+
+log = logging.getLogger("uvicorn.error")
+
+FEE_FLUSH_INTERVAL = 60.0   # seconds between batch flushes
+FEE_MIN_BATCH      = 0.001  # minimum USDC to bother sending
 
 
 def compute_fill_fee(
@@ -29,33 +28,63 @@ def compute_fill_fee(
     user_fee_bps: int, # per-user effective fee stored as bps x10
     fee_side: str,     # "none" | "buy" | "sell" | "both"  (from Strategy)
 ) -> float:
-    """
-    Compute fee for a single fill event.
-    Returns USDC amount to deduct from fee reserve.
-    """
     if user_fee_bps <= 0 or fee_side == "none":
         return 0.0
     if fee_side == "buy" and fill_side != "BUY":
         return 0.0
     if fee_side == "sell" and fill_side != "SELL":
         return 0.0
-    # "both" or matching side
     return round(fill_usdc * user_fee_bps / 100_000, 6)
+
+
+@dataclass
+class _WalletFeeQueue:
+    privy_wallet_id: str
+    wallet_address:  str
+    referrer_user_id:       str = ""
+    referrer_wallet_address: str = ""
+    pending_usdc: float = 0.0
+    # per slot_id accumulator for charge_fee calls (applied immediately to engine)
+    # but payment is deferred
+    session_engine_ref: object = None  # weakref-equivalent; set on first enqueue
 
 
 class FeeService:
     """
-    Processes fee events for a session.
-    Called from the session engine when fills are detected.
-    user_fee_bps: per-user effective fee (from User.effective_fee_bps, cached in engine).
-    fee_side: from Strategy (none | buy | sell | both).
+    Per-fill: compute fee, charge engine immediately (accounting).
+    Payment: batched every FEE_FLUSH_INTERVAL via a background task.
     """
+
+    def __init__(self) -> None:
+        # key: privy_wallet_id → _WalletFeeQueue
+        self._queues: dict[str, _WalletFeeQueue] = {}
+        self._lock = asyncio.Lock()
+        self._task: asyncio.Task | None = None
+        self._db_factory = None
+
+    def start(self, db_factory) -> None:
+        self._db_factory = db_factory
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._flush_loop(), name="fee_flush")
+            log.info("[fee_service] batch flush started (interval=%ds)", FEE_FLUSH_INTERVAL)
+
+    async def stop(self) -> None:
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        # Final flush on shutdown
+        await self._flush_all()
+
+    # ── Called per fill from session engine ───────────────────────────────────
 
     async def process_lot_opened(
         self,
         session_engine,
         fill_usdc: float,
-        strategy: Strategy,
+        strategy,
         *,
         slot_id: str = "",
         user_fee_bps: int,
@@ -67,17 +96,16 @@ class FeeService:
     ) -> float:
         fee = compute_fill_fee(fill_usdc, "BUY", user_fee_bps, strategy.fee_side)
         if fee > 0:
-            await self._pay_and_charge(
-                session_engine, fee, slot_id, privy_wallet_id, wallet_address,
-                referrer_user_id, referrer_wallet_address, db_factory,
-            )
+            # Charge accounting immediately
+            session_engine.charge_fee(fee, slot_id=slot_id or None)
+            await self._enqueue(privy_wallet_id, wallet_address, fee, referrer_user_id, referrer_wallet_address)
         return fee
 
     async def process_lot_closed(
         self,
         session_engine,
         fill_usdc: float,
-        strategy: Strategy,
+        strategy,
         *,
         slot_id: str = "",
         user_fee_bps: int,
@@ -89,55 +117,86 @@ class FeeService:
     ) -> float:
         fee = compute_fill_fee(fill_usdc, "SELL", user_fee_bps, strategy.fee_side)
         if fee > 0:
-            await self._pay_and_charge(
-                session_engine, fee, slot_id, privy_wallet_id, wallet_address,
-                referrer_user_id, referrer_wallet_address, db_factory,
-            )
+            session_engine.charge_fee(fee, slot_id=slot_id or None)
+            await self._enqueue(privy_wallet_id, wallet_address, fee, referrer_user_id, referrer_wallet_address)
         return fee
 
-    async def _pay_and_charge(
+    # ── Internal ──────────────────────────────────────────────────────────────
+
+    async def _enqueue(
         self,
-        session_engine,
-        fee: float,
-        slot_id: str,
         privy_wallet_id: str,
         wallet_address: str,
+        amount: float,
         referrer_user_id: str,
         referrer_wallet_address: str,
-        db_factory,
     ) -> None:
-        try:
-            payout = await pay_fee(
-                privy_wallet_id=privy_wallet_id,
-                wallet_address=wallet_address,
-                amount_usdc=fee,
-                referrer_wallet_address=referrer_wallet_address,
-            )
-            # charge_fee only after successful payment — no phantom charges on tx failure
-            session_engine.charge_fee(fee, slot_id=slot_id or None)
-            await self._record_referral_reward(
-                referrer_user_id=referrer_user_id,
-                amount_usdc=float(payout.get("referral_paid_usdc") or 0.0),
-                db_factory=db_factory,
-            )
-        except FeePaymentError as e:
-            # Log and continue — don't stop session on fee tx failure (network flap, etc.)
-            # Fee is skipped this fill; monitor loop will catch low balance if truly exhausted
-            import logging as _log
-            _log.getLogger("uvicorn.error").warning(
-                "Fee payment skipped (%.6f USDC) for %s: %s", fee, wallet_address[:12], e
+        async with self._lock:
+            if privy_wallet_id not in self._queues:
+                self._queues[privy_wallet_id] = _WalletFeeQueue(
+                    privy_wallet_id=privy_wallet_id,
+                    wallet_address=wallet_address,
+                    referrer_user_id=referrer_user_id,
+                    referrer_wallet_address=referrer_wallet_address,
+                )
+            self._queues[privy_wallet_id].pending_usdc = round(
+                self._queues[privy_wallet_id].pending_usdc + amount, 6
             )
 
-    async def _record_referral_reward(self, *, referrer_user_id: str, amount_usdc: float, db_factory) -> None:
-        if not referrer_user_id or amount_usdc <= 0 or not db_factory:
+    async def _flush_loop(self) -> None:
+        while True:
+            await asyncio.sleep(FEE_FLUSH_INTERVAL)
+            await self._flush_all()
+
+    async def _flush_all(self) -> None:
+        async with self._lock:
+            to_flush = {k: v for k, v in self._queues.items() if v.pending_usdc >= FEE_MIN_BATCH}
+            for k in to_flush:
+                self._queues[k].pending_usdc = 0.0
+
+        for privy_wallet_id, q in to_flush.items():
+            try:
+                payout = await pay_fee(
+                    privy_wallet_id=privy_wallet_id,
+                    wallet_address=q.wallet_address,
+                    amount_usdc=q.pending_usdc,
+                    referrer_wallet_address=q.referrer_wallet_address,
+                )
+                log.info(
+                    "[fee_flush] paid %.4f USDC from %s (platform_tx=%s)",
+                    q.pending_usdc, q.wallet_address[:12],
+                    payout.get("platform_tx_hash", "")[:16],
+                )
+                referral_paid = float(payout.get("referral_paid_usdc") or 0.0)
+                if referral_paid > 0 and q.referrer_user_id:
+                    await self._record_referral_reward(q.referrer_user_id, referral_paid)
+            except FeePaymentError as e:
+                log.warning("[fee_flush] payment failed for %s (%.4f USDC): %s", q.wallet_address[:12], q.pending_usdc, e)
+                # Re-enqueue so it retries next interval
+                async with self._lock:
+                    if privy_wallet_id in self._queues:
+                        self._queues[privy_wallet_id].pending_usdc = round(
+                            self._queues[privy_wallet_id].pending_usdc + q.pending_usdc, 6
+                        )
+                    else:
+                        q.pending_usdc = q.pending_usdc  # restore
+                        self._queues[privy_wallet_id] = q
+            except Exception as e:
+                log.error("[fee_flush] unexpected error for %s: %s", privy_wallet_id, e)
+
+    async def _record_referral_reward(self, referrer_user_id: str, amount_usdc: float) -> None:
+        if not self._db_factory:
             return
-        async with db_factory() as db:
-            await db.execute(
-                update(User)
-                .where(User.id == referrer_user_id)
-                .values(referral_reward_usdc=User.referral_reward_usdc + amount_usdc)
-            )
-            await db.commit()
+        try:
+            async with self._db_factory() as db:
+                await db.execute(
+                    update(User)
+                    .where(User.id == referrer_user_id)
+                    .values(referral_reward_usdc=User.referral_reward_usdc + amount_usdc)
+                )
+                await db.commit()
+        except Exception as e:
+            log.warning("[fee_flush] referral record failed: %s", e)
 
 
 fee_service = FeeService()

@@ -15,8 +15,6 @@ import logging
 import time
 from dataclasses import dataclass, field
 
-from app.services import funding_service
-
 log = logging.getLogger("uvicorn.error")
 
 POLL_INTERVAL       = 30.0   # seconds between full refreshes
@@ -70,8 +68,11 @@ class BalancePoller:
 
     async def refresh_user(self, user_id: str, wallet_address: str, proxy_address: str) -> None:
         """Force-refresh a single user's balances (e.g. after bridge)."""
-        bal = await self._fetch_one(wallet_address, proxy_address)
-        self._cache[user_id] = bal
+        from app.services.funding_service import get_balances_batch
+        arb = await get_balances_batch([wallet_address]) if wallet_address else {}
+        usdc, eth = arb.get(wallet_address, (None, None))
+        trading = await self._fetch_trading(proxy_address)
+        self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, trading_balance=trading)
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
@@ -91,6 +92,7 @@ class BalancePoller:
         from app.db.session import async_session_factory
         from app.db.models import User, Wallet
         from sqlalchemy import select
+        from app.services.funding_service import get_balances_batch, get_rust_client
 
         async with async_session_factory() as db:
             rows = await db.execute(
@@ -102,45 +104,45 @@ class BalancePoller:
         if not wallet_rows:
             return
 
-        results = await asyncio.gather(
-            *[self._fetch_one(wa or "", pa or "") for _, wa, pa in wallet_rows],
+        addresses = [wa or "" for _, wa, _ in wallet_rows]
+        proxy_addresses = [pa or "" for _, _, pa in wallet_rows]
+
+        # 1 JSON-RPC batch call for all USDC+ETH balances
+        try:
+            arb_balances = await asyncio.wait_for(
+                get_balances_batch([a for a in addresses if a]),
+                timeout=_PER_WALLET_TIMEOUT,
+            )
+        except Exception:
+            arb_balances = {}
+
+        # Trading balances: still parallel but via Rust (fast internal service)
+        trading_results = await asyncio.gather(
+            *[self._fetch_trading(pa) for pa in proxy_addresses],
             return_exceptions=True,
         )
 
-        for (user_id, _, __), result in zip(wallet_rows, results):
-            if isinstance(result, WalletBalances):
-                self._cache[user_id] = result
-            # on exception, keep stale cache entry
+        for i, (user_id, wa, _) in enumerate(wallet_rows):
+            usdc, eth = arb_balances.get(wa or "", (None, None)) if wa else (None, None)
+            trading = trading_results[i] if isinstance(trading_results[i], (float, int, type(None))) else None
+            self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, trading_balance=trading)
 
-        log.debug("[balance_poller] refreshed %d wallets", len(wallet_rows))
+        log.debug("[balance_poller] refreshed %d wallets (1 batch RPC)", len(wallet_rows))
 
-    async def _fetch_one(self, wallet_address: str, proxy_address: str) -> WalletBalances:
-        async def _usdc_eth() -> tuple[float | None, float | None]:
-            if not wallet_address:
-                return None, None
-            try:
-                return await asyncio.wait_for(
-                    funding_service.get_balances(wallet_address),
-                    timeout=_PER_WALLET_TIMEOUT,
-                )
-            except (asyncio.TimeoutError, Exception):
-                return None, None
-
-        async def _trading() -> float | None:
-            if not proxy_address:
-                return None
-            try:
-                return await asyncio.wait_for(
-                    funding_service.get_trading_balance(proxy_address),
-                    timeout=_PER_WALLET_TIMEOUT,
-                )
-            except (asyncio.TimeoutError, Exception):
-                return None
-
-        results = await asyncio.gather(_usdc_eth(), _trading(), return_exceptions=True)
-        (usdc, eth) = results[0] if isinstance(results[0], tuple) else (None, None)
-        trading     = results[1] if isinstance(results[1], (float, int, type(None))) else None
-        return WalletBalances(wallet_usdc=usdc, wallet_eth=eth, trading_balance=trading)
+    async def _fetch_trading(self, proxy_address: str) -> float | None:
+        if not proxy_address:
+            return None
+        try:
+            from app.services.funding_service import get_rust_client
+            resp = await asyncio.wait_for(
+                get_rust_client().get(f"/api/v1/wallet-balance/{proxy_address}"),
+                timeout=_PER_WALLET_TIMEOUT,
+            )
+            if resp.is_success:
+                return resp.json().get("balance")
+        except Exception:
+            pass
+        return None
 
 
 balance_poller = BalancePoller()
