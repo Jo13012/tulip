@@ -164,10 +164,10 @@ async def get_balances_batch(addresses: list[str]) -> dict[str, tuple[float | No
         eth  = (int(eth_hex, 16) / 1e18)        if eth_hex  and eth_hex  != "0x" else None
         valid_out[addr] = (usdc, eth)
 
-    # Map back to original addresses list (empty/missing → (None, None))
+    # Map back to original addresses list (normalize key to match valid_out)
     out: dict[str, tuple[float | None, float | None]] = {}
     for addr in addresses:
-        out[addr] = valid_out.get(addr, (None, None))
+        out[addr] = valid_out.get(addr.strip() if addr else addr, (None, None))
     return out
 
 

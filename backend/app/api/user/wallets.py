@@ -23,10 +23,6 @@ FUNDING_ENABLED = True
 log = logging.getLogger("uvicorn.error")
 
 
-async def _fetch_usdc(wallet_address: str) -> float | None:
-    """Trading balance via Rust service (shared persistent client)."""
-    return await funding_service.get_trading_balance(wallet_address)
-
 
 async def _get_primary_wallet(user_id: str, db: DbSession, *, for_update: bool = False) -> Wallet | None:
     stmt = select(Wallet).where(Wallet.user_id == user_id, Wallet.is_primary == True)
@@ -223,12 +219,13 @@ async def list_wallets(
     user: CurrentUser,
     db: DbSession,
 ):
+    from app.services.balance_poller import balance_poller
     q = await db.execute(select(Wallet).where(Wallet.user_id == user["sub"]))
     wallets = q.scalars().all()
+    cached = balance_poller.get(user["sub"])
     out: list[WalletOut] = []
     for wallet in wallets:
-        balance_addr = wallet.proxy_address if wallet.proxy_address else wallet.wallet_address
-        balance = await _fetch_usdc(balance_addr) if balance_addr else None
+        balance = cached.trading_balance if wallet.is_primary else None
         out.append(WalletOut(
             wallet_id=wallet.id,
             wallet_address=wallet.wallet_address,
@@ -251,16 +248,16 @@ async def funding_status(user: CurrentUser, db: DbSession):
     if not wallet.wallet_address or not wallet.privy_wallet_id:
         raise HTTPException(status_code=400, detail="Wallet not ready")
 
-    # Serve balances from cache instantly (balance_poller refreshes every 30s)
+    # Instant cache read — poller refreshes every 10s
     cached = balance_poller.get(user["sub"])
     cache_age = time.monotonic() - cached.fetched_at
 
     usdc_balance    = cached.wallet_usdc    if cached.wallet_usdc    is not None else 0.0
     eth_balance     = cached.wallet_eth     if cached.wallet_eth     is not None else 0.0
-    trading_balance = cached.trading_balance  # may be None if never fetched
+    trading_balance = cached.trading_balance
 
-    # Background refresh if cache is stale (>60s) or cold
-    if cache_age > 60 or (cached.wallet_usdc is None and cached.wallet_eth is None):
+    # Only force-refresh if cache is cold (never fetched yet)
+    if cached.wallet_usdc is None and cached.wallet_eth is None:
         asyncio.create_task(
             balance_poller.refresh_user(user["sub"], wallet.wallet_address or "", wallet.proxy_address or "")
         )
@@ -499,12 +496,12 @@ async def funding_force(user: CurrentUser, db: DbSession):
     if not wallet.wallet_address or not wallet.privy_wallet_id:
         raise HTTPException(status_code=400, detail="Wallet not ready")
 
-    usdc_balance, eth_balance = await funding_service.get_balances(wallet.wallet_address)
-    usdc_balance = usdc_balance or 0.0
-    eth_balance = eth_balance or 0.0
-    trading_balance = None
-    if wallet.proxy_address:
-        trading_balance = await _fetch_usdc(wallet.proxy_address)
+    from app.services.balance_poller import balance_poller
+    await balance_poller.refresh_user(user["sub"], wallet.wallet_address or "", wallet.proxy_address or "")
+    cached = balance_poller.get(user["sub"])
+    usdc_balance    = cached.wallet_usdc    or 0.0
+    eth_balance     = cached.wallet_eth     or 0.0
+    trading_balance = cached.trading_balance
     thresholds = _funding_thresholds(usdc_balance, eth_balance, trading_balance)
     required_usdc = float(thresholds["required_usdc"])
     required_eth = float(thresholds["required_eth"])

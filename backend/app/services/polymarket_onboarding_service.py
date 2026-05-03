@@ -212,17 +212,19 @@ async def _async_sleep(seconds: float):
 
 async def _derive_or_create_clob_creds(
     privy_wallet_id: str,
-    wallet_address: str,
+    eoa_address: str,
+    safe_address: str,
     http: httpx.AsyncClient,
 ) -> dict:
     """
-    Derive (or create) Polymarket CLOB API credentials.
-    Uses L1 auth: EIP-712 ClobAuth signature (matches clob-client SDK).
+    Derive (or create) Polymarket CLOB API credentials (V2).
+    POLY_ADDRESS = Safe proxy address (Polymarket account).
+    Signature = EIP-712 ClobAuth signed by EOA (owner of Safe).
     """
     timestamp = str(int(time.time()))
     nonce = 0
 
-    # EIP-712 ClobAuth typed data (exact structure from @polymarket/clob-client)
+    # EIP-712 ClobAuth typed data — address field = Safe (V2)
     typed_data = {
         "domain": {
             "name": "ClobAuthDomain",
@@ -239,7 +241,7 @@ async def _derive_or_create_clob_creds(
         },
         "primary_type": "ClobAuth",
         "message": {
-            "address": wallet_address,
+            "address": safe_address,
             "timestamp": timestamp,
             "nonce": nonce,
             "message": "This message attests that I control the given wallet",
@@ -248,7 +250,7 @@ async def _derive_or_create_clob_creds(
     sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
 
     headers = {
-        "POLY_ADDRESS": wallet_address,
+        "POLY_ADDRESS": safe_address,
         "POLY_SIGNATURE": sig,
         "POLY_TIMESTAMP": timestamp,
         "POLY_NONCE": str(nonce),
@@ -275,7 +277,7 @@ async def _derive_or_create_clob_creds(
             if resp.is_success:
                 data = resp.json()
                 if data.get("apiKey") and data.get("secret") and data.get("passphrase"):
-                    log.info("Derived existing CLOB creds for %s", wallet_address[:10])
+                    log.info("Derived existing CLOB creds for %s", safe_address[:10])
                     return {"key": data["apiKey"], "secret": data["secret"], "passphrase": data["passphrase"]}
         except Exception as e:
             log.warning("derive-api-key exception: %s", e)
@@ -285,7 +287,7 @@ async def _derive_or_create_clob_creds(
             log.info("create api-key → %d %s", resp.status_code, resp.text[:200])
             if resp.is_success:
                 data = resp.json()
-                log.info("Created new CLOB creds for %s", wallet_address[:10])
+                log.info("Created new CLOB creds for %s", safe_address[:10])
                 return {"key": data["apiKey"], "secret": data["secret"], "passphrase": data["passphrase"]}
             last_err = f"HTTP {resp.status_code}: {resp.text[:300]}"
         except Exception as e:
@@ -479,7 +481,7 @@ async def onboard_wallet(
 
         # ── 2. CLOB API credentials ───────────────────────────────────────────
         await emit_stage("approving")
-        creds = await _derive_or_create_clob_creds(privy_wallet_id, eoa_address, http)
+        creds = await _derive_or_create_clob_creds(privy_wallet_id, eoa_address, safe_address, http)
 
         # ── 3. Token approvals ────────────────────────────────────────────────
         # Check if approvals already done by checking USDC allowance to CTF_EXCHANGE

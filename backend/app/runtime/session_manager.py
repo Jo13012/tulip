@@ -29,7 +29,6 @@ from app.runtime.session_registry import session_registry
 from app.integrations.polymarket.execution_client import ExecutionClient
 from app.integrations.polymarket.market_resolver import market_resolver
 from app.core.config import settings
-from app.services import funding_service
 
 MIN_LOT_USDC = 5   # Practical minimum USDC per lot
 
@@ -261,24 +260,26 @@ class SessionManager:
             if not viability.viable:
                 raise SessionLaunchError(f"Capital insufficient: {viability.reason}")
 
-            # Balance guards
-            if wallet.wallet_address:
-                usdc_bal, eth_bal = await funding_service.get_balances(wallet.wallet_address)
-                usdc_bal = usdc_bal or 0.0
-                eth_bal  = eth_bal  or 0.0
-                if usdc_bal < settings.FEE_WALLET_USDC_STOP:
-                    raise SessionLaunchError(
-                        f"Fee wallet USDC insufficient: {usdc_bal:.4f} < {settings.FEE_WALLET_USDC_STOP} required."
-                    )
-                if eth_bal < settings.FEE_WALLET_ETH_MIN:
-                    raise SessionLaunchError(
-                        f"Fee wallet ETH insufficient: {eth_bal:.6f} < {settings.FEE_WALLET_ETH_MIN} required for gas."
-                    )
+            # Balance guards — read from poller cache (instant, no RPC)
+            from app.services.balance_poller import balance_poller
+            # Force refresh if cache is cold for this user
+            cached = balance_poller.get(user_id)
+            if cached.wallet_usdc is None and cached.wallet_eth is None and wallet.wallet_address:
+                await balance_poller.refresh_user(user_id, wallet.wallet_address or "", wallet.proxy_address or "")
+            usdc_bal, eth_bal = balance_poller.get_arb(user_id)
+            usdc_bal = usdc_bal or 0.0
+            eth_bal  = eth_bal  or 0.0
+            if wallet.wallet_address and usdc_bal < settings.FEE_WALLET_USDC_STOP:
+                raise SessionLaunchError(
+                    f"Fee wallet USDC insufficient: {usdc_bal:.4f} < {settings.FEE_WALLET_USDC_STOP} required."
+                )
+            if wallet.wallet_address and eth_bal < settings.FEE_WALLET_ETH_MIN:
+                raise SessionLaunchError(
+                    f"Fee wallet ETH insufficient: {eth_bal:.6f} < {settings.FEE_WALLET_ETH_MIN} required for gas."
+                )
 
-            # Trading balance guard — Polymarket CLOB must have funds
-            trading_bal: float | None = None
-            if wallet.proxy_address:
-                trading_bal = await funding_service.get_trading_balance(wallet.proxy_address)
+            # Trading balance guard
+            trading_bal = balance_poller.get_trading(user_id)
             if not trading_bal or trading_bal <= 0:
                 raise SessionLaunchError(
                     "No Polymarket trading balance. Fund your account and bridge USDC before starting a session."

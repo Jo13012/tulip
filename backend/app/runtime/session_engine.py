@@ -27,7 +27,6 @@ from app.runtime.session_slot_runtime import SessionSlotRuntime
 from app.integrations.polymarket.execution_client import ExecutionClient
 from app.services.fee_service import fee_service
 from app.services.nuclear_close_service import run_nuclear_close
-from app.services import funding_service
 from app.core.config import settings
 
 # XP level thresholds and corresponding fee_bps (basis points = fee% * 100 * 10)
@@ -427,20 +426,15 @@ class SessionEngine:
             return
         self._last_arb_balance_check = now
 
-        usdc, eth = await funding_service.get_balances(self._fee_wallet_address)
+        from app.services.balance_poller import balance_poller
+        usdc, eth = balance_poller.get_arb(self.user_id)
 
         if usdc is not None and usdc < settings.FEE_WALLET_USDC_STOP:
-            # Re-read live balance — user may have topped up mid-session
-            usdc, eth = await funding_service.get_balances(self._fee_wallet_address)
-            if usdc is not None and usdc < settings.FEE_WALLET_USDC_STOP:
-                await self._log_session(
-                    "WARN",
-                    f"Arbitrum USDC critically low (${usdc:.2f} < ${settings.FEE_WALLET_USDC_STOP:.2f}) — soft stop",
-                )
-                await self.soft_stop()
-                return
-            # Balance recovered — reset timer so next poll is immediate
-            self._last_arb_balance_check = 0.0
+            await self._log_session(
+                "WARN",
+                f"Arbitrum USDC critically low (${usdc:.2f} < ${settings.FEE_WALLET_USDC_STOP:.2f}) — soft stop",
+            )
+            await self.soft_stop()
             return
 
         if eth is not None and eth < settings.FEE_WALLET_ETH_MIN:
