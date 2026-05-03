@@ -29,9 +29,6 @@ class Settings(BaseSettings):
 
     # Polymarket
     CLOB_HOST: str = "https://clob-v2.polymarket.com"
-    # Cloudflare Worker proxy for clob.polymarket.com (bypasses datacenter IP block)
-    # Set to your worker URL, e.g. https://clob-proxy.yourname.workers.dev
-    CLOB_PROXY_URL: str = ""
     GAMMA_HOST: str = "https://gamma-api.polymarket.com"
     DATA_API_HOST: str = "https://data-api.polymarket.com"
     CHAIN_ID: int = 137

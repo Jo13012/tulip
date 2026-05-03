@@ -1,7 +1,3 @@
-// Cloudflare Worker — proxy transparent vers clob.polymarket.com
-// Déployer sur: https://dash.cloudflare.com/workers
-// URL cible backend: https://clob-proxy.<ton-sous-domaine>.workers.dev
-
 const TARGET = 'https://clob.polymarket.com'
 const ALLOWED_PATHS = ['/auth/derive-api-key', '/auth/api-key', '/auth/ban-status']
 
