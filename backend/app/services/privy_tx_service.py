@@ -17,6 +17,27 @@ log = logging.getLogger("uvicorn.error")
 
 PRIVY_API_BASE = "https://api.privy.io/v1"
 
+# Persistent client — reuses TCP+TLS connections across fee flush calls
+_privy_client: httpx.AsyncClient | None = None
+
+
+def _get_privy_client() -> httpx.AsyncClient:
+    global _privy_client
+    if _privy_client is None or _privy_client.is_closed:
+        _privy_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=25.0, write=5.0, pool=2.0),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=60),
+            trust_env=False,
+        )
+    return _privy_client
+
+
+async def close_privy_client() -> None:
+    global _privy_client
+    if _privy_client and not _privy_client.is_closed:
+        await _privy_client.aclose()
+        _privy_client = None
+
 
 class PrivyTxError(Exception):
     pass
@@ -39,16 +60,16 @@ async def _privy_rpc(privy_wallet_id: str, payload: dict) -> dict:
         **_authorization_headers("POST", url, payload),
         **({"privy-authorization-key-id": settings.PRIVY_AUTHORIZATION_KEY_ID} if settings.PRIVY_AUTHORIZATION_KEY_ID else {}),
     }
-    async with httpx.AsyncClient(timeout=20.0, trust_env=False) as http:
-        resp = await http.post(url, headers=headers, content=body_str)
-        if not resp.is_success:
-            if resp.status_code == 401:
-                raise PrivyTxError(
-                    "Privy authorization failed. The server authorization key or key id is invalid, expired, "
-                    "or no longer attached to this wallet."
-                )
-            raise PrivyTxError(f"Privy RPC error {resp.status_code}: {resp.text}")
-        return resp.json()
+    http = _get_privy_client()
+    resp = await http.post(url, headers=headers, content=body_str)
+    if not resp.is_success:
+        if resp.status_code == 401:
+            raise PrivyTxError(
+                "Privy authorization failed. The server authorization key or key id is invalid, expired, "
+                "or no longer attached to this wallet."
+            )
+        raise PrivyTxError(f"Privy RPC error {resp.status_code}: {resp.text}")
+    return resp.json()
 
 
 def _encode_erc20_transfer(to_address: str, amount: int) -> str:

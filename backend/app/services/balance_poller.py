@@ -69,7 +69,7 @@ class BalancePoller:
     async def refresh_user(self, user_id: str, wallet_address: str, proxy_address: str) -> None:
         """Force-refresh a single user's balances (e.g. after bridge)."""
         from app.services.funding_service import get_balances_batch
-        arb = await get_balances_batch([wallet_address]) if wallet_address else {}
+        arb = await get_balances_batch([wallet_address])
         usdc, eth = arb.get(wallet_address, (None, None))
         trading = await self._fetch_trading(proxy_address)
         self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, trading_balance=trading)
@@ -110,7 +110,7 @@ class BalancePoller:
         # 1 JSON-RPC batch call for all USDC+ETH balances
         try:
             arb_balances = await asyncio.wait_for(
-                get_balances_batch([a for a in addresses if a]),
+                get_balances_batch(addresses),
                 timeout=_PER_WALLET_TIMEOUT,
             )
         except Exception:

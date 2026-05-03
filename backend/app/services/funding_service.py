@@ -119,8 +119,13 @@ async def get_balances_batch(addresses: list[str]) -> dict[str, tuple[float | No
         results = await asyncio.gather(*[get_balances(a) for a in addresses], return_exceptions=True)
         return {a: (r if isinstance(r, tuple) else (None, None)) for a, r in zip(addresses, results)}
 
+    # Deduplicate and filter empty — keep original list for result mapping
+    valid_addresses = [a for a in addresses if a and a.strip()]
+    if not valid_addresses:
+        return {a: (None, None) for a in addresses}
+
     batch: list[dict] = []
-    for i, addr in enumerate(addresses):
+    for i, addr in enumerate(valid_addresses):
         clean = addr.strip().lower().replace("0x", "").zfill(40)
         batch.append({
             "jsonrpc": "2.0", "id": f"usdc_{i}",
@@ -150,13 +155,19 @@ async def get_balances_batch(addresses: list[str]) -> dict[str, tuple[float | No
         if isinstance(item, dict):
             by_id[str(item.get("id", ""))] = item.get("result")
 
-    out: dict[str, tuple[float | None, float | None]] = {}
-    for i, addr in enumerate(addresses):
+    # Build result keyed by valid_addresses (correct index alignment)
+    valid_out: dict[str, tuple[float | None, float | None]] = {}
+    for i, addr in enumerate(valid_addresses):
         usdc_hex = by_id.get(f"usdc_{i}")
         eth_hex  = by_id.get(f"eth_{i}")
         usdc = (int(usdc_hex, 16) / 1_000_000) if usdc_hex and usdc_hex != "0x" else None
         eth  = (int(eth_hex, 16) / 1e18)        if eth_hex  and eth_hex  != "0x" else None
-        out[addr] = (usdc, eth)
+        valid_out[addr] = (usdc, eth)
+
+    # Map back to original addresses list (empty/missing → (None, None))
+    out: dict[str, tuple[float | None, float | None]] = {}
+    for addr in addresses:
+        out[addr] = valid_out.get(addr, (None, None))
     return out
 
 

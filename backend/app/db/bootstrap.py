@@ -108,6 +108,29 @@ async def ensure_strategy_slot_version_columns() -> None:
     log.info("Ensured strategy_slot_versions columns are available")
 
 
+async def ensure_fee_queue_table() -> None:
+    """Persistent fee queue — 1 row per wallet, crash-safe."""
+    statements = [
+        """
+        CREATE TABLE IF NOT EXISTS fee_queue (
+            privy_wallet_id     VARCHAR PRIMARY KEY,
+            wallet_address      VARCHAR NOT NULL,
+            referrer_user_id    VARCHAR NOT NULL DEFAULT '',
+            referrer_wallet_address VARCHAR NOT NULL DEFAULT '',
+            pending_usdc        FLOAT   NOT NULL DEFAULT 0.0,
+            last_fill_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            locked              BOOLEAN NOT NULL DEFAULT FALSE
+        )
+        """,
+    ]
+    async with engine.begin() as conn:
+        for stmt in statements:
+            await conn.execute(text(stmt))
+        # Unlock any rows left locked by a crashed flush
+        await conn.execute(text("UPDATE fee_queue SET locked = FALSE WHERE locked = TRUE"))
+    log.info("Ensured fee_queue table")
+
+
 async def reset_stale_funding_states() -> None:
     """
     On restart, any wallet stuck in bridging/polling has no active job.

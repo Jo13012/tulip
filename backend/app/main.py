@@ -26,6 +26,7 @@ from app.db.bootstrap import (
     ensure_global_strategy,
     ensure_funding_transactions_table,
     ensure_strategy_slot_version_columns,
+    ensure_fee_queue_table,
     reset_stale_funding_states,
 )
 
@@ -64,6 +65,7 @@ async def lifespan(app: FastAPI):
         await ensure_user_free_fee_ends_at_column()
         await ensure_funding_transactions_table()
         await ensure_strategy_slot_version_columns()
+        await ensure_fee_queue_table()
         await ensure_global_strategy()
         await reset_stale_funding_states()
     except Exception as _e:
@@ -84,7 +86,7 @@ async def lifespan(app: FastAPI):
     # Start live wallet balance poller (30s TTL cache for admin/users)
     balance_poller.start()
 
-    # Start fee batch flush (1 tx/wallet/60s instead of 1 tx/fill)
+    # Start fee flush (DB-persisted queue, 10s poll, 10s debounce)
     from app.db.session import async_session_factory
     fee_service.start(async_session_factory)
 
@@ -97,7 +99,9 @@ async def lifespan(app: FastAPI):
     await market_resolver.close()
     await bridge_client.close()
     from app.services.funding_service import close_clients as _close_http
+    from app.services.privy_tx_service import close_privy_client
     await _close_http()
+    await close_privy_client()
 
 
 app = FastAPI(
