@@ -19,8 +19,11 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     datefmt="%H:%M:%S",
 )
-# Make sure our service loggers are visible
-for _lg in ("nuclear_close", "redeem", "polymarket_onboarding"):
+# Silence noisy HTTP transport loggers
+for _quiet in ("httpx", "httpcore", "hpack"):
+    logging.getLogger(_quiet).setLevel(logging.WARNING)
+# Ensure our service loggers are visible
+for _lg in ("nuclear_close", "redeem", "onboarding", "polymarket_onboarding"):
     logging.getLogger(_lg).setLevel(logging.DEBUG)
 
 from fastapi import FastAPI, Request
