@@ -96,7 +96,7 @@ async def run_nuclear_close(
     )
 
     # ── Taker-sell or redeem each position ────────────────────────────────────────
-    redeemable_to_process: list[tuple[str, str, float]] = []  # (token_id, condition_id, size)
+    redeemable_to_process: list[tuple[str, str, float]] = []  # (token_id, condition_id, size) — token_id used for collateral detection
 
     for token_id in sell_token_set:
         # If data-api says redeemable, queue for on-chain redeem
@@ -176,13 +176,14 @@ async def run_nuclear_close(
                 continue
             seen_conditions.add(condition_id)
 
-            log.info("nuclear_close redeem: condition=%s size=%.4f", condition_id[:20], size)
+            log.info("nuclear_close redeem: token=%s condition=%s size=%.4f", token_id[:16], condition_id[:20], size)
             redeem_result = await redeem_positions(
                 privy_wallet_id=privy_wallet_id,
                 eoa_address=eoa_address,
                 safe_address=safe_address,
                 condition_id=condition_id,
                 estimated_tokens=size,
+                known_token_id=token_id,
             )
             results["redeemed_positions"].append({
                 "token_id": token_id,

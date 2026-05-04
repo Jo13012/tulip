@@ -36,7 +36,7 @@ from app.runtime.session_registry import session_registry
 from app.integrations.polymarket.execution_client import ExecutionClient
 from app.runtime.session_manager import _build_slot_market_config
 
-log = logging.getLogger("uvicorn.error")
+log = logging.getLogger("recovery")
 
 RECOVERY_TIMEOUT_S = 120.0
 

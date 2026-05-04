@@ -20,7 +20,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 # Silence noisy HTTP transport loggers
-for _quiet in ("httpx", "httpcore", "hpack"):
+for _quiet in ("httpx", "httpcore", "hpack", "recovery"):
     logging.getLogger(_quiet).setLevel(logging.WARNING)
 # Ensure our service loggers are visible
 for _lg in ("nuclear_close", "redeem", "onboarding", "polymarket_onboarding"):
