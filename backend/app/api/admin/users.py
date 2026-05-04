@@ -17,7 +17,7 @@ from sqlalchemy import select, and_
 from typing import Optional, List
 
 from app.core.deps import AdminUser, DbSession
-from app.db.models import User, Wallet, Session as DBSession, AuditLog, SessionSnapshot
+from app.db.models import User, Wallet, Session as DBSession, AuditLog, SessionSnapshot, SessionSlotMarketHistory, SessionSlot
 from app.runtime.session_registry import session_registry
 from app.runtime.session_manager import session_manager
 from app.services.balance_poller import balance_poller
@@ -266,6 +266,29 @@ async def stop_user_session(user_id: str, body: StopSessionRequest, db: DbSessio
     return {"ok": True, "session_id": active.id, "mode": body.mode}
 
 
+async def _get_token_condition_map(user_id: str, db) -> dict[str, str]:
+    """Build {token_id: condition_id} from all SessionSlotMarketHistory for this user."""
+    rows = await db.execute(
+        select(
+            SessionSlotMarketHistory.token_id_yes,
+            SessionSlotMarketHistory.token_id_no,
+            SessionSlotMarketHistory.condition_id,
+        )
+        .join(SessionSlot, SessionSlot.id == SessionSlotMarketHistory.session_slot_id)
+        .join(DBSession, DBSession.id == SessionSlot.session_id)
+        .where(DBSession.user_id == user_id)
+        .where(SessionSlotMarketHistory.condition_id.isnot(None))
+    )
+    result: dict[str, str] = {}
+    for row in rows.all():
+        cid = row.condition_id
+        if row.token_id_yes:
+            result[row.token_id_yes] = cid
+        if row.token_id_no:
+            result[row.token_id_no] = cid
+    return result
+
+
 async def _get_user_client(user_id: str, db) -> ExecutionClient:
     """Build and initialize an ExecutionClient for the user's primary wallet."""
     w_q = await db.execute(
@@ -295,6 +318,7 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
         raise HTTPException(404, "User not found")
 
     client = await _get_user_client(user_id, db)
+    token_condition_map = await _get_token_condition_map(user_id, db)
     try:
         # Fetch open orders + all positions concurrently
         orders_task    = asyncio.create_task(client.get_open_orders())
@@ -330,7 +354,7 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
 
         all_tids = list({p["token_id"] for p in raw_positions if p.get("token_id")})
 
-        # Fetch midpoints + Gamma closed status concurrently
+        # Midpoints only — closed status comes from CLOB for unknown tokens
         async def fetch_mid(tid: str):
             try:
                 mid = await market_data_service.get_midpoint(tid)
@@ -338,38 +362,31 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
             except Exception:
                 return tid, 0.0
 
-        async def fetch_clob_closed(tids: list[str]) -> dict[str, bool]:
-            """Fetch closed status for each token_id from CLOB API (parallel)."""
-            if not tids:
-                return {}
-            import httpx as _httpx
+        # For tokens not in DB, check CLOB closed status
+        unknown_tids = [t for t in all_tids if t not in token_condition_map]
 
-            async def _one(h: _httpx.AsyncClient, tid: str) -> dict[str, bool]:
-                try:
+        async def fetch_clob_closed_one(tid: str) -> tuple[str, bool]:
+            try:
+                import httpx as _httpx
+                async with _httpx.AsyncClient(timeout=8.0, trust_env=False) as h:
                     r = await h.get("https://clob.polymarket.com/markets", params={"token_id": tid})
                     if not r.is_success:
-                        return {}
-                    partial: dict[str, bool] = {}
+                        return tid, False
                     for m in (r.json().get("data") or []):
-                        closed = bool(m.get("closed"))
                         for t in (m.get("tokens") or []):
-                            partial[str(t.get("token_id", ""))] = closed
-                    return partial
-                except Exception:
-                    return {}
+                            if str(t.get("token_id", "")) == tid:
+                                return tid, bool(m.get("closed"))
+                    return tid, False
+            except Exception:
+                return tid, False
 
-            async with _httpx.AsyncClient(timeout=10.0, trust_env=False) as h:
-                results_list = await asyncio.gather(*[_one(h, tid) for tid in tids])
-            merged: dict[str, bool] = {}
-            for r in results_list:
-                merged.update(r)
-            return merged
-
-        mid_results, closed_map = await asyncio.gather(
+        mid_results, clob_results = await asyncio.gather(
             asyncio.gather(*[fetch_mid(tid) for tid in all_tids]),
-            fetch_clob_closed(all_tids),
+            asyncio.gather(*[fetch_clob_closed_one(tid) for tid in unknown_tids]),
         )
         mids = dict(mid_results)
+        # closed_map: DB tokens always use condition_id presence as known; CLOB for unknowns
+        clob_closed: dict[str, bool] = dict(clob_results)
 
         positions_list = []
         for pos in raw_positions:
@@ -380,15 +397,18 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
             cur = float(pos.get("cur_price") or 0)
             mid = mids.get(tid, cur)
             price = float(mid) if float(mid) > 0 else cur
-            resolved = closed_map.get(tid, False)
+            # resolved: True if CLOB says closed (for DB tokens, use CLOB too)
+            resolved = clob_closed.get(tid, False)
+            condition_id = token_condition_map.get(tid)
             positions_list.append({
-                "token_id":  tid,
-                "question":  (pos.get("question") or "").strip(),
-                "outcome":   pos.get("outcome") or "",
-                "balance":   round(bal, 4),
-                "mid":       round(price, 4),
-                "value_usd": round(bal * price, 2),
-                "resolved":  resolved,
+                "token_id":     tid,
+                "question":     (pos.get("question") or "").strip(),
+                "outcome":      pos.get("outcome") or "",
+                "balance":      round(bal, 4),
+                "mid":          round(price, 4),
+                "value_usd":    round(bal * price, 2),
+                "resolved":     resolved,
+                "condition_id": condition_id,
             })
 
         total_value_usd = round(sum(p["value_usd"] for p in positions_list), 2)
@@ -423,6 +443,7 @@ async def nuclear_close(user_id: str, body: NuclearCloseRequest, db: DbSession, 
         raise HTTPException(400, "Nothing to do")
 
     client = await _get_user_client(user_id, db)
+    token_condition_map = await _get_token_condition_map(user_id, db)
     try:
         results = await _run_nuclear_close(
             client,
@@ -430,6 +451,7 @@ async def nuclear_close(user_id: str, body: NuclearCloseRequest, db: DbSession, 
             cancel_order_ids=body.cancel_order_ids or None,
             sell_token_ids=body.sell_token_ids or None,
             sell_all_positions=not body.sell_token_ids,
+            token_condition_map=token_condition_map,
         )
 
         db.add(AuditLog(

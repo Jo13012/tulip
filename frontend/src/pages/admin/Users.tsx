@@ -25,6 +25,7 @@ interface PolyPosition {
   mid: number
   value_usd: number
   resolved: boolean
+  condition_id?: string
 }
 
 function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void }) {
@@ -249,13 +250,17 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
                 </div>
                 {redeemPositions.map(pos => (
                   <div key={pos.token_id} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5">
-                    <div className="w-4 h-4 rounded bg-emerald-500/30 border border-emerald-500/50 flex items-center justify-center shrink-0">
+                    <div className="w-5 h-5 rounded bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center shrink-0">
                       <span className="text-[9px] text-emerald-400 font-bold">$</span>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-[11px] text-white/70 truncate">{pos.question || pos.token_id.slice(0, 20) + '…'}</p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-[11px] text-white/70 truncate flex-1">{pos.question || pos.token_id.slice(0, 20) + '…'}</p>
+                        {pos.outcome && <span className="text-[9px] bg-white/10 text-white/50 px-1 py-0.5 rounded shrink-0">{pos.outcome}</span>}
+                      </div>
                       <p className="text-[10px] text-emerald-400/60">
-                        {pos.balance.toFixed(2)} tok · <span className="text-emerald-400/80 font-semibold">{fmtUsd2(pos.value_usd)}</span> pUSD @ {(pos.mid * 100).toFixed(1)}¢
+                        {pos.balance.toFixed(2)} tok · <span className="text-emerald-400/80 font-semibold">{fmtUsd2(pos.value_usd)}</span>
+                        {pos.condition_id && <span className="text-white/20 ml-1 font-mono">{pos.condition_id.slice(0, 10)}…</span>}
                       </p>
                     </div>
                   </div>
