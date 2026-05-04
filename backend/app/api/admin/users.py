@@ -24,6 +24,7 @@ from app.services.balance_poller import balance_poller
 from app.integrations.polymarket.execution_client import ExecutionClient
 from app.runtime.market_data_service import market_data_service
 from app.runtime.runtime_models import norm
+from app.services.nuclear_close_service import run_nuclear_close as _run_nuclear_close
 from sqlalchemy import func as _func
 
 
@@ -389,89 +390,26 @@ async def nuclear_close(user_id: str, body: NuclearCloseRequest, db: DbSession, 
         raise HTTPException(400, "Nothing to do")
 
     client = await _get_user_client(user_id, db)
-    results = {"cancelled_orders": [], "sold_positions": [], "errors": []}
-
     try:
-        # ── Fetch all open orders once ────────────────────────────────────────
-        try:
-            live_orders = await client.get_open_orders()
-        except Exception as e:
-            results["errors"].append(f"get_open_orders failed: {e}")
-            live_orders = {}
+        results = await _run_nuclear_close(
+            client,
+            cancel_orders=body.cancel_orders,
+            cancel_order_ids=body.cancel_order_ids or None,
+            sell_token_ids=body.sell_token_ids or None,
+            sell_all_positions=not body.sell_token_ids,
+        )
 
-        sell_token_set   = set(body.sell_token_ids)
-        specific_oid_set = set(body.cancel_order_ids)
-
-        # ── 1. Cancel orders ──────────────────────────────────────────────────
-        # Always cancel ALL orders on tokens we want to sell (both BUY and SELL)
-        # so Poly doesn't reject the new taker sell order.
-        # If cancel_order_ids set, only cancel those specific orders (+ orders on sell tokens).
-        # If cancel_orders=True, cancel all orders.
-        for oid, order in live_orders.items():
-            token_id = order.get("asset_id") or ""
-            should_cancel = (
-                body.cancel_orders
-                or (token_id in sell_token_set)
-                or (specific_oid_set and oid in specific_oid_set)
-            )
-            if not should_cancel:
-                continue
-            try:
-                await client.cancel_order(oid)
-                results["cancelled_orders"].append(oid)
-            except Exception as e:
-                results["errors"].append(f"cancel {oid[:14]}: {e}")
-
-        # Small delay for CLOB to settle cancelled orders before placing sells
-        if sell_token_set:
-            await asyncio.sleep(2.0)
-
-        # ── 2. Taker-sell selected positions ─────────────────────────────────
-        for token_id in body.sell_token_ids:
-            try:
-                balance = await client.get_token_balance(token_id)
-                if not balance or balance < 0.5:
-                    results["errors"].append(f"token {token_id[:16]}: balance {balance:.2f} too low")
-                    continue
-
-                sell_tokens = float(math.floor(balance))
-                if sell_tokens < 1.0:
-                    continue
-
-                book = await market_data_service.get_order_book(token_id)
-                bids = book.get("bids") or []
-                if not bids:
-                    results["errors"].append(f"token {token_id[:16]}: no bids in book")
-                    continue
-
-                bid_price = norm(float(bids[0]["price"]))
-                await client.ensure_sell_allowance(token_id)
-                resp = await client.place_limit_order(
-                    token_id=token_id,
-                    price=bid_price,
-                    size=sell_tokens,
-                    side="SELL",
-                    tick_size="0.001",
-                    neg_risk=False,
-                )
-                results["sold_positions"].append({
-                    "token_id": token_id,
-                    "tokens":   sell_tokens,
-                    "price":    bid_price,
-                    "order_id": resp.get("orderID"),
-                    "success":  resp.get("success", False),
-                })
-            except Exception as e:
-                results["errors"].append(f"sell {token_id[:16]}: {e}")
-
-        # ── Audit log ─────────────────────────────────────────────────────────
         db.add(AuditLog(
             actor_id=admin["sub"], actor_role="admin",
             action="user.nuclear_close", entity_type="user", entity_id=user_id,
-            detail=f"cancelled={len(results['cancelled_orders'])} sold={len(results['sold_positions'])} errors={len(results['errors'])}",
+            detail=(
+                f"cancelled={len(results['cancelled_orders'])} "
+                f"sold={len(results['sold_positions'])} "
+                f"redeemed={len(results.get('redeemed_positions', []))} "
+                f"errors={len(results['errors'])}"
+            ),
         ))
         await db.commit()
-
     finally:
         await client.close()
 

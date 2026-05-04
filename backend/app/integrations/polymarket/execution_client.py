@@ -230,6 +230,18 @@ class ExecutionClient:
     def is_initialized(self) -> bool:
         return self._initialized
 
+    @property
+    def privy_wallet_id(self) -> str:
+        return self._privy_wallet_id
+
+    @property
+    def wallet_address(self) -> str:
+        return self._wallet_address
+
+    @property
+    def proxy_address(self) -> str:
+        return self._proxy_address
+
     async def _ensure_ready(self):
         if not self._initialized:
             await self.initialize()

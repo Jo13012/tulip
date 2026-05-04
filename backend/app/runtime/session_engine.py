@@ -239,7 +239,7 @@ class SessionEngine:
             )
             await self._log_session(
                 "INFO",
-                f"Hard stop nuclear close: cancelled={len(close_result['cancelled_orders'])} sold={len(close_result['sold_positions'])} errors={len(close_result['errors'])}",
+                f"Hard stop nuclear close: cancelled={len(close_result['cancelled_orders'])} sold={len(close_result['sold_positions'])} redeemed={len(close_result.get('redeemed_positions', []))} errors={len(close_result['errors'])}",
             )
         except Exception as e:
             await self._log_session("ERROR", f"Hard stop nuclear close failed: {e}")
@@ -375,7 +375,7 @@ class SessionEngine:
             )
             await self._log_session(
                 "INFO",
-                f"Soft stop nuclear close: cancelled={len(close_result['cancelled_orders'])} sold={len(close_result['sold_positions'])} errors={len(close_result['errors'])}",
+                f"Soft stop nuclear close: cancelled={len(close_result['cancelled_orders'])} sold={len(close_result['sold_positions'])} redeemed={len(close_result.get('redeemed_positions', []))} errors={len(close_result['errors'])}",
             )
         except Exception as e:
             await self._log_session("ERROR", f"Soft stop nuclear close failed: {e}")

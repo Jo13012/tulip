@@ -114,7 +114,32 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
           <div className="space-y-2">
             <p className="text-[11px] text-emerald-400 font-semibold">Executed</p>
             <p className="text-[10px] text-white/50">Cancelled: {result.cancelled_orders?.length ?? 0} orders</p>
-            <p className="text-[10px] text-white/50">Sold: {result.sold_positions?.length ?? 0} positions</p>
+            {result.sold_positions?.length > 0 && (
+              <div className="space-y-0.5">
+                <p className="text-[10px] text-white/50">
+                  Sold: {result.sold_positions.length} positions
+                  {' '}(~${result.sold_positions.reduce((s: number, p: any) => s + (p.estimated_usdc ?? 0), 0).toFixed(2)})
+                </p>
+                {result.sold_positions.map((p: any, i: number) => (
+                  <p key={i} className="text-[10px] text-white/30 font-mono pl-2">
+                    {p.token_id?.slice(0, 14)}… {p.tokens?.toFixed(1)} tok @ {((p.price ?? 0) * 100).toFixed(1)}¢ = ~${(p.estimated_usdc ?? 0).toFixed(2)}
+                  </p>
+                ))}
+              </div>
+            )}
+            {result.redeemed_positions?.length > 0 && (
+              <div className="space-y-0.5">
+                <p className="text-[10px] text-emerald-400/80">
+                  Redeemed: {result.redeemed_positions.length} positions
+                  {' '}(~${result.redeemed_positions.reduce((s: number, p: any) => s + (p.estimated_usdc ?? 0), 0).toFixed(2)} pUSD)
+                </p>
+                {result.redeemed_positions.map((p: any, i: number) => (
+                  <p key={i} className={`text-[10px] font-mono pl-2 ${p.ok ? 'text-emerald-400/60' : 'text-yellow-400/60'}`}>
+                    {p.token_id?.slice(0, 14)}… ~${(p.estimated_usdc ?? 0).toFixed(2)} {p.ok ? '✓' : `⚠ ${p.error ?? 'failed'}`}
+                  </p>
+                ))}
+              </div>
+            )}
             {result.errors?.length > 0 && (
               <div className="space-y-1">
                 <p className="text-[10px] text-red-400">Errors:</p>
