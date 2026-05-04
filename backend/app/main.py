@@ -14,6 +14,15 @@ if sys.platform == "win32":
 import time
 import logging
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+# Make sure our service loggers are visible
+for _lg in ("nuclear_close", "redeem", "polymarket_onboarding"):
+    logging.getLogger(_lg).setLevel(logging.DEBUG)
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 

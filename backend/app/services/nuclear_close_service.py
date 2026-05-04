@@ -36,14 +36,14 @@ async def run_nuclear_close(
     }
 
     # ── Gather all positions ──────────────────────────────────────────────────────
-    # data-api gives us redeemable + condition_id directly — no extra lookups needed
+    # Always fetch — needed for condition_id map + redeemable flags
     all_positions: list[dict] = []
-    if sell_all_positions:
-        try:
-            all_positions = await client.get_all_positions()
-        except Exception as e:
-            results["errors"].append(f"get_all_positions failed: {e}")
+    try:
+        all_positions = await client.get_all_positions()
+    except Exception as e:
+        results["errors"].append(f"get_all_positions failed: {e}")
 
+    if sell_all_positions:
         for pos in all_positions:
             token_id = pos.get("token_id") or ""
             size = float(pos.get("size") or 0.0)
