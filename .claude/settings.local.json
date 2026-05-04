@@ -4,7 +4,8 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('app/api/auth.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
       "Bash(npx tsc *)",
       "Bash(python -c \"from eth_utils import keccak; sig = b'redeemPositions\\(address,bytes32,bytes32,uint256[]\\)'; print\\('0x' + keccak\\(sig\\).hex\\(\\)[:8]\\)\")",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -c \"from app.services.redeem_service import redeem_positions; from app.services.nuclear_close_service import run_nuclear_close; print\\('OK'\\)\")"
     ]
   }
 }

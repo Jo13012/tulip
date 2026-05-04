@@ -15,9 +15,6 @@ from app.runtime.runtime_models import norm
 
 log = logging.getLogger("nuclear_close")
 
-# Positions with cur_price >= this are considered resolved winners → redeem, not sell
-RESOLVED_PRICE_THRESHOLD = 0.95
-
 
 async def _fetch_condition_id(token_id: str) -> str | None:
     """Fetch condition_id for a token from Gamma API. Returns None on failure."""
@@ -52,7 +49,7 @@ async def run_nuclear_close(
 ) -> dict:
     """
     Cancel open orders and taker-sell selected/all positions directly on Polymarket.
-    For resolved winning positions (no bids or cur_price >= 0.95), attempt on-chain redeem.
+    For positions with no bids in book (market resolved/closed), attempt on-chain redeem.
     """
     specific_oid_set = set(cancel_order_ids or [])
     sell_token_set = set(sell_token_ids or [])
@@ -76,13 +73,7 @@ async def run_nuclear_close(
         for pos in all_positions:
             token_id = pos.get("token_id") or ""
             size = float(pos.get("size") or 0.0)
-            cur_price = float(pos.get("cur_price") or 0.0)
-            if not token_id or size < 0.01:
-                continue
-            if cur_price >= RESOLVED_PRICE_THRESHOLD:
-                # Looks like a resolved winner — redeem instead of sell
-                pass
-            elif size >= 0.5:
+            if token_id and size >= 0.5:
                 sell_token_set.add(token_id)
 
     if not cancel_orders and not specific_oid_set and not sell_token_set:
@@ -158,16 +149,6 @@ async def run_nuclear_close(
         except Exception as e:
             results["errors"].append(f"sell {token_id[:16]}: {e}")
 
-    # Also queue any resolved winners from all_positions (cur_price >= threshold)
-    if sell_all_positions:
-        for pos in all_positions:
-            token_id = pos.get("token_id") or ""
-            cur_price = float(pos.get("cur_price") or 0.0)
-            size = float(pos.get("size") or 0.0)
-            if token_id and size >= 0.01 and cur_price >= RESOLVED_PRICE_THRESHOLD:
-                if token_id not in no_bid_token_ids:
-                    no_bid_token_ids.append(token_id)
-
     # ── Redeem resolved positions ─────────────────────────────────────────────────
     redeem_candidates = [t for t in no_bid_token_ids if t]
     has_redeem_creds = bool(
@@ -176,6 +157,8 @@ async def run_nuclear_close(
         and getattr(client, "proxy_address", None)
     )
 
+    log.info("nuclear_close: redeem_candidates=%d has_creds=%s", len(redeem_candidates), has_redeem_creds)
+
     if redeem_candidates and has_redeem_creds:
         from app.services.redeem_service import redeem_positions
 
@@ -183,10 +166,14 @@ async def run_nuclear_close(
         eoa_address = client.wallet_address
         safe_address = client.proxy_address
 
-        # Fetch condition_ids concurrently for all candidates
+        log.info("nuclear_close redeem: eoa=%s safe=%s candidates=%s",
+                 eoa_address[:10], safe_address[:10], redeem_candidates)
+
+        # Fetch condition_ids for all candidates
         for token_id in redeem_candidates:
             if token_id not in cond_map:
                 condition_id = await _fetch_condition_id(token_id)
+                log.info("nuclear_close gamma lookup: token=%s → condition_id=%s", token_id[:16], condition_id)
                 if condition_id:
                     cond_map[token_id] = condition_id
 
@@ -197,6 +184,7 @@ async def run_nuclear_close(
             if not condition_id or condition_id in seen_conditions:
                 if not condition_id:
                     results["errors"].append(f"redeem {token_id[:16]}: no condition_id found")
+                    log.warning("nuclear_close: no condition_id for token=%s", token_id[:16])
                 continue
             seen_conditions.add(condition_id)
 

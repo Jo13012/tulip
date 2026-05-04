@@ -328,7 +328,9 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
                 "size_remaining": round(remaining, 4),
             })
 
-        # Enrich positions with midprice
+        all_tids = list({p["token_id"] for p in raw_positions if p.get("token_id")})
+
+        # Fetch midpoints + Gamma closed status concurrently
         async def fetch_mid(tid: str):
             try:
                 mid = await market_data_service.get_midpoint(tid)
@@ -336,8 +338,40 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
             except Exception:
                 return tid, 0.0
 
-        all_tids = list({p["token_id"] for p in raw_positions if p.get("token_id")})
-        mid_results = await asyncio.gather(*[fetch_mid(tid) for tid in all_tids])
+        async def fetch_gamma_closed(tids: list[str]) -> dict[str, bool]:
+            if not tids:
+                return {}
+            try:
+                import httpx as _httpx
+                # Gamma accepts comma-separated clobTokenIds
+                params = "&".join(f"clobTokenIds={t}" for t in tids)
+                async with _httpx.AsyncClient(timeout=10.0, trust_env=False) as h:
+                    r = await h.get(f"{settings.GAMMA_HOST}/markets?{params}")
+                    if not r.is_success:
+                        return {}
+                    markets = r.json()
+                    if not isinstance(markets, list):
+                        return {}
+                    result: dict[str, bool] = {}
+                    for m in markets:
+                        closed = bool(m.get("closed"))
+                        raw_ids = m.get("clobTokenIds") or "[]"
+                        if isinstance(raw_ids, str):
+                            import json as _json
+                            try:
+                                raw_ids = _json.loads(raw_ids)
+                            except Exception:
+                                raw_ids = []
+                        for tid in (raw_ids if isinstance(raw_ids, list) else []):
+                            result[str(tid)] = closed
+                    return result
+            except Exception:
+                return {}
+
+        mid_results, closed_map = await asyncio.gather(
+            asyncio.gather(*[fetch_mid(tid) for tid in all_tids]),
+            fetch_gamma_closed(all_tids),
+        )
         mids = dict(mid_results)
 
         positions_list = []
@@ -349,6 +383,7 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
             cur = float(pos.get("cur_price") or 0)
             mid = mids.get(tid, cur)
             price = float(mid) if float(mid) > 0 else cur
+            resolved = closed_map.get(tid, False)
             positions_list.append({
                 "token_id":  tid,
                 "question":  (pos.get("question") or "").strip(),
@@ -356,6 +391,7 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
                 "balance":   round(bal, 4),
                 "mid":       round(price, 4),
                 "value_usd": round(bal * price, 2),
+                "resolved":  resolved,
             })
 
         total_value_usd = round(sum(p["value_usd"] for p in positions_list), 2)

@@ -20,20 +20,22 @@ interface PolyOrder {
 interface PolyPosition {
   token_id: string
   question: string
+  outcome: string
   balance: number
   mid: number
   value_usd: number
+  resolved: boolean
 }
 
 function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void }) {
-  const [loading, setLoading]           = useState(true)
-  const [executing, setExecuting]       = useState(false)
-  const [orders, setOrders]             = useState<PolyOrder[]>([])
-  const [positions, setPositions]       = useState<PolyPosition[]>([])
-  const [totalValueUsd, setTotalValueUsd] = useState(0)
+  const [loading, setLoading]               = useState(true)
+  const [executing, setExecuting]           = useState(false)
+  const [orders, setOrders]                 = useState<PolyOrder[]>([])
+  const [positions, setPositions]           = useState<PolyPosition[]>([])
+  const [totalValueUsd, setTotalValueUsd]   = useState(0)
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set())
   const [selectedTokens, setSelectedTokens] = useState<Set<string>>(new Set())
-  const [result, setResult]             = useState<any>(null)
+  const [result, setResult]                 = useState<any>(null)
   const addToast = useAppStore(s => s.addToast)
 
   useEffect(() => {
@@ -54,30 +56,23 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
     })()
   }, [])
 
+  const sellPositions   = positions.filter(p => !p.resolved)
+  const redeemPositions = positions.filter(p => p.resolved)
+
+  const sellTotal   = sellPositions.reduce((s, p) => s + (selectedTokens.has(p.token_id) ? p.value_usd : 0), 0)
+  const redeemTotal = redeemPositions.reduce((s, p) => s + p.value_usd, 0)
+
   function toggleToken(tid: string) {
-    setSelectedTokens(prev => {
-      const next = new Set(prev)
-      next.has(tid) ? next.delete(tid) : next.add(tid)
-      return next
-    })
+    setSelectedTokens(prev => { const n = new Set(prev); n.has(tid) ? n.delete(tid) : n.add(tid); return n })
   }
-
   function toggleOrder(oid: string) {
-    setSelectedOrders(prev => {
-      const next = new Set(prev)
-      next.has(oid) ? next.delete(oid) : next.add(oid)
-      return next
-    })
+    setSelectedOrders(prev => { const n = new Set(prev); n.has(oid) ? n.delete(oid) : n.add(oid); return n })
   }
-
   function toggleAllOrders() {
-    setSelectedOrders(prev =>
-      prev.size === orders.length ? new Set() : new Set(orders.map(o => o.order_id))
-    )
+    setSelectedOrders(prev => prev.size === orders.length ? new Set() : new Set(orders.map(o => o.order_id)))
   }
 
   async function execute() {
-    if (selectedOrders.size === 0 && selectedTokens.size === 0) return
     setExecuting(true)
     try {
       const res: any = await api.admin.nuclearClose(user.id, {
@@ -86,7 +81,9 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
         sell_token_ids: Array.from(selectedTokens),
       })
       setResult(res)
-      addToast({ type: 'success', message: `Done: ${res.cancelled_orders?.length ?? 0} cancelled, ${res.sold_positions?.length ?? 0} sold` })
+      const sold    = res.sold_positions?.length ?? 0
+      const redeemed = res.redeemed_positions?.length ?? 0
+      addToast({ type: 'success', message: `Done: ${res.cancelled_orders?.length ?? 0} cancelled · ${sold} sold · ${redeemed} redeemed` })
     } catch (e: any) {
       addToast({ type: 'error', message: e.message })
     } finally {
@@ -94,12 +91,15 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
     }
   }
 
+  const fmtUsd2 = (v: number) => '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
       <div
-        className="bg-[#0d0e10] border border-white/[0.08] rounded-2xl w-full max-w-lg mx-4 p-5 space-y-4 max-h-[80vh] overflow-y-auto"
+        className="bg-[#0d0e10] border border-white/[0.08] rounded-2xl w-full max-w-lg mx-4 p-5 space-y-4 max-h-[85vh] overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
+        {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs font-semibold text-red-400">Nuclear Close</p>
@@ -109,53 +109,86 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
         </div>
 
         {loading ? (
-          <p className="text-[11px] text-white/30 text-center py-6">Fetching Poly state…</p>
+          <p className="text-[11px] text-white/30 text-center py-8">Fetching Poly state…</p>
+
         ) : result ? (
-          <div className="space-y-2">
+          /* ── Result view ── */
+          <div className="space-y-3">
             <p className="text-[11px] text-emerald-400 font-semibold">Executed</p>
-            <p className="text-[10px] text-white/50">Cancelled: {result.cancelled_orders?.length ?? 0} orders</p>
+
+            {/* Summary row */}
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { label: 'Cancelled', val: result.cancelled_orders?.length ?? 0, color: 'text-white/50' },
+                { label: 'Sold', val: result.sold_positions?.length ?? 0, sub: result.sold_positions?.length > 0 ? fmtUsd2(result.sold_positions.reduce((s: number, p: any) => s + (p.estimated_usdc ?? 0), 0)) : null, color: 'text-orange-400' },
+                { label: 'Redeemed', val: result.redeemed_positions?.length ?? 0, sub: result.redeemed_positions?.length > 0 ? fmtUsd2(result.redeemed_positions.reduce((s: number, p: any) => s + (p.estimated_usdc ?? 0), 0)) : null, color: 'text-emerald-400' },
+              ].map(({ label, val, sub, color }) => (
+                <div key={label} className="px-3 py-2 rounded-xl bg-white/[0.03] border border-white/[0.06] text-center">
+                  <p className={`text-base font-bold ${color}`}>{val}</p>
+                  <p className="text-[10px] text-white/30">{label}</p>
+                  {sub && <p className="text-[10px] text-white/50 mt-0.5">{sub}</p>}
+                </div>
+              ))}
+            </div>
+
+            {/* Sold detail */}
             {result.sold_positions?.length > 0 && (
-              <div className="space-y-0.5">
-                <p className="text-[10px] text-white/50">
-                  Sold: {result.sold_positions.length} positions
-                  {' '}(~${result.sold_positions.reduce((s: number, p: any) => s + (p.estimated_usdc ?? 0), 0).toFixed(2)})
-                </p>
+              <div className="space-y-1">
+                <p className="text-[10px] text-white/30 font-semibold uppercase tracking-wider">Sold</p>
                 {result.sold_positions.map((p: any, i: number) => (
-                  <p key={i} className="text-[10px] text-white/30 font-mono pl-2">
-                    {p.token_id?.slice(0, 14)}… {p.tokens?.toFixed(1)} tok @ {((p.price ?? 0) * 100).toFixed(1)}¢ = ~${(p.estimated_usdc ?? 0).toFixed(2)}
-                  </p>
+                  <div key={i} className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-white/[0.02] border border-white/[0.05]">
+                    <p className="text-[10px] text-white/50 truncate flex-1 pr-2">{p.token_id?.slice(0, 16)}…</p>
+                    <div className="text-right shrink-0">
+                      <p className="text-[10px] text-white/70">{fmtUsd2(p.estimated_usdc ?? 0)}</p>
+                      <p className="text-[9px] text-white/30">{p.tokens?.toFixed(1)} tok @ {((p.price ?? 0) * 100).toFixed(1)}¢</p>
+                    </div>
+                  </div>
                 ))}
               </div>
             )}
+
+            {/* Redeemed detail */}
             {result.redeemed_positions?.length > 0 && (
-              <div className="space-y-0.5">
-                <p className="text-[10px] text-emerald-400/80">
-                  Redeemed: {result.redeemed_positions.length} positions
-                  {' '}(~${result.redeemed_positions.reduce((s: number, p: any) => s + (p.estimated_usdc ?? 0), 0).toFixed(2)} pUSD)
-                </p>
+              <div className="space-y-1">
+                <p className="text-[10px] text-emerald-400/60 font-semibold uppercase tracking-wider">Redeemed</p>
                 {result.redeemed_positions.map((p: any, i: number) => (
-                  <p key={i} className={`text-[10px] font-mono pl-2 ${p.ok ? 'text-emerald-400/60' : 'text-yellow-400/60'}`}>
-                    {p.token_id?.slice(0, 14)}… ~${(p.estimated_usdc ?? 0).toFixed(2)} {p.ok ? '✓' : `⚠ ${p.error ?? 'failed'}`}
-                  </p>
+                  <div key={i} className={`flex items-center justify-between px-3 py-1.5 rounded-lg border ${p.ok ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-yellow-500/5 border-yellow-500/20'}`}>
+                    <div className="flex-1 min-w-0 pr-2">
+                      <p className="text-[10px] text-white/50 truncate">{p.token_id?.slice(0, 16)}…</p>
+                      {p.error && <p className="text-[9px] text-yellow-400/70 truncate">{p.error}</p>}
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className={`text-[10px] font-semibold ${p.ok ? 'text-emerald-400' : 'text-yellow-400'}`}>
+                        {p.ok ? '✓ ' : '⚠ '}{fmtUsd2(p.estimated_usdc ?? 0)}
+                      </p>
+                    </div>
+                  </div>
                 ))}
               </div>
             )}
+
+            {/* Errors */}
             {result.errors?.length > 0 && (
               <div className="space-y-1">
-                <p className="text-[10px] text-red-400">Errors:</p>
-                {result.errors.map((e: string, i: number) => (
-                  <p key={i} className="text-[10px] text-red-400/70 font-mono break-all">{e}</p>
-                ))}
+                <p className="text-[10px] text-red-400 font-semibold uppercase tracking-wider">Errors ({result.errors.length})</p>
+                <div className="max-h-32 overflow-y-auto space-y-0.5">
+                  {result.errors.map((e: string, i: number) => (
+                    <p key={i} className="text-[10px] text-red-400/60 font-mono break-all">{e}</p>
+                  ))}
+                </div>
               </div>
             )}
-            <button className="mt-2 text-[11px] text-white/40 hover:text-white/70" onClick={onClose}>Close</button>
+
+            <button className="text-[11px] text-white/30 hover:text-white/60 pt-1" onClick={onClose}>Close</button>
           </div>
+
         ) : (
+          /* ── Confirmation view ── */
           <>
-            {/* Open orders — individual rows with checkboxes */}
+            {/* Orders */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <p className="text-[10px] text-white/30 font-semibold uppercase tracking-wider">Open orders to cancel</p>
+                <p className="text-[10px] text-white/30 font-semibold uppercase tracking-wider">Orders to cancel</p>
                 {orders.length > 0 && (
                   <button className="text-[10px] text-white/30 hover:text-white/60" onClick={toggleAllOrders}>
                     {selectedOrders.size === orders.length ? 'Deselect all' : 'Select all'}
@@ -163,73 +196,86 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
                 )}
               </div>
               {orders.length === 0 ? (
-                <p className="text-[10px] text-white/20 px-1">No open orders on Poly</p>
+                <p className="text-[10px] text-white/20 px-1">No open orders</p>
               ) : orders.map(ord => (
-                <div
-                  key={ord.order_id}
-                  className="flex items-center justify-between px-3 py-2 rounded-xl border border-white/[0.07] bg-white/[0.02] cursor-pointer"
-                  onClick={() => toggleOrder(ord.order_id)}
-                >
-                  <div className="flex-1 min-w-0 pr-3">
-                    <p className="text-[11px] text-white/70 leading-snug truncate">
-                      {ord.question || ord.token_id.slice(0, 24) + '…'}
-                    </p>
-                    <p className="text-[10px] text-white/30 mt-0.5 font-mono">
-                      {ord.side} · {(ord.price * 100).toFixed(1)}¢ · {ord.size_remaining.toFixed(2)} tok
-                    </p>
-                  </div>
-                  <div className={`flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedOrders.has(ord.order_id) ? 'bg-red-500/80 border-red-500' : 'border-white/20'}`}>
+                <div key={ord.order_id} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-white/[0.07] bg-white/[0.02] cursor-pointer" onClick={() => toggleOrder(ord.order_id)}>
+                  <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${selectedOrders.has(ord.order_id) ? 'bg-red-500/80 border-red-500' : 'border-white/20'}`}>
                     {selectedOrders.has(ord.order_id) && <span className="text-[9px] text-white font-bold">✓</span>}
                   </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] text-white/70 truncate">{ord.question || ord.token_id.slice(0, 20) + '…'}</p>
+                    <p className="text-[10px] text-white/30 font-mono">{ord.side} · {(ord.price * 100).toFixed(1)}¢ · {ord.size_remaining.toFixed(2)} tok</p>
+                  </div>
                 </div>
               ))}
             </div>
 
-            {/* Positions */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <p className="text-[10px] text-white/30 font-semibold uppercase tracking-wider">Positions to sell (taker)</p>
-                {positions.length > 0 && (
-                  <p className="text-[11px] font-semibold text-white/60">
-                    Total: <span className="text-white/80">${totalValueUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </p>
-                )}
+            {/* Sell positions */}
+            {(sellPositions.length > 0 || redeemPositions.length === 0) && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] text-orange-400/70 font-semibold uppercase tracking-wider">Sell at best bid</p>
+                  {sellPositions.length > 0 && sellTotal > 0 && (
+                    <p className="text-[10px] text-white/40">{fmtUsd2(sellTotal)}</p>
+                  )}
+                </div>
+                {sellPositions.length === 0 ? (
+                  <p className="text-[10px] text-white/20 px-1">No sellable positions</p>
+                ) : sellPositions.map(pos => (
+                  <div key={pos.token_id} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-white/[0.07] bg-white/[0.02] cursor-pointer" onClick={() => toggleToken(pos.token_id)}>
+                    <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${selectedTokens.has(pos.token_id) ? 'bg-red-500/80 border-red-500' : 'border-white/20'}`}>
+                      {selectedTokens.has(pos.token_id) && <span className="text-[9px] text-white font-bold">✓</span>}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] text-white/70 truncate">{pos.question || pos.token_id.slice(0, 20) + '…'}</p>
+                      <p className="text-[10px] text-white/30">
+                        {pos.balance.toFixed(2)} tok · <span className="text-white/50">{fmtUsd2(pos.value_usd)}</span> @ {(pos.mid * 100).toFixed(1)}¢
+                      </p>
+                    </div>
+                  </div>
+                ))}
               </div>
-              {positions.length === 0 ? (
-                <p className="text-[10px] text-white/20 px-1">No token positions found on Poly</p>
-              ) : positions.map(pos => (
-                <div
-                  key={pos.token_id}
-                  className="flex items-center justify-between px-3 py-2 rounded-xl border border-white/[0.07] bg-white/[0.02] cursor-pointer"
-                  onClick={() => toggleToken(pos.token_id)}
-                >
-                  <div className="flex-1 min-w-0 pr-3">
-                    <p className="text-[11px] text-white/70 leading-snug truncate">
-                      {pos.question || pos.token_id.slice(0, 24) + '…'}
-                    </p>
-                    <p className="text-[10px] text-white/30 mt-0.5">
-                      {pos.balance.toFixed(2)} tok
-                      {pos.mid > 0 && <> · <span className="text-white/50">${pos.value_usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> @ {(pos.mid * 100).toFixed(1)}¢</>}
-                    </p>
-                  </div>
-                  <div className={`flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedTokens.has(pos.token_id) ? 'bg-red-500/80 border-red-500' : 'border-white/20'}`}>
-                    {selectedTokens.has(pos.token_id) && <span className="text-[9px] text-white font-bold">✓</span>}
-                  </div>
-                </div>
-              ))}
-            </div>
+            )}
 
-            {/* Warning + confirm */}
+            {/* Redeem positions */}
+            {redeemPositions.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-[10px] text-emerald-400/80 font-semibold uppercase tracking-wider">Redeem on-chain</p>
+                    <span className="text-[9px] bg-emerald-500/15 text-emerald-400 px-1.5 py-0.5 rounded-full">resolved</span>
+                  </div>
+                  <p className="text-[10px] text-emerald-400/70">{fmtUsd2(redeemTotal)}</p>
+                </div>
+                {redeemPositions.map(pos => (
+                  <div key={pos.token_id} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5">
+                    <div className="w-4 h-4 rounded bg-emerald-500/30 border border-emerald-500/50 flex items-center justify-center shrink-0">
+                      <span className="text-[9px] text-emerald-400 font-bold">$</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] text-white/70 truncate">{pos.question || pos.token_id.slice(0, 20) + '…'}</p>
+                      <p className="text-[10px] text-emerald-400/60">
+                        {pos.balance.toFixed(2)} tok · <span className="text-emerald-400/80 font-semibold">{fmtUsd2(pos.value_usd)}</span> pUSD @ {(pos.mid * 100).toFixed(1)}¢
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Warning */}
             <div className="px-3 py-2.5 rounded-xl bg-red-500/5 border border-red-500/20">
-              <p className="text-[10px] text-red-400/80">Executes directly on Polymarket. Sell orders placed at best bid (taker). Cannot be undone.</p>
+              <p className="text-[10px] text-red-400/70">
+                Sell orders execute at best bid (taker). Redeems submit on-chain via Safe. Cannot be undone.
+              </p>
             </div>
 
             <button
               className="w-full py-2.5 rounded-xl bg-red-500/20 border border-red-500/30 text-red-400 text-[11px] font-semibold hover:bg-red-500/30 transition-colors disabled:opacity-40"
               onClick={execute}
-              disabled={executing || (selectedOrders.size === 0 && selectedTokens.size === 0)}
+              disabled={executing || (selectedOrders.size === 0 && selectedTokens.size === 0 && redeemPositions.length === 0)}
             >
-              {executing ? 'Executing…' : 'Execute Nuclear Close'}
+              {executing ? 'Executing…' : `Execute — ${fmtUsd2(sellTotal + redeemTotal)}`}
             </button>
           </>
         )}
