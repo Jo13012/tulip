@@ -96,14 +96,22 @@ async def run_nuclear_close(
     )
 
     # ── Taker-sell or redeem each position ────────────────────────────────────────
-    redeemable_to_process: list[tuple[str, str, float]] = []  # (token_id, condition_id, size) — token_id used for collateral detection
+    # tuple: (token_id, condition_id, size, outcome)  — outcome used to pick indexSet
+    redeemable_to_process: list[tuple[str, str, float, str]] = []
+
+    # Build outcome map: token_id → outcome string (YES/No/etc)
+    outcome_map: dict[str, str] = {
+        pos["token_id"]: (pos.get("outcome") or "").upper()
+        for pos in all_positions if pos.get("token_id")
+    }
 
     for token_id in sell_token_set:
         # If data-api says redeemable, queue for on-chain redeem
         if token_id in redeemable_map:
             pos = next((p for p in all_positions if p.get("token_id") == token_id), {})
             size = float(pos.get("size") or 0.0)
-            redeemable_to_process.append((token_id, redeemable_map[token_id], size))
+            outcome = (pos.get("outcome") or "").upper()
+            redeemable_to_process.append((token_id, redeemable_map[token_id], size, outcome))
             continue
 
         try:
@@ -117,9 +125,10 @@ async def run_nuclear_close(
                 # No bids = market closed. Try redeem even if data-api hasn't flagged it yet.
                 cid = condition_map.get(token_id)
                 if cid:
-                    log.info("nuclear_close: no bids fallback redeem token=%s cid=%s bal=%.4f",
-                             token_id[:16], cid[:20], bal)
-                    redeemable_to_process.append((token_id, cid, bal))
+                    outcome = outcome_map.get(token_id, "")
+                    log.info("nuclear_close: no bids fallback redeem token=%s cid=%s outcome=%s bal=%.4f",
+                             token_id[:16], cid[:20], outcome, bal)
+                    redeemable_to_process.append((token_id, cid, bal, outcome))
                 else:
                     results["errors"].append(
                         f"token {token_id[:16]}: no bids, no condition_id (cannot redeem)"
@@ -171,12 +180,13 @@ async def run_nuclear_close(
 
         # Deduplicate by condition_id (YES + NO share same condition)
         seen_conditions: set[str] = set()
-        for token_id, condition_id, size in redeemable_to_process:
+        for token_id, condition_id, size, outcome in redeemable_to_process:
             if condition_id in seen_conditions:
                 continue
             seen_conditions.add(condition_id)
 
-            log.info("nuclear_close redeem: token=%s condition=%s size=%.4f", token_id[:16], condition_id[:20], size)
+            log.info("nuclear_close redeem: token=%s condition=%s outcome=%s size=%.4f",
+                     token_id[:16], condition_id[:20], outcome, size)
             redeem_result = await redeem_positions(
                 privy_wallet_id=privy_wallet_id,
                 eoa_address=eoa_address,
@@ -184,6 +194,7 @@ async def run_nuclear_close(
                 condition_id=condition_id,
                 estimated_tokens=size,
                 known_token_id=token_id,
+                outcome=outcome,
             )
             results["redeemed_positions"].append({
                 "token_id": token_id,
@@ -194,7 +205,7 @@ async def run_nuclear_close(
                 "error": redeem_result.get("error"),
             })
     elif redeemable_to_process and not has_redeem_creds:
-        for token_id, condition_id, size in redeemable_to_process:
+        for token_id, condition_id, size, outcome in redeemable_to_process:
             results["errors"].append(f"token {token_id[:16]}: redeemable but no wallet creds")
 
     return results

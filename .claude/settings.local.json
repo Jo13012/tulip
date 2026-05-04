@@ -20,7 +20,13 @@
       "Bash(where py *)",
       "PowerShell(& \"C:\\\\Users\\\\josep\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe\" -c \"from Crypto.Hash import keccak; print\\('ok'\\)\" 2>&1)",
       "Bash(curl -s \"https://data-api.polymarket.com/positions?user=0x7eDE88935860818120F3c3593D0B939723BE2ab6&sizeThreshold=0.01&limit=500\")",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(python -c \"import py_clob_client; import inspect, os; print\\(os.path.dirname\\(inspect.getfile\\(py_clob_client\\)\\)\\)\")",
+      "Bash(curl -s \"https://api.github.com/repos/tosmart01/poly-web3/git/trees/main?recursive=1\")",
+      "Bash(python3 -c \"import json,sys; tree=json.load\\(sys.stdin\\); [print\\(i['path']\\) for i in tree.get\\('tree',[]\\) if i['type']=='blob']\")",
+      "Bash(gh api *)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

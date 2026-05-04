@@ -35,14 +35,30 @@ _COLLATERALS = [
 ]
 
 
-def _encode_redeem_positions(condition_id_hex: str, collateral: str) -> str:
+def _index_sets_for_outcome(outcome: str) -> list[int]:
+    """
+    Return the correct indexSets for redeemPositions.
+    YES = indexSet 1 (bit 0), NO = indexSet 2 (bit 1).
+    If outcome unknown, pass both [1, 2] — relayer will reject if one has zero balance,
+    but some CTF impls handle it. Better to pass only the one we hold.
+    """
+    o = outcome.upper().strip()
+    if o in ("YES", "TRUE", "1"):
+        return [1]
+    if o in ("NO", "FALSE", "0"):
+        return [2]
+    return [1, 2]
+
+
+def _encode_redeem_positions(condition_id_hex: str, collateral: str, outcome: str = "") -> str:
     coll = to_checksum_address(collateral)
     parent_collection = bytes(32)
     cid = condition_id_hex.lower().lstrip("0x").zfill(64)
     condition_id_bytes = bytes.fromhex(cid)
+    index_sets = _index_sets_for_outcome(outcome)
     encoded = abi_encode(
         ["address", "bytes32", "bytes32", "uint256[]"],
-        [coll, parent_collection, condition_id_bytes, [1, 2]],
+        [coll, parent_collection, condition_id_bytes, index_sets],
     )
     return "0x" + REDEEM_SELECTOR.hex() + encoded.hex()
 
@@ -54,6 +70,7 @@ async def redeem_positions(
     condition_id: str,
     estimated_tokens: float = 0.0,
     known_token_id: str | None = None,
+    outcome: str = "",
 ) -> dict:
     result: dict = {
         "ok": False,
@@ -64,14 +81,14 @@ async def redeem_positions(
         "error": None,
     }
     log.info(
-        "redeem START: safe=%s condition=%s estimated=%.4f",
-        safe_address[:12], condition_id[:20], estimated_tokens,
+        "redeem START: safe=%s condition=%s outcome=%s estimated=%.4f",
+        safe_address[:12], condition_id[:20], outcome, estimated_tokens,
     )
 
     async with httpx.AsyncClient(timeout=30.0, trust_env=False) as http:
         for collateral in _COLLATERALS:
             try:
-                calldata = _encode_redeem_positions(condition_id, collateral)
+                calldata = _encode_redeem_positions(condition_id, collateral, outcome)
                 nonce = await _get_safe_nonce(http, safe_address)
                 sig = await _sign_safe_tx(
                     privy_wallet_id, safe_address,
