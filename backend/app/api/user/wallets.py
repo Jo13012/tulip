@@ -285,11 +285,11 @@ async def funding_status(user: CurrentUser, db: DbSession):
     elif wallet.funding_state in ("preparing", "bridging", "processing") and not ((trading_balance or 0.0) > 0):
         message = "Bridge in progress. Your trading balance should update automatically."
     elif needs_usdc and needs_eth:
-        message = f"Funding required: add at least {required_usdc:.2f} USDC and {required_eth:.6f} ETH."
+        message = f"Funding required: add at least {required_usdc:.2f} USDC and {required_eth:.4f} ETH."
     elif needs_usdc:
         message = f"Funding required: add at least {required_usdc:.2f} USDC."
     elif needs_eth:
-        message = f"Funding required: add at least {required_eth:.6f} ETH for gas."
+        message = f"Funding required: add at least {required_eth:.4f} ETH for gas."
     elif wallet_funded and not bridge_available:
         shortfall = max(0.0, settings.BRIDGE_MIN_USDC - bridgeable_usdc)
         message = (
@@ -297,11 +297,11 @@ async def funding_status(user: CurrentUser, db: DbSession):
             f"Add ${shortfall:.2f} more USDC above your reserve to bridge."
         )
     elif warn_usdc and warn_eth:
-        message = f"Top-up suggested: keep at least {warn_usdc_threshold:.2f} USDC and {warn_eth_threshold:.6f} ETH."
+        message = f"Top-up suggested: keep at least {warn_usdc_threshold:.2f} USDC and {warn_eth_threshold:.4f} ETH."
     elif warn_usdc:
         message = f"Top-up suggested: keep at least {warn_usdc_threshold:.2f} USDC."
     elif warn_eth:
-        message = f"Top-up suggested: keep at least {warn_eth_threshold:.6f} ETH."
+        message = f"Top-up suggested: keep at least {warn_eth_threshold:.4f} ETH."
     else:
         message = "Funding ready."  
 
@@ -341,14 +341,14 @@ async def funding_status(user: CurrentUser, db: DbSession):
             elif needs_usdc:
                 message = f"Trading balance ready. Top up wallet reserve to at least {required_usdc:.2f} USDC."
             else:
-                message = f"Trading balance ready. Top up wallet reserve to at least {required_eth:.6f} ETH."
+                message = f"Trading balance ready. Top up wallet reserve to at least {required_eth:.4f} ETH."
         else:
             if warn_usdc and warn_eth:
-                message = f"Top-up suggested: keep at least {warn_usdc_threshold:.2f} USDC and {warn_eth_threshold:.6f} ETH."
+                message = f"Top-up suggested: keep at least {warn_usdc_threshold:.2f} USDC and {warn_eth_threshold:.4f} ETH."
             elif warn_usdc:
                 message = f"Top-up suggested: keep at least {warn_usdc_threshold:.2f} USDC."
             elif warn_eth:
-                message = f"Top-up suggested: keep at least {warn_eth_threshold:.6f} ETH."
+                message = f"Top-up suggested: keep at least {warn_eth_threshold:.4f} ETH."
             else:
                 message = "Trading balance ready."
 
