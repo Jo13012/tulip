@@ -156,7 +156,21 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
                   <div key={i} className={`flex items-center justify-between px-3 py-1.5 rounded-lg border ${p.ok ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-yellow-500/5 border-yellow-500/20'}`}>
                     <div className="flex-1 min-w-0 pr-2">
                       <p className="text-[10px] text-white/50 truncate">{p.token_id?.slice(0, 16)}…</p>
-                      {p.error && <p className="text-[9px] text-yellow-400/70 truncate">{p.error}</p>}
+                      {p.ok && p.tx_hash && (
+                        <a
+                          href={`https://polygonscan.com/tx/${p.tx_hash}`}
+                          target="_blank" rel="noreferrer"
+                          className="text-[9px] text-emerald-400/50 hover:text-emerald-400 font-mono"
+                        >{p.tx_hash.slice(0, 14)}…</a>
+                      )}
+                      {!p.ok && p.error && (
+                        <p className="text-[9px] text-yellow-400/70">
+                          {p.error.includes('collateral not found') ? 'collateral non trouvé' :
+                           p.error.includes('STATE_FAILED') || p.error.includes('timeout') ? 'tx rejetée on-chain' :
+                           p.error.includes('429') || p.error.includes('Too Many') ? 'rate limit relayer' :
+                           p.error.slice(0, 60)}
+                        </p>
+                      )}
                     </div>
                     <div className="text-right shrink-0">
                       <p className={`text-[10px] font-semibold ${p.ok ? 'text-emerald-400' : 'text-yellow-400'}`}>
@@ -169,12 +183,19 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
             )}
 
             {/* Errors */}
-            {result.errors?.length > 0 && (
+            {result.errors?.filter((e: string) => !e.includes('too low to sell')).length > 0 && (
               <div className="space-y-1">
-                <p className="text-[10px] text-red-400 font-semibold uppercase tracking-wider">Errors ({result.errors.length})</p>
-                <div className="max-h-32 overflow-y-auto space-y-0.5">
-                  {result.errors.map((e: string, i: number) => (
-                    <p key={i} className="text-[10px] text-red-400/60 font-mono break-all">{e}</p>
+                <p className="text-[10px] text-red-400 font-semibold uppercase tracking-wider">
+                  Erreurs ({result.errors.filter((e: string) => !e.includes('too low to sell')).length})
+                </p>
+                <div className="max-h-28 overflow-y-auto space-y-0.5">
+                  {result.errors.filter((e: string) => !e.includes('too low to sell')).map((e: string, i: number) => (
+                    <p key={i} className="text-[10px] text-red-400/60 font-mono">
+                      {e.replace('no bids (market closed, not yet redeemable)', 'marché fermé, pas encore redeemable')
+                        .replace('no bids, no condition_id (cannot redeem)', 'pas de condition_id')
+                        .replace('all collaterals failed (PRECHECK_SKIPPED or timeout)', 'tous collaterals échoués')
+                        .slice(0, 80)}
+                    </p>
                   ))}
                 </div>
               </div>
