@@ -173,10 +173,17 @@ async def run_nuclear_close(
 
     if redeemable_to_process and has_redeem_creds:
         from app.services.redeem_service import redeem_positions
+        from app.services.polymarket_onboarding_service import _get_safe_nonce
 
         privy_wallet_id = client.privy_wallet_id
         eoa_address = client.wallet_address
         safe_address = client.proxy_address
+
+        # Fetch nonce once — increment manually per submit to avoid GS026 (same nonce = invalid sig)
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=15.0, trust_env=False) as _nc:
+            current_nonce = int(await _get_safe_nonce(_nc, safe_address))
+        log.info("nuclear_close: initial Safe nonce=%d", current_nonce)
 
         # Deduplicate by condition_id (YES + NO share same condition)
         seen_conditions: set[str] = set()
@@ -185,8 +192,8 @@ async def run_nuclear_close(
                 continue
             seen_conditions.add(condition_id)
 
-            log.info("nuclear_close redeem: token=%s condition=%s outcome=%s size=%.4f",
-                     token_id[:16], condition_id[:20], outcome, size)
+            log.info("nuclear_close redeem: token=%s condition=%s outcome=%s size=%.4f nonce=%d",
+                     token_id[:16], condition_id[:20], outcome, size, current_nonce)
             redeem_result = await redeem_positions(
                 privy_wallet_id=privy_wallet_id,
                 eoa_address=eoa_address,
@@ -195,7 +202,9 @@ async def run_nuclear_close(
                 estimated_tokens=size,
                 known_token_id=token_id,
                 outcome=outcome,
+                nonce=str(current_nonce),
             )
+            current_nonce += 1  # always increment — nonce is consumed on submit, not on mine
             results["redeemed_positions"].append({
                 "token_id": token_id,
                 "condition_id": condition_id,

@@ -83,9 +83,11 @@ async def _submit_and_poll(
     safe_address: str,
     to_contract: str,
     calldata: str,
+    nonce: str | None = None,
 ) -> dict | None:
     """Sign via Safe, submit to relayer, poll. Returns mined tx or None."""
-    nonce = await _get_safe_nonce(http, safe_address)
+    if nonce is None:
+        nonce = await _get_safe_nonce(http, safe_address)
     sig = await _sign_safe_tx(privy_wallet_id, safe_address, to_contract, calldata, "0", 0, nonce)
     body = {
         "from": eoa_address,
@@ -118,6 +120,7 @@ async def redeem_positions(
     estimated_tokens: float = 0.0,
     known_token_id: str | None = None,
     outcome: str = "",
+    nonce: str | None = None,
 ) -> dict:
     result: dict = {
         "ok": False,
@@ -145,6 +148,7 @@ async def redeem_positions(
             mined = await _submit_and_poll(
                 http, privy_wallet_id, eoa_address, safe_address,
                 to_contract, calldata,
+                nonce=nonce,
             )
 
             if mined:
