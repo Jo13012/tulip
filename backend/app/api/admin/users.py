@@ -338,39 +338,36 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
             except Exception:
                 return tid, 0.0
 
-        async def fetch_gamma_closed(tids: list[str]) -> dict[str, bool]:
+        async def fetch_clob_closed(tids: list[str]) -> dict[str, bool]:
+            """Fetch closed status for each token_id from CLOB API (parallel)."""
             if not tids:
                 return {}
-            try:
-                import httpx as _httpx
-                # Gamma accepts comma-separated clobTokenIds
-                params = "&".join(f"clobTokenIds={t}" for t in tids)
-                async with _httpx.AsyncClient(timeout=10.0, trust_env=False) as h:
-                    r = await h.get(f"{settings.GAMMA_HOST}/markets?{params}")
+            import httpx as _httpx
+
+            async def _one(h: _httpx.AsyncClient, tid: str) -> dict[str, bool]:
+                try:
+                    r = await h.get("https://clob.polymarket.com/markets", params={"token_id": tid})
                     if not r.is_success:
                         return {}
-                    markets = r.json()
-                    if not isinstance(markets, list):
-                        return {}
-                    result: dict[str, bool] = {}
-                    for m in markets:
+                    partial: dict[str, bool] = {}
+                    for m in (r.json().get("data") or []):
                         closed = bool(m.get("closed"))
-                        raw_ids = m.get("clobTokenIds") or "[]"
-                        if isinstance(raw_ids, str):
-                            import json as _json
-                            try:
-                                raw_ids = _json.loads(raw_ids)
-                            except Exception:
-                                raw_ids = []
-                        for tid in (raw_ids if isinstance(raw_ids, list) else []):
-                            result[str(tid)] = closed
-                    return result
-            except Exception:
-                return {}
+                        for t in (m.get("tokens") or []):
+                            partial[str(t.get("token_id", ""))] = closed
+                    return partial
+                except Exception:
+                    return {}
+
+            async with _httpx.AsyncClient(timeout=10.0, trust_env=False) as h:
+                results_list = await asyncio.gather(*[_one(h, tid) for tid in tids])
+            merged: dict[str, bool] = {}
+            for r in results_list:
+                merged.update(r)
+            return merged
 
         mid_results, closed_map = await asyncio.gather(
             asyncio.gather(*[fetch_mid(tid) for tid in all_tids]),
-            fetch_gamma_closed(all_tids),
+            fetch_clob_closed(all_tids),
         )
         mids = dict(mid_results)
 

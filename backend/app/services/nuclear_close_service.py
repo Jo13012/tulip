@@ -16,25 +16,29 @@ from app.runtime.runtime_models import norm
 log = logging.getLogger("nuclear_close")
 
 
-async def _fetch_condition_id(token_id: str) -> str | None:
-    """Fetch condition_id for a token from Gamma API. Returns None on failure."""
+async def _fetch_market_info(token_id: str) -> tuple[str | None, bool]:
+    """
+    Fetch (condition_id, closed) for a token from CLOB API.
+    closed=True means the market's order book is closed = resolution happened.
+    """
     try:
         async with httpx.AsyncClient(timeout=10.0, trust_env=False) as http:
             resp = await http.get(
-                f"{settings.GAMMA_HOST}/markets",
-                params={"clobTokenIds": token_id},
+                "https://clob.polymarket.com/markets",
+                params={"token_id": token_id},
             )
             if not resp.is_success:
-                return None
+                return None, False
             data = resp.json()
-            markets = data if isinstance(data, list) else data.get("markets", [])
+            markets = data.get("data") or []
             for m in markets:
-                cid = m.get("conditionId") or m.get("condition_id")
+                cid = m.get("condition_id")
+                closed = bool(m.get("closed"))
                 if cid:
-                    return cid
+                    return cid, closed
     except Exception:
         pass
-    return None
+    return None, False
 
 
 async def run_nuclear_close(
@@ -157,44 +161,60 @@ async def run_nuclear_close(
         and getattr(client, "proxy_address", None)
     )
 
-    log.info("nuclear_close: redeem_candidates=%d has_creds=%s", len(redeem_candidates), has_redeem_creds)
+    log.info("nuclear_close: no_bid_candidates=%d has_creds=%s", len(redeem_candidates), has_redeem_creds)
 
-    if redeem_candidates and has_redeem_creds:
+    if redeem_candidates:
         from app.services.redeem_service import redeem_positions
 
-        privy_wallet_id = client.privy_wallet_id
-        eoa_address = client.wallet_address
-        safe_address = client.proxy_address
+        privy_wallet_id = client.privy_wallet_id if has_redeem_creds else None
+        eoa_address = client.wallet_address if has_redeem_creds else None
+        safe_address = client.proxy_address if has_redeem_creds else None
 
-        log.info("nuclear_close redeem: eoa=%s safe=%s candidates=%s",
-                 eoa_address[:10], safe_address[:10], redeem_candidates)
-
-        # Fetch condition_ids for all candidates
+        # Fetch condition_id + closed status from Gamma for each candidate
+        closed_map: dict[str, bool] = {}
         for token_id in redeem_candidates:
-            if token_id not in cond_map:
-                condition_id = await _fetch_condition_id(token_id)
-                log.info("nuclear_close gamma lookup: token=%s → condition_id=%s", token_id[:16], condition_id)
+            if token_id in cond_map:
+                # condition_id already known — still need closed status
+                _, closed = await _fetch_market_info(token_id)
+                closed_map[token_id] = closed
+            else:
+                condition_id, closed = await _fetch_market_info(token_id)
+                closed_map[token_id] = closed
+                log.info("nuclear_close gamma: token=%s condition=%s closed=%s",
+                         token_id[:16], condition_id and condition_id[:20], closed)
                 if condition_id:
                     cond_map[token_id] = condition_id
 
-        # Deduplicate by condition_id
+        # Deduplicate by condition_id, only redeem truly closed markets
         seen_conditions: set[str] = set()
         for token_id in redeem_candidates:
+            is_closed = closed_map.get(token_id, False)
             condition_id = cond_map.get(token_id)
-            if not condition_id or condition_id in seen_conditions:
-                if not condition_id:
-                    results["errors"].append(f"redeem {token_id[:16]}: no condition_id found")
-                    log.warning("nuclear_close: no condition_id for token=%s", token_id[:16])
+
+            if not is_closed:
+                results["errors"].append(f"token {token_id[:16]}: no bids in book (market active, not resolved)")
+                log.info("nuclear_close: token=%s no bids but market still active", token_id[:16])
+                continue
+
+            if not condition_id:
+                results["errors"].append(f"token {token_id[:16]}: market closed but no condition_id found")
+                continue
+
+            if condition_id in seen_conditions:
                 continue
             seen_conditions.add(condition_id)
 
-            # Estimate tokens from balance
+            if not has_redeem_creds:
+                results["errors"].append(f"token {token_id[:16]}: market resolved but no wallet creds for redeem")
+                continue
+
             try:
                 balance = await client.get_token_balance(token_id)
                 estimated_tokens = float(balance or 0.0)
             except Exception:
                 estimated_tokens = 0.0
 
+            log.info("nuclear_close: redeeming condition=%s tokens=%.4f", condition_id[:20], estimated_tokens)
             redeem_result = await redeem_positions(
                 privy_wallet_id=privy_wallet_id,
                 eoa_address=eoa_address,
@@ -210,8 +230,5 @@ async def run_nuclear_close(
                 "tx_hash": redeem_result.get("tx_hash"),
                 "error": redeem_result.get("error"),
             })
-    elif redeem_candidates and not has_redeem_creds:
-        for token_id in redeem_candidates:
-            results["errors"].append(f"token {token_id[:16]}: no bids in book (market resolved, redeem not configured)")
 
     return results

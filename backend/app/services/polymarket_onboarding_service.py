@@ -196,7 +196,7 @@ async def _poll_transaction(http: httpx.AsyncClient, tx_id: str, max_polls: int 
             if state in ("mined", "confirmed", "STATE_MINED", "STATE_CONFIRMED", "STATE_EXECUTED"):
                 return txn
             if state in ("failed", "STATE_FAILED", "STATE_INVALID"):
-                log.error("relayer transaction %s failed: %s", tx_id, state)
+                log.error("relayer transaction %s failed: state=%s full=%s", tx_id, state, txn)
                 return None
         await _async_sleep(3)
     log.error("relayer transaction %s timed out", tx_id)
