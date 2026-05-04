@@ -75,14 +75,21 @@ async def run_nuclear_close(
     if sell_token_set:
         await asyncio.sleep(2.0)
 
-    # Build redeemable map from positions: token_id → condition_id
+    # Build maps from positions: token_id → condition_id
+    # redeemable_map: only data-api confirmed redeemable
+    # condition_map: all positions that have a condition_id (for fallback)
     redeemable_map: dict[str, str] = {
         pos["token_id"]: pos["condition_id"]
         for pos in all_positions
         if pos.get("redeemable") and pos.get("condition_id") and pos.get("token_id")
     }
-    log.info("nuclear_close: sell_tokens=%d redeemable=%d",
-             len(sell_token_set), len(redeemable_map))
+    condition_map: dict[str, str] = {
+        pos["token_id"]: pos["condition_id"]
+        for pos in all_positions
+        if pos.get("condition_id") and pos.get("token_id")
+    }
+    log.info("nuclear_close: sell_tokens=%d redeemable=%d condition_ids=%d",
+             len(sell_token_set), len(redeemable_map), len(condition_map))
 
     # ── Taker-sell or redeem each position ────────────────────────────────────────
     redeemable_to_process: list[tuple[str, str, float]] = []  # (token_id, condition_id, size)
@@ -98,28 +105,29 @@ async def run_nuclear_close(
         try:
             balance = await client.get_token_balance(token_id)
             bal = float(balance or 0.0)
-            if bal < 0.5:
-                # Check if no bids (market closed but not in data-api redeemable yet)
-                book = await market_data_service.get_order_book(token_id)
-                bids = book.get("bids") or []
-                if not bids:
-                    results["errors"].append(
-                        f"token {token_id[:16]}: no bids, not redeemable per data-api (market may not be resolved yet)"
-                    )
+
+            book = await market_data_service.get_order_book(token_id)
+            bids = book.get("bids") or []
+
+            if not bids:
+                # No bids = market closed. Try redeem even if data-api hasn't flagged it yet.
+                cid = condition_map.get(token_id)
+                if cid:
+                    log.info("nuclear_close: no bids fallback redeem token=%s cid=%s bal=%.4f",
+                             token_id[:16], cid[:20], bal)
+                    redeemable_to_process.append((token_id, cid, bal))
                 else:
-                    results["errors"].append(f"token {token_id[:16]}: balance {bal:.2f} too low to sell")
+                    results["errors"].append(
+                        f"token {token_id[:16]}: no bids, no condition_id (cannot redeem)"
+                    )
+                continue
+
+            if bal < 0.5:
+                results["errors"].append(f"token {token_id[:16]}: balance {bal:.2f} too low to sell")
                 continue
 
             sell_tokens = float(math.floor(bal))
             if sell_tokens < 1.0:
-                continue
-
-            book = await market_data_service.get_order_book(token_id)
-            bids = book.get("bids") or []
-            if not bids:
-                results["errors"].append(
-                    f"token {token_id[:16]}: no bids (market closed, not yet redeemable)"
-                )
                 continue
 
             bid_price = norm(float(bids[0]["price"]))
