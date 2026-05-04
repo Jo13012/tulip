@@ -7,38 +7,10 @@ import asyncio
 import math
 import logging
 
-import httpx
-
-from app.core.config import settings
 from app.runtime.market_data_service import market_data_service
 from app.runtime.runtime_models import norm
 
 log = logging.getLogger("nuclear_close")
-
-
-async def _fetch_market_info(token_id: str) -> tuple[str | None, bool]:
-    """
-    Fetch (condition_id, closed) for a token from CLOB API.
-    closed=True means the market's order book is closed = resolution happened.
-    """
-    try:
-        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as http:
-            resp = await http.get(
-                "https://clob.polymarket.com/markets",
-                params={"token_id": token_id},
-            )
-            if not resp.is_success:
-                return None, False
-            data = resp.json()
-            markets = data.get("data") or []
-            for m in markets:
-                cid = m.get("condition_id")
-                closed = bool(m.get("closed"))
-                if cid:
-                    return cid, closed
-    except Exception:
-        pass
-    return None, False
 
 
 async def run_nuclear_close(
@@ -48,16 +20,13 @@ async def run_nuclear_close(
     cancel_order_ids: list[str] | None = None,
     sell_token_ids: list[str] | None = None,
     sell_all_positions: bool = False,
-    # token_condition_map: explicit override {token_id: condition_id} for redeem
-    token_condition_map: dict[str, str] | None = None,
 ) -> dict:
     """
-    Cancel open orders and taker-sell selected/all positions directly on Polymarket.
-    For positions with no bids in book (market resolved/closed), attempt on-chain redeem.
+    Cancel open orders and taker-sell positions.
+    Positions flagged redeemable=True by data-api are redeemed on-chain instead of sold.
     """
     specific_oid_set = set(cancel_order_ids or [])
     sell_token_set = set(sell_token_ids or [])
-    cond_map: dict[str, str] = dict(token_condition_map or {})
 
     results = {
         "cancelled_orders": [],
@@ -66,7 +35,8 @@ async def run_nuclear_close(
         "errors": [],
     }
 
-    # ── Gather all positions if needed ───────────────────────────────────────────
+    # ── Gather all positions ──────────────────────────────────────────────────────
+    # data-api gives us redeemable + condition_id directly — no extra lookups needed
     all_positions: list[dict] = []
     if sell_all_positions:
         try:
@@ -77,12 +47,8 @@ async def run_nuclear_close(
         for pos in all_positions:
             token_id = pos.get("token_id") or ""
             size = float(pos.get("size") or 0.0)
-            if token_id and size >= 0.5:
+            if token_id and size >= 0.01:
                 sell_token_set.add(token_id)
-
-    if not cancel_orders and not specific_oid_set and not sell_token_set:
-        # Still may want to redeem — check below
-        pass
 
     # ── Cancel orders ─────────────────────────────────────────────────────────────
     try:
@@ -109,27 +75,51 @@ async def run_nuclear_close(
     if sell_token_set:
         await asyncio.sleep(2.0)
 
-    # ── Taker-sell positions ──────────────────────────────────────────────────────
-    no_bid_token_ids: list[str] = []
+    # Build redeemable map from positions: token_id → condition_id
+    redeemable_map: dict[str, str] = {
+        pos["token_id"]: pos["condition_id"]
+        for pos in all_positions
+        if pos.get("redeemable") and pos.get("condition_id") and pos.get("token_id")
+    }
+    log.info("nuclear_close: sell_tokens=%d redeemable=%d",
+             len(sell_token_set), len(redeemable_map))
+
+    # ── Taker-sell or redeem each position ────────────────────────────────────────
+    redeemable_to_process: list[tuple[str, str, float]] = []  # (token_id, condition_id, size)
 
     for token_id in sell_token_set:
+        # If data-api says redeemable, queue for on-chain redeem
+        if token_id in redeemable_map:
+            pos = next((p for p in all_positions if p.get("token_id") == token_id), {})
+            size = float(pos.get("size") or 0.0)
+            redeemable_to_process.append((token_id, redeemable_map[token_id], size))
+            continue
+
         try:
             balance = await client.get_token_balance(token_id)
-            if not balance or balance < 0.5:
-                # Small balance — might still be a resolved winner worth redeeming
-                no_bid_token_ids.append(token_id)
+            bal = float(balance or 0.0)
+            if bal < 0.5:
+                # Check if no bids (market closed but not in data-api redeemable yet)
+                book = await market_data_service.get_order_book(token_id)
+                bids = book.get("bids") or []
+                if not bids:
+                    results["errors"].append(
+                        f"token {token_id[:16]}: no bids, not redeemable per data-api (market may not be resolved yet)"
+                    )
+                else:
+                    results["errors"].append(f"token {token_id[:16]}: balance {bal:.2f} too low to sell")
                 continue
 
-            sell_tokens = float(math.floor(balance))
+            sell_tokens = float(math.floor(bal))
             if sell_tokens < 1.0:
-                no_bid_token_ids.append(token_id)
                 continue
 
             book = await market_data_service.get_order_book(token_id)
             bids = book.get("bids") or []
             if not bids:
-                # No bids = market likely resolved → try redeem
-                no_bid_token_ids.append(token_id)
+                results["errors"].append(
+                    f"token {token_id[:16]}: no bids (market closed, not yet redeemable)"
+                )
                 continue
 
             bid_price = norm(float(bids[0]["price"]))
@@ -154,81 +144,44 @@ async def run_nuclear_close(
             results["errors"].append(f"sell {token_id[:16]}: {e}")
 
     # ── Redeem resolved positions ─────────────────────────────────────────────────
-    redeem_candidates = [t for t in no_bid_token_ids if t]
     has_redeem_creds = bool(
         getattr(client, "privy_wallet_id", None)
         and getattr(client, "wallet_address", None)
         and getattr(client, "proxy_address", None)
     )
 
-    log.info("nuclear_close: no_bid_candidates=%d has_creds=%s", len(redeem_candidates), has_redeem_creds)
-
-    if redeem_candidates:
+    if redeemable_to_process and has_redeem_creds:
         from app.services.redeem_service import redeem_positions
 
-        privy_wallet_id = client.privy_wallet_id if has_redeem_creds else None
-        eoa_address = client.wallet_address if has_redeem_creds else None
-        safe_address = client.proxy_address if has_redeem_creds else None
+        privy_wallet_id = client.privy_wallet_id
+        eoa_address = client.wallet_address
+        safe_address = client.proxy_address
 
-        # Fetch condition_id + closed status from Gamma for each candidate
-        closed_map: dict[str, bool] = {}
-        for token_id in redeem_candidates:
-            if token_id in cond_map:
-                # condition_id already known — still need closed status
-                _, closed = await _fetch_market_info(token_id)
-                closed_map[token_id] = closed
-            else:
-                condition_id, closed = await _fetch_market_info(token_id)
-                closed_map[token_id] = closed
-                log.info("nuclear_close gamma: token=%s condition=%s closed=%s",
-                         token_id[:16], condition_id and condition_id[:20], closed)
-                if condition_id:
-                    cond_map[token_id] = condition_id
-
-        # Deduplicate by condition_id, only redeem truly closed markets
+        # Deduplicate by condition_id (YES + NO share same condition)
         seen_conditions: set[str] = set()
-        for token_id in redeem_candidates:
-            is_closed = closed_map.get(token_id, False)
-            condition_id = cond_map.get(token_id)
-
-            if not is_closed:
-                results["errors"].append(f"token {token_id[:16]}: no bids in book (market active, not resolved)")
-                log.info("nuclear_close: token=%s no bids but market still active", token_id[:16])
-                continue
-
-            if not condition_id:
-                results["errors"].append(f"token {token_id[:16]}: market closed but no condition_id found")
-                continue
-
+        for token_id, condition_id, size in redeemable_to_process:
             if condition_id in seen_conditions:
                 continue
             seen_conditions.add(condition_id)
 
-            if not has_redeem_creds:
-                results["errors"].append(f"token {token_id[:16]}: market resolved but no wallet creds for redeem")
-                continue
-
-            try:
-                balance = await client.get_token_balance(token_id)
-                estimated_tokens = float(balance or 0.0)
-            except Exception:
-                estimated_tokens = 0.0
-
-            log.info("nuclear_close: redeeming condition=%s tokens=%.4f", condition_id[:20], estimated_tokens)
+            log.info("nuclear_close redeem: condition=%s size=%.4f", condition_id[:20], size)
             redeem_result = await redeem_positions(
                 privy_wallet_id=privy_wallet_id,
                 eoa_address=eoa_address,
                 safe_address=safe_address,
                 condition_id=condition_id,
-                estimated_tokens=estimated_tokens,
+                estimated_tokens=size,
             )
             results["redeemed_positions"].append({
                 "token_id": token_id,
                 "condition_id": condition_id,
-                "estimated_usdc": round(estimated_tokens, 2),
+                "estimated_usdc": round(size, 2),
                 "ok": redeem_result["ok"],
                 "tx_hash": redeem_result.get("tx_hash"),
                 "error": redeem_result.get("error"),
             })
+    elif redeemable_to_process and not has_redeem_creds:
+        for token_id, condition_id, size in redeemable_to_process:
+            results["errors"].append(f"token {token_id[:16]}: redeemable but no wallet creds")
 
     return results

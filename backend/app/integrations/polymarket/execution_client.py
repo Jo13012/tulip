@@ -213,12 +213,15 @@ class ExecutionClient:
                 return []
             return [
                 {
-                    "token_id":  item.get("asset") or "",
-                    "size":      float(item.get("size") or 0),
-                    "avg_price": float(item.get("avgPrice") or 0),
-                    "cur_price": float(item.get("curPrice") or 0),
-                    "question":  item.get("title") or "",
-                    "outcome":   item.get("outcome") or "",
+                    "token_id":     item.get("asset") or "",
+                    "size":         float(item.get("size") or 0),
+                    "avg_price":    float(item.get("avgPrice") or 0),
+                    "cur_price":    float(item.get("curPrice") or 0),
+                    "question":     item.get("title") or "",
+                    "outcome":      item.get("outcome") or "",
+                    "condition_id": item.get("conditionId") or "",
+                    "redeemable":   bool(item.get("redeemable")),
+                    "icon":         item.get("icon") or "",
                 }
                 for item in items
                 if float(item.get("size") or 0) >= 0.01 and item.get("asset")
