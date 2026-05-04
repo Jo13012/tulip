@@ -25,7 +25,7 @@ async def _fetch_condition_id(token_id: str) -> str | None:
         async with httpx.AsyncClient(timeout=10.0, trust_env=False) as http:
             resp = await http.get(
                 f"{settings.GAMMA_HOST}/markets",
-                params={"clob_token_ids": token_id},
+                params={"clobTokenIds": token_id},
             )
             if not resp.is_success:
                 return None
