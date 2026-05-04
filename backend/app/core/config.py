@@ -48,14 +48,13 @@ class Settings(BaseSettings):
     PLATFORM_FEE_WALLET: str = "0x0000000000000000000000000000000000000000"
 
     # Funding (Arbitrum + USDC)
-    FUNDING_USDC_MIN: float = 20.0
-    FUNDING_ETH_MIN: float = 0.002
-    FEE_WALLET_USDC_MIN: float = 3.0          # Bridge keep target: keep $3 on EOA after bridge
-    FEE_WALLET_USDC_MIN_WARN: float = 1.5     # Warn threshold
-    FEE_WALLET_USDC_STOP: float = 0.5         # Session stop threshold
-    FEE_WALLET_ETH_MIN: float = 0.001
-    FEE_WALLET_ETH_MIN_WARN: float = 0.0005
-    FEE_BUFFER_PCT: float = 0.05              # Reserve 1 dynamic: max($3, 5% of total capital)
+    FUNDING_USDC_MIN: float = 20.0            # Fallback suggestion — overridden dynamically by reserve_target
+    FUNDING_ETH_MIN: float = 0.005
+    FEE_WALLET_USDC_MIN: float = 10.0         # Floor: always keep at least $10 on ARB (covers small capital users)
+    FEE_WALLET_USDC_STOP: float = 1.5         # Session stop threshold — session soft-stops below this
+    FEE_WALLET_ETH_MIN: float = 0.003         # Minimum ETH for gas (~30 fee flush txs)
+    FEE_WALLET_ETH_MIN_WARN: float = 0.0015   # ETH warn threshold
+    FEE_BUFFER_PCT: float = 0.10              # ARB reserve = max(USDC_MIN, capital * 10%) — covers ~10 days of fees
     BRIDGE_MIN_USDC: float = 5.0              # Minimum bridgeable amount
     ARB_BALANCE_CHECK_INTERVAL: int = 60      # Seconds between Arbitrum balance checks in session engine
     ARBITRUM_CHAIN_ID: int = 42161

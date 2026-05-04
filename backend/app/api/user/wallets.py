@@ -100,17 +100,17 @@ def _deposit_seed_address(wallet: Wallet) -> str:
 
 def _funding_thresholds(usdc_balance: float, eth_balance: float, trading_balance: float | None) -> dict[str, float | bool]:
     required_usdc       = funding_service.compute_reserve_target(usdc_balance, trading_balance)
-    warn_usdc_threshold = settings.FEE_WALLET_USDC_MIN_WARN
+    warn_usdc_threshold = funding_service.compute_warn_threshold(required_usdc)
     required_eth        = settings.FEE_WALLET_ETH_MIN
     warn_eth_threshold  = settings.FEE_WALLET_ETH_MIN_WARN
-    suggested_usdc      = settings.FUNDING_USDC_MIN
+    suggested_usdc      = required_usdc   # show the real target, not a hardcoded number
     suggested_eth       = settings.FUNDING_ETH_MIN
-    min_usdc            = max(suggested_usdc, required_usdc)
+    min_usdc            = required_usdc
     min_eth             = max(suggested_eth, required_eth)
-    needs_usdc          = usdc_balance < required_usdc
+    needs_usdc          = usdc_balance < settings.FEE_WALLET_USDC_STOP
     needs_eth           = eth_balance < required_eth
-    warn_usdc           = usdc_balance < warn_usdc_threshold
-    warn_eth            = eth_balance < warn_eth_threshold
+    warn_usdc           = not needs_usdc and usdc_balance < warn_usdc_threshold
+    warn_eth            = not needs_eth and eth_balance < warn_eth_threshold
     wallet_funded       = not needs_usdc and not needs_eth
     return {
         "suggested_usdc": suggested_usdc,
@@ -313,7 +313,7 @@ async def funding_status(user: CurrentUser, db: DbSession):
         await db.commit()
 
     # Capture incoming deposit tx hash when a new deposit is detected
-    if wallet_funded and (not wallet.funding_deposit_tx_hash or usdc_balance - last_obs >= settings.FUNDING_USDC_MIN):
+    if wallet_funded and (not wallet.funding_deposit_tx_hash or usdc_balance - last_obs >= required_usdc):
         deposit_tx = await funding_service.get_latest_usdc_deposit_tx(wallet.wallet_address)
         if deposit_tx and deposit_tx != wallet.funding_deposit_tx_hash:
             wallet.funding_deposit_tx_hash = deposit_tx
@@ -337,7 +337,7 @@ async def funding_status(user: CurrentUser, db: DbSession):
         await db.commit()
         if needs_usdc or needs_eth:
             if needs_usdc and needs_eth:
-                message = f"Trading balance ready. Top up wallet reserve to at least {required_usdc:.2f} USDC and 0.003 ETH."
+                message = f"Trading balance ready. Top up wallet reserve to at least {required_usdc:.2f} USDC and {required_eth:.4f} ETH."
             elif needs_usdc:
                 message = f"Trading balance ready. Top up wallet reserve to at least {required_usdc:.2f} USDC."
             else:
@@ -360,7 +360,7 @@ async def funding_status(user: CurrentUser, db: DbSession):
             await db.commit()
 
     auto_bridge_allowed = wallet.funding_state in ("idle", "completed")
-    bridge_trigger_amount = max(settings.FUNDING_USDC_MIN, required_usdc)
+    bridge_trigger_amount = required_usdc
 
     if FUNDING_ENABLED and wallet_funded and auto_bridge_allowed:
         last_obs = wallet.funding_last_usdc_observed or 0.0
@@ -469,7 +469,7 @@ async def funding_status(user: CurrentUser, db: DbSession):
         required_eth=required_eth,
         fee_wallet_usdc_min=settings.FEE_WALLET_USDC_MIN,
         fee_wallet_eth_min=settings.FEE_WALLET_ETH_MIN,
-        fee_wallet_usdc_min_warn=settings.FEE_WALLET_USDC_MIN_WARN,
+        fee_wallet_usdc_min_warn=warn_usdc_threshold,
         fee_wallet_eth_min_warn=settings.FEE_WALLET_ETH_MIN_WARN,
         fee_wallet_usdc_warn_threshold=warn_usdc_threshold,
         fee_wallet_eth_warn_threshold=warn_eth_threshold,

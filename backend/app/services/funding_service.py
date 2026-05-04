@@ -185,14 +185,19 @@ async def get_trading_balance(proxy_address: str) -> float | None:
 
 
 def compute_reserve_target(usdc_balance: float = 0.0, trading_balance: float | None = None) -> float:
-    """Reserve 1: USDC to keep on Arbitrum EOA.
-    Dynamic: max(FEE_WALLET_USDC_MIN, trading_balance × FEE_BUFFER_PCT).
+    """ARB reserve to keep on EOA: max(USDC_MIN floor, capital * 10%).
+    Covers ~10 days of fees at x8 daily volume, 12 bps.
     """
     base = settings.FEE_WALLET_USDC_MIN
     total_capital = max(0.0, usdc_balance) + max(0.0, trading_balance or 0.0)
     if total_capital > 0:
         return max(base, total_capital * settings.FEE_BUFFER_PCT)
     return base
+
+
+def compute_warn_threshold(reserve_target: float) -> float:
+    """Warn when ARB USDC drops to 30% of reserve target (~3 days left)."""
+    return max(settings.FEE_WALLET_USDC_STOP * 2, reserve_target * 0.30)
 
 
 def compute_bridge_amount(usdc_balance: float, trading_balance: float | None = None) -> float:
@@ -206,8 +211,6 @@ def compute_bridge_amount(usdc_balance: float, trading_balance: float | None = N
     return float(Decimal(str(bridge_amount)).quantize(Decimal("0.000001")))
 
 
-# Backwards-compat alias
-MIN_BRIDGE_DELTA = 10.0  # kept for external references — use settings.BRIDGE_MIN_USDC at runtime
 
 
 async def get_latest_usdc_deposit_tx(address: str, lookback_blocks: int = 5000) -> str | None:
