@@ -62,8 +62,8 @@ async def redeem_positions(
         "error": None,
     }
     log.info(
-        "redeem START: eoa=%s safe=%s condition=%s estimated_tokens=%.4f",
-        eoa_address[:10], safe_address[:10], condition_id[:20], estimated_tokens,
+        "redeem START: eoa=%s safe=%s condition_FULL=%s estimated_tokens=%.4f",
+        eoa_address[:10], safe_address[:10], condition_id, estimated_tokens,
     )
     try:
         calldata = _encode_redeem_positions(condition_id)
@@ -100,7 +100,7 @@ async def redeem_positions(
                      body["from"][:10], body["to"][:10], body["proxyWallet"][:10], nonce)
 
             resp = await _relayer_post_authed(http, "/submit", body)
-            log.info("redeem relayer response: %s", resp)
+            log.info("redeem relayer response FULL: %s", resp)
 
             tx_id = resp.get("transactionID")
             result["tx_id"] = tx_id

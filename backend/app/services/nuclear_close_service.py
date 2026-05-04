@@ -88,8 +88,12 @@ async def run_nuclear_close(
         for pos in all_positions
         if pos.get("condition_id") and pos.get("token_id")
     }
-    log.info("nuclear_close: sell_tokens=%d redeemable=%d condition_ids=%d",
-             len(sell_token_set), len(redeemable_map), len(condition_map))
+    log.info(
+        "nuclear_close: proxy=%s eoa=%s sell_tokens=%d redeemable=%d condition_ids=%d all_positions=%d",
+        getattr(client, "proxy_address", "?")[:12],
+        getattr(client, "wallet_address", "?")[:12],
+        len(sell_token_set), len(redeemable_map), len(condition_map), len(all_positions),
+    )
 
     # ── Taker-sell or redeem each position ────────────────────────────────────────
     redeemable_to_process: list[tuple[str, str, float]] = []  # (token_id, condition_id, size)
