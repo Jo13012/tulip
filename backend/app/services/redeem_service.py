@@ -27,7 +27,8 @@ REDEEM_SELECTOR          = bytes.fromhex("01b7037c")  # CTF redeemPositions(addr
 NEG_RISK_REDEEM_SELECTOR = bytes.fromhex("01b7037c")  # same selector, different ABI
 
 # Addresses (Polygon mainnet)
-USDC        = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # USDC.e — CTF collateral for binary markets
+PUSD        = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"  # pUSD — V2 collateral (replaced USDC.e Apr 2026)
+USDC_E      = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # USDC.e — kept for old positions
 NEG_RISK    = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"  # NegRiskAdapter
 
 POLYGON_RPC = "https://polygon-bor-rpc.publicnode.com"
@@ -51,12 +52,53 @@ async def _is_neg_risk(http: httpx.AsyncClient, condition_id: str) -> bool:
     return False
 
 
-def _encode_binary_redeem(condition_id: str) -> str:
-    """Binary market: redeemPositions(USDC, 0x0, conditionId, [1,2])"""
+def _compute_position_id(collateral: str, condition_id_hex: str, index_set: int) -> int:
+    from eth_hash.auto import keccak as keccak_hash
+    cid = bytes.fromhex(condition_id_hex.lstrip("0x").zfill(64))
+    col_id = keccak_hash(abi_encode(["bytes32", "bytes32", "uint256"], [bytes(32), cid, index_set]))
+    pid = keccak_hash(abi_encode(["address", "bytes32"], [to_checksum_address(collateral), col_id]))
+    return int.from_bytes(pid, "big")
+
+
+async def _detect_collateral(http: httpx.AsyncClient, safe_address: str, condition_id: str) -> str:
+    """Return whichever collateral (pUSD or USDC.e) the Safe holds tokens for."""
+    # balanceOf(address,uint256) selector = 0x00fdd58e
+    BAL_SEL = "00fdd58e"
+    RPC = POLYGON_RPC
+    CTF_ADDR = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
+
+    for collateral in [PUSD, USDC_E]:
+        for idx in [1, 2]:
+            pid = _compute_position_id(collateral, condition_id, idx)
+            call_data = "0x" + BAL_SEL + abi_encode(
+                ["address", "uint256"], [to_checksum_address(safe_address), pid]
+            ).hex()
+            try:
+                resp = await http.post(RPC, json={
+                    "jsonrpc": "2.0", "method": "eth_call",
+                    "params": [{"to": CTF_ADDR, "data": call_data}, "latest"],
+                    "id": 1,
+                }, timeout=5.0)
+                result = resp.json().get("result", "0x")
+                bal = int(result, 16) if result and result != "0x" else 0
+                if bal > 0:
+                    log.info("detect_collateral: condition=%s collateral=%s idx=%d balance=%d",
+                             condition_id[:20], "pUSD" if collateral == PUSD else "USDC.e", idx, bal)
+                    return collateral
+            except Exception:
+                pass
+    log.warning("detect_collateral: no balance found for condition=%s, defaulting pUSD", condition_id[:20])
+    return PUSD
+
+
+def _encode_binary_redeem(condition_id: str, collateral: str | None = None) -> str:
+    """Binary market: redeemPositions(collateral, 0x0, conditionId, [1,2])"""
+    if collateral is None:
+        collateral = PUSD
     cid = bytes.fromhex(condition_id.lstrip("0x").zfill(64))
     encoded = abi_encode(
         ["address", "bytes32", "bytes32", "uint256[]"],
-        [to_checksum_address(USDC), bytes(32), cid, [1, 2]],
+        [to_checksum_address(collateral), bytes(32), cid, [1, 2]],
     )
     return "0x" + REDEEM_SELECTOR.hex() + encoded.hex()
 
@@ -142,7 +184,8 @@ async def redeem_positions(
                 calldata = _encode_neg_risk_redeem(condition_id, estimated_tokens)
                 to_contract = NEG_RISK
             else:
-                calldata = _encode_binary_redeem(condition_id)
+                collateral = await _detect_collateral(http, safe_address, condition_id)
+                calldata = _encode_binary_redeem(condition_id, collateral)
                 to_contract = CTF
 
             mined = await _submit_and_poll(
