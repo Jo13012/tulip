@@ -5,7 +5,6 @@ export default {
   async fetch(request) {
     const url = new URL(request.url)
 
-    // Sécurité: seulement les paths CLOB auth
     if (!ALLOWED_PATHS.some(p => url.pathname.startsWith(p))) {
       return new Response('Not found', { status: 404 })
     }
@@ -14,6 +13,11 @@ export default {
 
     const reqHeaders = new Headers(request.headers)
     reqHeaders.set('Accept-Encoding', 'identity')
+    reqHeaders.delete('cf-connecting-ip')
+    reqHeaders.delete('cf-ray')
+    reqHeaders.delete('cf-visitor')
+    reqHeaders.delete('x-forwarded-for')
+    reqHeaders.delete('x-real-ip')
 
     const proxiedRequest = new Request(targetUrl, {
       method: request.method,
@@ -23,11 +27,14 @@ export default {
 
     const response = await fetch(proxiedRequest)
 
-    const newHeaders = new Headers(response.headers)
-    newHeaders.set('Access-Control-Allow-Origin', '*')
-    newHeaders.delete('Content-Encoding')
+    // Decompress body fully, re-serve as plain JSON
+    const text = await response.text()
 
-    return new Response(response.body, {
+    const newHeaders = new Headers()
+    newHeaders.set('Content-Type', 'application/json')
+    newHeaders.set('Access-Control-Allow-Origin', '*')
+
+    return new Response(text, {
       status: response.status,
       statusText: response.statusText,
       headers: newHeaders,
