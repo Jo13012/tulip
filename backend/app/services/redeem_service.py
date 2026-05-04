@@ -1,10 +1,9 @@
 """
 redeem_service.py — Redeem winning CTF tokens via Safe + Polymarket relayer.
-Detects collateral on-chain (like poly-web3) — single relayer submit per condition.
+Logic mirrors poly-web3: binary markets use USDC CTF, neg-risk markets use NegRiskAdapter.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 
 import httpx
@@ -23,82 +22,92 @@ from app.services.polymarket_onboarding_service import (
 
 log = logging.getLogger("redeem")
 
-REDEEM_SELECTOR = bytes.fromhex("01b7037c")
+# Selectors
+REDEEM_SELECTOR          = bytes.fromhex("01b7037c")  # CTF redeemPositions(address,bytes32,bytes32,uint256[])
+NEG_RISK_REDEEM_SELECTOR = bytes.fromhex("01b7037c")  # same selector, different ABI
+
+# Addresses (Polygon mainnet)
+USDC        = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # USDC.e — CTF collateral for binary markets
+NEG_RISK    = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"  # NegRiskAdapter
+
 POLYGON_RPC = "https://polygon-bor-rpc.publicnode.com"
 
-_COLLATERALS = [
-    "0x3A3BD7bb9528E159577F7C2e685CC81A765002E2",  # WCOL (neg-risk, most common)
-    "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",  # USDC.e (V1)
-    "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB",  # pUSD (V2)
-]
 
-# getCollectionId / getPositionId selectors
-_SEL_GC = "856296f7"  # getCollectionId(bytes32,bytes32,uint256)
-_SEL_GP = "39dd7530"  # getPositionId(address,bytes32)
-
-
-async def _rpc_call(http: httpx.AsyncClient, data: str) -> str:
-    resp = await http.post(
-        POLYGON_RPC,
-        json={"jsonrpc": "2.0", "id": 1, "method": "eth_call",
-              "params": [{"to": CTF, "data": data}, "latest"]},
-    )
-    return resp.json().get("result", "0x")
-
-
-async def _detect_collateral(
-    http: httpx.AsyncClient,
-    condition_id: str,
-    token_id: str,
-    outcome: str,
-) -> tuple[str, int] | None:
-    """
-    Call getPositionId on-chain for each collateral candidate.
-    Returns (collateral_address, index_set) or None if not found.
-    """
+async def _is_neg_risk(http: httpx.AsyncClient, condition_id: str) -> bool:
+    """Check gamma API to determine if this is a neg-risk market."""
     try:
-        target = int(token_id)
-    except (ValueError, TypeError):
-        return None
-
-    parent = bytes(32)
-    cid = bytes.fromhex(condition_id.lstrip("0x").zfill(64))
-
-    o = outcome.upper().strip()
-    if o in ("YES", "TRUE", "1"):
-        index_sets = [1]
-    elif o in ("NO", "FALSE", "0"):
-        index_sets = [2]
-    else:
-        index_sets = [1, 2]
-
-    for collateral in _COLLATERALS:
-        for idx in index_sets:
-            gc_args = abi_encode(["bytes32", "bytes32", "uint256"], [parent, cid, idx])
-            coll_hex = await _rpc_call(http, "0x" + _SEL_GC + gc_args.hex())
-            coll_bytes = bytes.fromhex(coll_hex[2:].zfill(64))
-
-            gp_args = abi_encode(["address", "bytes32"], [to_checksum_address(collateral), coll_bytes])
-            pos_hex = await _rpc_call(http, "0x" + _SEL_GP + gp_args.hex())
-            pos_id = int(pos_hex, 16) if pos_hex and pos_hex != "0x" else 0
-
-            if pos_id == target:
-                log.info("redeem collateral=%s idx=%d matches token_id", collateral[:12], idx)
-                return collateral, idx
-
-    log.warning("redeem: no collateral match for condition=%s token=%s", condition_id[:20], str(token_id)[:20])
-    return None
+        resp = await http.get(
+            "https://gamma-api.polymarket.com/markets",
+            params={"conditionId": condition_id, "limit": 1},
+            timeout=8.0,
+        )
+        data = resp.json()
+        if isinstance(data, list) and data:
+            m = data[0]
+            if m.get("conditionId", "").lower() == condition_id.lower():
+                return bool(m.get("negRisk", False))
+    except Exception:
+        pass
+    return False
 
 
-def _encode_calldata(condition_id: str, collateral: str, index_set: int) -> str:
-    coll = to_checksum_address(collateral)
-    parent = bytes(32)
+def _encode_binary_redeem(condition_id: str) -> str:
+    """Binary market: redeemPositions(USDC, 0x0, conditionId, [1,2])"""
     cid = bytes.fromhex(condition_id.lstrip("0x").zfill(64))
     encoded = abi_encode(
         ["address", "bytes32", "bytes32", "uint256[]"],
-        [coll, parent, cid, [index_set]],
+        [to_checksum_address(USDC), bytes(32), cid, [1, 2]],
     )
     return "0x" + REDEEM_SELECTOR.hex() + encoded.hex()
+
+
+def _encode_neg_risk_redeem(condition_id: str, size: float) -> str:
+    """Neg-risk: NegRiskAdapter.redeemPositions(conditionId, [yes_amount, no_amount])"""
+    cid = bytes.fromhex(condition_id.lstrip("0x").zfill(64))
+    # amounts in base units (1e6), pass full size for both slots — contract handles payout
+    amount = int(size * 1_000_000)
+    encoded = abi_encode(
+        ["bytes32", "uint256[]"],
+        [cid, [amount, amount]],
+    )
+    # NegRiskAdapter.redeemPositions(bytes32,uint256[]) selector
+    from eth_hash.auto import keccak
+    sel = keccak(b"redeemPositions(bytes32,uint256[])")[:4]
+    return "0x" + sel.hex() + encoded.hex()
+
+
+async def _submit_and_poll(
+    http: httpx.AsyncClient,
+    privy_wallet_id: str,
+    eoa_address: str,
+    safe_address: str,
+    to_contract: str,
+    calldata: str,
+) -> dict | None:
+    """Sign via Safe, submit to relayer, poll. Returns mined tx or None."""
+    nonce = await _get_safe_nonce(http, safe_address)
+    sig = await _sign_safe_tx(privy_wallet_id, safe_address, to_contract, calldata, "0", 0, nonce)
+    body = {
+        "from": eoa_address,
+        "to": to_contract,
+        "proxyWallet": safe_address,
+        "data": calldata,
+        "nonce": nonce,
+        "signature": sig,
+        "signatureParams": {
+            "gasPrice": "0", "operation": "0",
+            "safeTxnGas": "0", "baseGas": "0",
+            "gasToken": ZERO_ADDRESS, "refundReceiver": ZERO_ADDRESS,
+        },
+        "type": "SAFE",
+    }
+    resp = await _relayer_post_authed(http, "/submit", body)
+    tx_id = resp.get("transactionID")
+    if not tx_id:
+        log.warning("redeem no tx_id: %s", resp)
+        return None
+    log.info("redeem polling tx_id=%s", tx_id)
+    return await _poll_transaction(http, tx_id, max_polls=40)
 
 
 async def redeem_positions(
@@ -123,51 +132,28 @@ async def redeem_positions(
 
     try:
         async with httpx.AsyncClient(timeout=30.0, trust_env=False) as http:
-            # Detect correct collateral + indexSet on-chain
-            match = await _detect_collateral(http, condition_id, known_token_id or "", outcome)
-            if not match:
-                result["error"] = "collateral not found on-chain"
-                log.error("redeem no collateral match condition=%s", condition_id[:20])
-                return result
+            neg_risk = await _is_neg_risk(http, condition_id)
+            log.info("redeem neg_risk=%s condition=%s", neg_risk, condition_id[:20])
 
-            collateral, index_set = match
-            calldata = _encode_calldata(condition_id, collateral, index_set)
+            if neg_risk:
+                calldata = _encode_neg_risk_redeem(condition_id, estimated_tokens)
+                to_contract = NEG_RISK
+            else:
+                calldata = _encode_binary_redeem(condition_id)
+                to_contract = CTF
 
-            nonce = await _get_safe_nonce(http, safe_address)
-            sig = await _sign_safe_tx(privy_wallet_id, safe_address, CTF, calldata, "0", 0, nonce)
+            mined = await _submit_and_poll(
+                http, privy_wallet_id, eoa_address, safe_address,
+                to_contract, calldata,
+            )
 
-            body = {
-                "from": eoa_address,
-                "to": CTF,
-                "proxyWallet": safe_address,
-                "data": calldata,
-                "nonce": nonce,
-                "signature": sig,
-                "signatureParams": {
-                    "gasPrice": "0", "operation": "0",
-                    "safeTxnGas": "0", "baseGas": "0",
-                    "gasToken": ZERO_ADDRESS, "refundReceiver": ZERO_ADDRESS,
-                },
-                "type": "SAFE",
-                "metadata": f"redeemPositions conditionId={condition_id[:20]}",
-            }
-
-            resp = await _relayer_post_authed(http, "/submit", body)
-            tx_id = resp.get("transactionID")
-            if not tx_id:
-                result["error"] = f"no tx_id from relayer: {resp}"
-                return result
-
-            result["tx_id"] = tx_id
-            log.info("redeem polling tx_id=%s", tx_id)
-            mined = await _poll_transaction(http, tx_id, max_polls=40)
             if mined:
                 result["ok"] = True
                 result["tx_hash"] = mined.get("transactionHash")
                 log.info("redeem MINED tx_hash=%s usdc~=%.2f", result["tx_hash"], estimated_tokens)
             else:
                 result["error"] = "STATE_FAILED or timeout"
-                log.error("redeem FAILED tx_id=%s condition=%s", tx_id, condition_id[:20])
+                log.error("redeem FAILED condition=%s", condition_id[:20])
 
     except Exception as e:
         result["error"] = str(e)
