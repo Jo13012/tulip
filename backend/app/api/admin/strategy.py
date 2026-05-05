@@ -372,6 +372,7 @@ async def create_slot(body: CreateSlotRequest, db: DbSession, admin: AdminUser):
 class PatchSlotRequest(BaseModel):
     allocation_pct: Optional[float] = None
     enabled: Optional[bool] = None
+    label: Optional[str] = None
 
 
 @router.patch("/slots/{slot_id}")
@@ -383,6 +384,11 @@ async def patch_slot(slot_id: str, body: PatchSlotRequest, db: DbSession, admin:
         slot.allocation_pct = body.allocation_pct
     if body.enabled is not None:
         slot.enabled = body.enabled
+    if body.label is not None:
+        label = body.label.strip()
+        if not label:
+            raise HTTPException(400, "Label cannot be empty")
+        slot.label = label
     db.add(slot)
     await db.commit()
     return {"ok": True}
@@ -446,6 +452,11 @@ async def revert_slot(slot_id: str, db: DbSession, admin: AdminUser):
     slot = await db.get(StrategySlot, slot_id)
     if not slot:
         raise HTTPException(404)
+
+    # Revert allocation_pct on the slot itself
+    if pub_ssv.allocation_pct is not None:
+        slot.allocation_pct = pub_ssv.allocation_pct
+    db.add(slot)
 
     # Create new draft SSV copying published values
     new_ssv = StrategySlotVersion(

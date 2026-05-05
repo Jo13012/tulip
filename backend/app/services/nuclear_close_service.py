@@ -164,57 +164,11 @@ async def run_nuclear_close(
         except Exception as e:
             results["errors"].append(f"sell {token_id[:16]}: {e}")
 
-    # ── Redeem resolved positions ─────────────────────────────────────────────────
-    has_redeem_creds = bool(
-        getattr(client, "privy_wallet_id", None)
-        and getattr(client, "wallet_address", None)
-        and getattr(client, "proxy_address", None)
-    )
-
-    if redeemable_to_process and has_redeem_creds:
-        from app.services.redeem_service import redeem_positions
-        from app.services.polymarket_onboarding_service import _get_safe_nonce
-
-        privy_wallet_id = client.privy_wallet_id
-        eoa_address = client.wallet_address
-        safe_address = client.proxy_address
-
-        # Fetch nonce once — increment manually per submit to avoid GS026 (same nonce = invalid sig)
-        import httpx as _httpx
-        async with _httpx.AsyncClient(timeout=15.0, trust_env=False) as _nc:
-            current_nonce = int(await _get_safe_nonce(_nc, safe_address))
-        log.info("nuclear_close: initial Safe nonce=%d", current_nonce)
-
-        # Deduplicate by condition_id (YES + NO share same condition)
-        seen_conditions: set[str] = set()
+    # ── Redeem resolved positions (DISABLED — auto-redeem removed) ───────────────
+    # Code kept for future re-enable. Redeem is not triggered automatically.
+    # redeemable_to_process contains positions flagged for redeem but they are skipped.
+    if redeemable_to_process:
         for token_id, condition_id, size, outcome in redeemable_to_process:
-            if condition_id in seen_conditions:
-                continue
-            seen_conditions.add(condition_id)
-
-            log.info("nuclear_close redeem: token=%s condition=%s outcome=%s size=%.4f nonce=%d",
-                     token_id[:16], condition_id[:20], outcome, size, current_nonce)
-            redeem_result = await redeem_positions(
-                privy_wallet_id=privy_wallet_id,
-                eoa_address=eoa_address,
-                safe_address=safe_address,
-                condition_id=condition_id,
-                estimated_tokens=size,
-                known_token_id=token_id,
-                outcome=outcome,
-                nonce=str(current_nonce),
-            )
-            current_nonce += 1  # always increment — nonce is consumed on submit, not on mine
-            results["redeemed_positions"].append({
-                "token_id": token_id,
-                "condition_id": condition_id,
-                "estimated_usdc": round(size, 2),
-                "ok": redeem_result["ok"],
-                "tx_hash": redeem_result.get("tx_hash"),
-                "error": redeem_result.get("error"),
-            })
-    elif redeemable_to_process and not has_redeem_creds:
-        for token_id, condition_id, size, outcome in redeemable_to_process:
-            results["errors"].append(f"token {token_id[:16]}: redeemable but no wallet creds")
+            log.info("nuclear_close: skipping redeem (disabled) token=%s size=%.2f", token_id[:16], size)
 
     return results

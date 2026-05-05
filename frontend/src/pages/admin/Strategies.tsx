@@ -524,10 +524,17 @@ function SlotRow({ slot, onRefresh, published }: { slot: Slot; onRefresh: () => 
   const [allocEdit, setAllocEdit] = useState(false)
   const [allocVal, setAllocVal]   = useState(String(slot.allocation_pct))
   const allocRef = useRef<HTMLInputElement>(null)
+  const [labelEdit, setLabelEdit] = useState(false)
+  const [labelVal, setLabelVal]   = useState(slot.label)
+  const labelRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (allocEdit) allocRef.current?.select()
   }, [allocEdit])
+
+  useEffect(() => {
+    if (labelEdit) labelRef.current?.select()
+  }, [labelEdit])
 
   async function save(m: SlotMarket) {
     await api.admin.setSlotMarket(slot.id, { ...m, resolve_now: true })
@@ -549,6 +556,22 @@ function SlotRow({ slot, onRefresh, published }: { slot: Slot; onRefresh: () => 
     } catch (e: any) {
       addToast({ type: 'error', message: e.message })
       setAllocVal(String(slot.allocation_pct))
+    }
+  }
+
+  async function commitLabel() {
+    setLabelEdit(false)
+    const trimmed = labelVal.trim()
+    if (!trimmed || trimmed === slot.label) {
+      setLabelVal(slot.label)
+      return
+    }
+    try {
+      await api.admin.patchSlot(slot.id, { label: trimmed })
+      onRefresh()
+    } catch (e: any) {
+      addToast({ type: 'error', message: e.message })
+      setLabelVal(slot.label)
     }
   }
 
@@ -598,7 +621,24 @@ function SlotRow({ slot, onRefresh, published }: { slot: Slot; onRefresh: () => 
         <div className={cls('w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1', slot.enabled ? 'bg-green-500' : 'bg-white/20')} />
         <div className="w-24 flex-shrink-0">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <div className="text-xs font-medium text-white/80">{slot.label}</div>
+            {labelEdit ? (
+              <input
+                ref={labelRef}
+                className="w-20 bg-transparent border-b border-brand/50 text-xs font-medium text-white/80 focus:outline-none"
+                value={labelVal}
+                onChange={e => setLabelVal(e.target.value)}
+                onBlur={commitLabel}
+                onKeyDown={e => { if (e.key === 'Enter') commitLabel(); if (e.key === 'Escape') { setLabelEdit(false); setLabelVal(slot.label) } }}
+              />
+            ) : (
+              <div
+                className="text-xs font-medium text-white/80 cursor-pointer hover:text-white transition-colors"
+                onClick={() => { setLabelEdit(true); setLabelVal(slot.label) }}
+                title="Click to rename"
+              >
+                {slot.label}
+              </div>
+            )}
             {isNew && <span className="text-[8px] px-1 py-0.5 rounded bg-brand/15 text-brand font-semibold uppercase tracking-wider">new</span>}
             {!isNew && hasDiff && <span className="text-[8px] px-1 py-0.5 rounded bg-amber-400/15 text-amber-400 font-semibold uppercase tracking-wider">modified</span>}
             {badge && (

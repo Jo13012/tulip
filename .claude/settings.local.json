@@ -26,7 +26,8 @@
       "Bash(python3 -c \"import json,sys; tree=json.load\\(sys.stdin\\); [print\\(i['path']\\) for i in tree.get\\('tree',[]\\) if i['type']=='blob']\")",
       "Bash(gh api *)",
       "WebFetch(domain:api.github.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(xargs grep *)"
     ]
   }
 }

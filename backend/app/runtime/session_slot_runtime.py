@@ -468,6 +468,10 @@ class SessionSlotRuntime:
 
     def set_allocated_capital(self, capital: float):
         self._allocated_capital = capital
+        if self._market_config and capital > 0:
+            levels = self._market_config.max_spread_ticks + 1
+            if levels > 0:
+                self._market_config.lot_size = round(capital / levels, 4)
 
     def update_paid_fees(self, amount: float):
         self._paid_fees += amount

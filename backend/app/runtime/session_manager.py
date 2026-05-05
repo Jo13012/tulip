@@ -333,7 +333,7 @@ class SessionManager:
                     session_id=session.id,
                     strategy_slot_id=slot.id,
                     current_strategy_slot_version_id=sv.id if sv else None,
-                    slot_state="idle" if not sv or not sv.polymarket_url else "active",
+                    slot_state="idle",  # runtime sets to active on start
                     allocation_pct=slot.allocation_pct,
                     allocated_capital=allocated,
                 )

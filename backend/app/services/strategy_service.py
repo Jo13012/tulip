@@ -323,6 +323,7 @@ class StrategyService:
         }
 
         for session in active_sessions:
+            is_stopping = session.status == "stopping"
             deployable = session.session_deployable_capital
 
             # Existing session slots indexed by strategy_slot_id
@@ -340,8 +341,9 @@ class StrategyService:
             for ss in session_slots:
                 new_sv = new_svs.get(ss.strategy_slot_id)
                 if new_sv is None:
-                    # Slot archived — idle after positions exit
-                    ss.slot_state = "replacement_queued"
+                    # Slot archived — idle after positions exit (skip if already transitioning)
+                    if ss.slot_state not in ("replacement_queued", "waiting_previous_clean", "switching"):
+                        ss.slot_state = "replacement_queued"
                     ss.replacement_strategy_slot_version_id = None
                     db.add(ss)
                     db.add(AuditLog(
@@ -350,7 +352,7 @@ class StrategyService:
                         entity_type="session_slot", entity_id=ss.id,
                         detail="slot archived in new publish",
                     ))
-                    if engine:
+                    if engine and not is_stopping:
                         await engine.queue_slot_replacement(ss.id, None)
                     continue
 
@@ -381,22 +383,36 @@ class StrategyService:
                     ss.allocation_pct = new_alloc_pct
                     ss.allocated_capital = new_allocated
 
-                if market_changed or alloc_changed:
-                    ss.replacement_strategy_slot_version_id = new_sv.id
-                    ss.slot_state = "replacement_queued"
+                if market_changed:
+                    # Market or lot-count changed — full graceful replace
+                    if not is_stopping:
+                        ss.replacement_strategy_slot_version_id = new_sv.id
+                        ss.slot_state = "replacement_queued"
                     db.add(ss)
                     db.add(AuditLog(
                         actor_id=actor_id, actor_role="admin",
                         action="slot.replace_queued",
                         entity_type="session_slot", entity_id=ss.id,
-                        detail=f"new_version={new_sv.id} alloc_changed={alloc_changed} market_changed={market_changed}",
+                        detail=f"new_version={new_sv.id} alloc_changed={alloc_changed} market_changed={market_changed} deferred={is_stopping}",
                     ))
-                    if engine:
+                    if engine and new_allocated > 0 and not is_stopping:
                         levels = new_sv.max_spread_ticks + 1
                         lot_size = round(new_allocated / levels, 4) if levels > 0 else 0.0
-                        new_config = await _build_slot_market_config(new_sv, lot_size)
-                        if new_config:
-                            await engine.queue_slot_replacement(ss.id, new_config)
+                        if lot_size > 0:
+                            new_config = await _build_slot_market_config(new_sv, lot_size)
+                            if new_config:
+                                await engine.queue_slot_replacement(ss.id, new_config)
+                elif alloc_changed:
+                    # Only allocation changed — update capital live, no replace needed
+                    db.add(ss)
+                    db.add(AuditLog(
+                        actor_id=actor_id, actor_role="admin",
+                        action="slot.alloc_updated",
+                        entity_type="session_slot", entity_id=ss.id,
+                        detail=f"new_alloc_pct={new_alloc_pct} new_allocated={new_allocated}",
+                    ))
+                    if engine and new_allocated > 0 and not is_stopping:
+                        await engine.update_slot_capital(ss.id, new_allocated)
 
             # ── Inject new slots (added in this publish) ─────────────────────
             for strategy_slot_id, sv in new_svs.items():
@@ -413,7 +429,7 @@ class StrategyService:
                     session_id=session.id,
                     strategy_slot_id=strategy_slot_id,
                     current_strategy_slot_version_id=sv.id,
-                    slot_state="idle" if not sv.polymarket_url else "active",
+                    slot_state="idle",  # runtime will set to active once started
                     allocation_pct=strat_slot.allocation_pct,
                     allocated_capital=allocated,
                 )
@@ -441,12 +457,13 @@ class StrategyService:
                     detail=f"new slot from publish version={version.id}",
                 ))
 
-                if engine and sv.polymarket_url:
+                if engine and sv.polymarket_url and allocated > 0 and not is_stopping:
                     levels = sv.max_spread_ticks + 1
                     lot_size = round(allocated / levels, 4) if levels > 0 else 0.0
-                    new_config = await _build_slot_market_config(sv, lot_size)
-                    if new_config:
-                        await engine.add_slot(new_ss.id, strategy_slot_id, new_config, allocated)
+                    if lot_size > 0:
+                        new_config = await _build_slot_market_config(sv, lot_size)
+                        if new_config:
+                            await engine.add_slot(new_ss.id, strategy_slot_id, new_config, allocated)
 
         await db.commit()
 
