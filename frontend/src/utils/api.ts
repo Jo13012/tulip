@@ -129,6 +129,7 @@ export const api = {
     forceStop:      (id: string) => request(`/api/v1/admin/sessions/${id}/force-stop`, { method: 'POST' }),
     retryRecovery:      (id: string) => request(`/api/v1/admin/sessions/${id}/retry-recovery`, { method: 'POST' }),
     forceReplaceSlot:   (sessionId: string, slotId: string) => request(`/api/v1/admin/sessions/${sessionId}/slots/${slotId}/force-replace`, { method: 'POST' }),
+    forceReplaceAll:    () => request('/api/v1/admin/sessions/force-replace-all', { method: 'POST' }),
 
     // ── Analytics ────────────────────────────────────────────────────────────
     globalMetrics:           () => request('/api/v1/admin/analytics/global'),

@@ -508,8 +508,21 @@ export default function AdminUsers() {
   const [stopping, setStopping]       = useState<string | null>(null)
   const [nuclearUser, setNuclearUser] = useState<AdminUser | null>(null)
   const [onboardedOnly, setOnboardedOnly] = useState(true)
+  const [forcingReplaceAll, setForcingReplaceAll] = useState(false)
   const addToast = useAppStore(s => s.addToast)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  async function handleForceReplaceAll() {
+    setForcingReplaceAll(true)
+    try {
+      const res: any = await api.admin.forceReplaceAll()
+      addToast({ type: 'success', message: `Force replace all: ${res.triggered} slots triggered${res.errors?.length ? `, ${res.errors.length} errors` : ''}` })
+    } catch (e: any) {
+      addToast({ type: 'error', message: e.message ?? 'Force replace all failed' })
+    } finally {
+      setForcingReplaceAll(false)
+    }
+  }
 
   async function fetchUsers(opts?: { silent?: boolean }) {
     if (!opts?.silent) setRefreshing(true)
@@ -557,6 +570,14 @@ export default function AdminUsers() {
         <h1 className="text-base font-semibold">Users</h1>
         <div className="flex items-center gap-3">
           {refreshing && <span className="text-[10px] text-white/25 animate-pulse">refreshing…</span>}
+          <button
+            className="text-[10px] px-2 py-0.5 rounded border border-orange-500/30 bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 transition-colors disabled:opacity-40"
+            onClick={handleForceReplaceAll}
+            disabled={forcingReplaceAll}
+            title="Force replace all queued replacements on all running sessions"
+          >
+            {forcingReplaceAll ? 'replacing…' : '⟳ force replace all'}
+          </button>
           <button
             className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${onboardedOnly ? 'bg-brand/20 text-brand border-brand/30' : 'bg-white/[0.04] text-white/30 border-white/10 hover:text-white/60'}`}
             onClick={() => setOnboardedOnly(v => !v)}

@@ -62,6 +62,46 @@ async def list_sessions(db: DbSession, admin: AdminUser, limit: int = 50, offset
     return result
 
 
+@router.post("/force-replace-all")
+async def force_replace_all(admin: AdminUser, db: DbSession):
+    """Force-replace all queued replacements across all running sessions."""
+    from app.db.models import SessionSlot as DBSessionSlot, StrategySlotVersion
+    from app.runtime.session_manager import _build_slot_market_config
+
+    engines = await session_registry.all()
+    triggered = 0
+    errors = []
+
+    for engine in engines:
+        slots_q = await db.execute(
+            select(DBSessionSlot).where(
+                DBSessionSlot.session_id == engine.session_id,
+                DBSessionSlot.replacement_strategy_slot_version_id.isnot(None),
+            )
+        )
+        slots = slots_q.scalars().all()
+        for ss in slots:
+            try:
+                new_config = None
+                new_sv = await db.get(StrategySlotVersion, ss.replacement_strategy_slot_version_id)
+                if new_sv:
+                    levels = new_sv.max_spread_ticks + 1
+                    lot_size = round(ss.allocated_capital / levels, 4) if levels > 0 else 0.0
+                    new_config = await _build_slot_market_config(new_sv, lot_size)
+                await engine.force_replace_slot(ss.id, new_config)
+                triggered += 1
+            except Exception as e:
+                errors.append(f"{ss.id}: {e}")
+
+    db.add(AuditLog(
+        actor_id=admin["sub"], actor_role="admin",
+        action="slot.force_replace_all", entity_type="session", entity_id="all",
+        detail=f"force-replace-all: {triggered} slots triggered, {len(errors)} errors",
+    ))
+    await db.commit()
+    return {"ok": True, "triggered": triggered, "errors": errors}
+
+
 @router.get("/{session_id}")
 async def get_session(session_id: str, db: DbSession, admin: AdminUser):
     session = await db.get(DBSession, session_id)
