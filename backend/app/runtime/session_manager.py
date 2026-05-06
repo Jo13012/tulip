@@ -269,20 +269,34 @@ class SessionManager:
             usdc_bal, eth_bal = balance_poller.get_arb(user_id)
             usdc_bal = usdc_bal or 0.0
             eth_bal  = eth_bal  or 0.0
-            if wallet.wallet_address and usdc_bal < settings.FEE_WALLET_USDC_STOP:
+            usdc_ok = not wallet.wallet_address or usdc_bal >= settings.FEE_WALLET_USDC_STOP
+            eth_ok  = not wallet.wallet_address or eth_bal  >= settings.FEE_WALLET_ETH_MIN
+            if not usdc_ok and not eth_ok:
                 raise SessionLaunchError(
-                    f"Fee wallet USDC insufficient: {usdc_bal:.4f} < {settings.FEE_WALLET_USDC_STOP} required."
+                    f"Insufficient gas funds on Arbitrum: "
+                    f"USDC {usdc_bal:.2f} < ${settings.FEE_WALLET_USDC_STOP:.2f} required and "
+                    f"ETH {eth_bal:.6f} < {settings.FEE_WALLET_ETH_MIN:.4f} required. "
+                    f"Send USDC and ETH to your Arbitrum wallet to cover gas fees."
                 )
-            if wallet.wallet_address and eth_bal < settings.FEE_WALLET_ETH_MIN:
+            if not usdc_ok:
                 raise SessionLaunchError(
-                    f"Fee wallet ETH insufficient: {eth_bal:.6f} < {settings.FEE_WALLET_ETH_MIN} required for gas."
+                    f"Insufficient USDC on Arbitrum for gas fees: "
+                    f"you have ${usdc_bal:.2f} but need at least ${settings.FEE_WALLET_USDC_STOP:.2f}. "
+                    f"Send USDC to your Arbitrum wallet."
+                )
+            if not eth_ok:
+                raise SessionLaunchError(
+                    f"Insufficient ETH on Arbitrum for gas: "
+                    f"you have {eth_bal:.6f} ETH but need at least {settings.FEE_WALLET_ETH_MIN:.4f} ETH. "
+                    f"Send ETH to your Arbitrum wallet to pay gas fees."
                 )
 
             # Trading balance guard
             trading_bal = balance_poller.get_trading(user_id)
             if not trading_bal or trading_bal <= 0:
                 raise SessionLaunchError(
-                    "No Polymarket trading balance. Fund your account and bridge USDC before starting a session."
+                    "No Polymarket trading balance. "
+                    "Send USDC to your Arbitrum wallet and use 'Bridge to Polymarket' to fund your trading account."
                 )
 
             # Capital split

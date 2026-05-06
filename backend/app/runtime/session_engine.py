@@ -432,7 +432,8 @@ class SessionEngine:
         if usdc is not None and usdc < settings.FEE_WALLET_USDC_STOP:
             await self._log_session(
                 "WARN",
-                f"Arbitrum USDC critically low (${usdc:.2f} < ${settings.FEE_WALLET_USDC_STOP:.2f}) — soft stop",
+                f"Arbitrum USDC too low to pay gas fees (${usdc:.2f} < ${settings.FEE_WALLET_USDC_STOP:.2f} required). "
+                f"Send USDC to your Arbitrum wallet to continue. Session stopped.",
             )
             await self.soft_stop()
             return
@@ -440,7 +441,8 @@ class SessionEngine:
         if eth is not None and eth < settings.FEE_WALLET_ETH_MIN:
             await self._log_session(
                 "WARN",
-                f"Arbitrum ETH low ({eth:.6f} < {settings.FEE_WALLET_ETH_MIN:.6f}) — soft stop",
+                f"Arbitrum ETH too low to pay gas fees ({eth:.6f} ETH < {settings.FEE_WALLET_ETH_MIN:.4f} ETH required). "
+                f"Send ETH to your Arbitrum wallet to continue. Session stopped.",
             )
             await self.soft_stop()
 

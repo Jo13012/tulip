@@ -124,6 +124,11 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
     live_engines = {e.session_id: e for e in await session_registry.all()}
     accurate = await _user_accurate_stats(db, user_ids, live_engines)
 
+    # Build user_id → deployed capital from live engines (O(1) per engine, all in memory)
+    deployed_by_user: dict[str, float] = {}
+    for engine in live_engines.values():
+        deployed_by_user[engine.user_id] = engine.total_deployed
+
     result = []
     for u, wallet in pairs:
         bal = balance_poller.get(u.id)
@@ -133,6 +138,9 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
         if active_session:
             session_live = active_session.id in live_engines
             session_status = active_session.status
+
+        positions_value = deployed_by_user.get(u.id, 0.0)
+        trading_available = round((bal.trading_balance or 0.0) - positions_value, 2) if bal.trading_balance is not None else None
 
         us = accurate.get(u.id, {"volume": 0.0, "pnl": 0.0})
         result.append({
@@ -152,6 +160,8 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
             "wallet_usdc":         bal.wallet_usdc,
             "wallet_eth":          bal.wallet_eth,
             "trading_balance":     bal.trading_balance,
+            "trading_available":   trading_available,
+            "positions_value":     round(positions_value, 2),
             "active_session_id":   active_session.id if active_session else None,
             "session_status":      session_status,
             "session_live":        session_live,

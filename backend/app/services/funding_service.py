@@ -184,12 +184,13 @@ async def get_trading_balance(proxy_address: str) -> float | None:
     return None
 
 
-def compute_reserve_target(usdc_balance: float = 0.0, trading_balance: float | None = None) -> float:
+def compute_reserve_target(usdc_balance: float = 0.0, trading_balance: float | None = None, positions_value: float = 0.0) -> float:
     """ARB reserve to keep on EOA: max(USDC_MIN floor, capital * 10%).
+    capital = ARB USDC + trading available + open positions value.
     Covers ~10 days of fees at x8 daily volume, 12 bps.
     """
     base = settings.FEE_WALLET_USDC_MIN
-    total_capital = max(0.0, usdc_balance) + max(0.0, trading_balance or 0.0)
+    total_capital = max(0.0, usdc_balance) + max(0.0, trading_balance or 0.0) + max(0.0, positions_value)
     if total_capital > 0:
         return max(base, total_capital * settings.FEE_BUFFER_PCT)
     return base
@@ -200,9 +201,11 @@ def compute_warn_threshold(reserve_target: float) -> float:
     return max(settings.FEE_WALLET_USDC_STOP * 2, reserve_target * 0.30)
 
 
-def compute_bridge_amount(usdc_balance: float, trading_balance: float | None = None) -> float:
-    """Bridge everything above Reserve 1, minimum BRIDGE_MIN_USDC."""
-    reserve_target = compute_reserve_target(usdc_balance, trading_balance)
+def compute_bridge_amount(usdc_balance: float, trading_balance: float | None = None, positions_value: float = 0.0) -> float:
+    """Bridge everything above reserve, minimum BRIDGE_MIN_USDC.
+    positions_value: open positions at cost (deployed capital) — not bridgeable but counts for reserve sizing.
+    """
+    reserve_target = compute_reserve_target(usdc_balance, trading_balance, positions_value)
     if usdc_balance <= 0:
         return 0.0
     bridge_amount = max(0.0, usdc_balance - reserve_target)
