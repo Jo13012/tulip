@@ -224,16 +224,11 @@ class BalancePoller:
                 size = float(it.get("size") or 0)
                 if size < 0.01:
                     continue
-                cur_price = float(it.get("curPrice") or 0)
-                val = size * cur_price
-                redeemable = bool(it.get("redeemable"))
-                log.info("[poller:positions] proxy=%s redeemable=%s size=%.4f curPrice=%.4f val=%.4f title=%s",
-                         proxy_address[:10], redeemable, size, cur_price, val, str(it.get("title") or "")[:40])
-                if redeemable:
+                val = float(it.get("currentValue") or 0)
+                if it.get("redeemable"):
                     redeem_val += val
                 else:
                     pos_val += val
-            log.info("[poller:positions] proxy=%s pos_val=%.4f redeem_val=%.4f", proxy_address[:10], pos_val, redeem_val)
             return pos_val, redeem_val
         except Exception:
             return 0.0, 0.0

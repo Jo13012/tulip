@@ -221,6 +221,7 @@ class ExecutionClient:
                     "outcome":      item.get("outcome") or "",
                     "condition_id": item.get("conditionId") or "",
                     "redeemable":   bool(item.get("redeemable")),
+                    "current_value": float(item.get("currentValue") or 0),
                     "icon":         item.get("icon") or "",
                 }
                 for item in items
