@@ -200,6 +200,7 @@ class FundingStatusOut(BaseModel):
     funding_bridge_started_at: str | None = None
     message: str
     positions_value: float = 0.0
+    redeem_value: float = 0.0
 
 
 @router.get("/onboarding-status")
@@ -271,7 +272,7 @@ async def funding_status(user: CurrentUser, db: DbSession):
         )
 
     positions_value, redeem_value = _get_positions_value(user["sub"])
-    thresholds = _funding_thresholds(usdc_balance, eth_balance, trading_balance, positions_value + redeem_value)
+    thresholds = _funding_thresholds(usdc_balance, eth_balance, trading_balance, positions_value)
     suggested_usdc = float(thresholds["suggested_usdc"])
     suggested_eth = float(thresholds["suggested_eth"])
     required_usdc = float(thresholds["required_usdc"])
@@ -285,7 +286,7 @@ async def funding_status(user: CurrentUser, db: DbSession):
     warn_usdc = bool(thresholds["warn_usdc"])
     warn_eth = bool(thresholds["warn_eth"])
     wallet_funded = bool(thresholds["wallet_funded"])
-    bridgeable_usdc = funding_service.compute_bridge_amount(usdc_balance, trading_balance, positions_value + redeem_value)
+    bridgeable_usdc = funding_service.compute_bridge_amount(usdc_balance, trading_balance, positions_value)
     bridge_available = bridgeable_usdc >= settings.BRIDGE_MIN_USDC
 
     message = ""
@@ -406,7 +407,7 @@ async def funding_status(user: CurrentUser, db: DbSession):
                     ft: FundingTransaction | None = None
                     try:
                         deposit_address = await _ensure_cached_deposit_address(wallet, db)
-                        amount_to_bridge = funding_service.compute_bridge_amount(fresh_usdc, trading_balance, positions_value + redeem_value)
+                        amount_to_bridge = funding_service.compute_bridge_amount(fresh_usdc, trading_balance, positions_value)
                         log.info(
                             "[funding:auto] user=%s fresh_usdc=%.6f amount_to_bridge=%.6f deposit=%s",
                             user["sub"],
@@ -460,7 +461,7 @@ async def funding_status(user: CurrentUser, db: DbSession):
                         message = f"Funding failed: {e}"
 
     return FundingStatusOut(
-        trading_balance=round((trading_balance or 0.0) + positions_value + redeem_value, 2) if trading_balance is not None else None,
+        trading_balance=round((trading_balance or 0.0) + positions_value, 2) if trading_balance is not None else None,
         usdc_balance=usdc_balance,
         eth_balance=eth_balance,
         usdc_token_address=settings.ARBITRUM_USDC_ADDRESS or None,
@@ -485,7 +486,7 @@ async def funding_status(user: CurrentUser, db: DbSession):
         bridge_min_usdc=settings.BRIDGE_MIN_USDC,
         bridgeable_usdc=bridgeable_usdc,
         bridge_available=bridge_available,
-        reserve_target=funding_service.compute_reserve_target(usdc_balance, trading_balance, positions_value + redeem_value),
+        reserve_target=funding_service.compute_reserve_target(usdc_balance, trading_balance, positions_value),
         fee_buffer_pct=settings.FEE_BUFFER_PCT,
         fee_wallet_usdc_stop=settings.FEE_WALLET_USDC_STOP,
         funding_state=wallet.funding_state,
@@ -494,7 +495,8 @@ async def funding_status(user: CurrentUser, db: DbSession):
         funding_deposit_address_cached=wallet.funding_deposit_address_cached,
         funding_bridge_started_at=wallet.funding_bridge_started_at.isoformat() if wallet.funding_bridge_started_at else None,
         message=message,
-        positions_value=round(positions_value + redeem_value, 2),
+        positions_value=round(positions_value, 2),
+        redeem_value=round(redeem_value, 2),
     )
 
 
@@ -513,7 +515,7 @@ async def funding_force(user: CurrentUser, db: DbSession):
     eth_balance     = cached.wallet_eth     or 0.0
     trading_balance = cached.trading_balance
     positions_value_force, redeem_value_force = _get_positions_value(user["sub"])
-    thresholds = _funding_thresholds(usdc_balance, eth_balance, trading_balance, positions_value_force + redeem_value_force)
+    thresholds = _funding_thresholds(usdc_balance, eth_balance, trading_balance, positions_value_force)
     required_usdc = float(thresholds["required_usdc"])
     required_eth = float(thresholds["required_eth"])
     if usdc_balance < required_usdc or eth_balance < required_eth:
@@ -540,7 +542,7 @@ async def funding_force(user: CurrentUser, db: DbSession):
         wallet.funding_bridge_started_at = datetime.now(timezone.utc)
         await db.commit()
 
-        amount_to_bridge = funding_service.compute_bridge_amount(usdc_balance, trading_balance, positions_value_force + redeem_value_force)
+        amount_to_bridge = funding_service.compute_bridge_amount(usdc_balance, trading_balance, positions_value_force)
         ft.amount_usdc = amount_to_bridge
         if amount_to_bridge <= 0:
             wallet.funding_state = "completed" if (trading_balance or 0.0) > 0 else "idle"

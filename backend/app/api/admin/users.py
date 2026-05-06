@@ -154,7 +154,7 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
             "onboarding_completed_at": wallet.onboarding_completed_at.isoformat() if wallet and wallet.onboarding_completed_at else None,
             "wallet_usdc":         bal.wallet_usdc,
             "wallet_eth":          bal.wallet_eth,
-            "trading_balance":     round((bal.trading_balance or 0.0) + positions_value + redeem_value, 2) if bal.trading_balance is not None else None,
+            "trading_balance":     round((bal.trading_balance or 0.0) + positions_value, 2) if bal.trading_balance is not None else None,
             "positions_value":     round(positions_value, 2),
             "redeem_value":        round(redeem_value, 2),
             "active_session_id":   active_session.id if active_session else None,
