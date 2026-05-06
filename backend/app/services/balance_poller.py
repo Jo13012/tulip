@@ -31,6 +31,7 @@ class WalletBalances:
     wallet_usdc:     float | None = None
     wallet_eth:      float | None = None
     trading_balance: float | None = None
+    positions_value: float        = 0.0   # mark-to-market sum(size * cur_price) from Polymarket Data API
     fetched_at:      float = field(default_factory=time.monotonic)
 
 
@@ -93,7 +94,9 @@ class BalancePoller:
         except Exception:
             trading = prev.trading_balance
 
-        self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, trading_balance=trading)
+        positions_value = await self._fetch_positions_value_safe(proxy_address)
+
+        self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, trading_balance=trading, positions_value=positions_value)
 
     async def wait_ready(self, timeout: float = 6.0) -> None:
         try:
@@ -144,18 +147,21 @@ class BalancePoller:
         except Exception:
             arb_balances = {}  # keep previous cached values below
 
-        # All trading balances in parallel (Rust internal service, fast)
-        trading_results = await asyncio.gather(
+        # All trading + positions in parallel
+        combined_results = await asyncio.gather(
             *[self._fetch_trading_safe(pa) for pa in proxy_addresses],
+            *[self._fetch_positions_value_safe(pa) for pa in proxy_addresses],
             return_exceptions=True,
         )
+        n = len(proxy_addresses)
+        trading_results  = combined_results[:n]
+        positions_results = combined_results[n:]
 
         for i, (user_id, wa, _) in enumerate(wallet_rows):
             prev = self._cache.get(user_id)
             if wa and wa in arb_balances:
                 usdc, eth = arb_balances[wa]
             else:
-                # Timeout or missing — keep previous, don't reset to None
                 usdc = prev.wallet_usdc if prev else None
                 eth  = prev.wallet_eth  if prev else None
 
@@ -165,10 +171,12 @@ class BalancePoller:
             elif tr is None:
                 trading = prev.trading_balance if prev else None
             else:
-                # Exception — keep previous
                 trading = prev.trading_balance if prev else None
 
-            self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, trading_balance=trading)
+            pv = positions_results[i]
+            positions_value = float(pv) if isinstance(pv, (float, int)) else (prev.positions_value if prev else 0.0)
+
+            self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, trading_balance=trading, positions_value=positions_value)
 
     async def _fetch_trading(self, proxy_address: str) -> float | None:
         if not proxy_address:
@@ -186,6 +194,43 @@ class BalancePoller:
             return await asyncio.wait_for(self._fetch_trading(proxy_address), timeout=_TRADING_TIMEOUT)
         except Exception:
             return None
+
+    async def _fetch_positions_value_safe(self, proxy_address: str) -> float:
+        """Mark-to-market positions value from Polymarket public Data API. 0.0 on error."""
+        if not proxy_address:
+            return 0.0
+        try:
+            from app.core.config import settings
+            resp = await asyncio.wait_for(
+                self._data_client().get(
+                    f"{settings.DATA_API_HOST}/positions",
+                    params={"user": proxy_address, "sizeThreshold": "0.01", "limit": "500"},
+                ),
+                timeout=6.0,
+            )
+            if not resp.is_success:
+                return 0.0
+            items = resp.json()
+            if not isinstance(items, list):
+                return 0.0
+            return sum(
+                float(it.get("size") or 0) * float(it.get("curPrice") or 0)
+                for it in items
+                if float(it.get("size") or 0) >= 0.01
+            )
+        except Exception:
+            return 0.0
+
+    def _data_client(self) -> "httpx.AsyncClient":
+        """Shared httpx client for Polymarket Data API (public, no auth)."""
+        if not hasattr(self, "_data_http") or self._data_http.is_closed:
+            import httpx
+            self._data_http = httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=4.0, read=8.0, write=2.0, pool=1.0),
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=30),
+                trust_env=False,
+            )
+        return self._data_http
 
 
 balance_poller = BalancePoller()

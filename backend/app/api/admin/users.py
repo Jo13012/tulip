@@ -124,11 +124,6 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
     live_engines = {e.session_id: e for e in await session_registry.all()}
     accurate = await _user_accurate_stats(db, user_ids, live_engines)
 
-    # Build user_id → deployed capital from live engines (O(1) per engine, all in memory)
-    deployed_by_user: dict[str, float] = {}
-    for engine in live_engines.values():
-        deployed_by_user[engine.user_id] = engine.total_deployed
-
     result = []
     for u, wallet in pairs:
         bal = balance_poller.get(u.id)
@@ -139,7 +134,7 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
             session_live = active_session.id in live_engines
             session_status = active_session.status
 
-        positions_value = deployed_by_user.get(u.id, 0.0)
+        positions_value = bal.positions_value  # mark-to-market from poller (Data API)
 
         us = accurate.get(u.id, {"volume": 0.0, "pnl": 0.0})
         result.append({
