@@ -28,9 +28,10 @@ interface Props {
   onSignOut: () => void
 }
 
-function UserMenu({ user, usdcBalance, feeUsdc, feeEth, onSignOut }: {
+function UserMenu({ user, usdcBalance, positionsValue, feeUsdc, feeEth, onSignOut }: {
   user: AppUser
   usdcBalance: number | null
+  positionsValue: number
   feeUsdc: number | null
   feeEth: number | null
   onSignOut: () => void
@@ -70,7 +71,12 @@ function UserMenu({ user, usdcBalance, feeUsdc, feeEth, onSignOut }: {
             {usdcBalance != null && (
               <div className="flex items-center justify-between">
                 <span className="text-[10px] text-white/30 uppercase tracking-widest font-semibold">Trading</span>
-                <span className="text-[12px] font-mono font-semibold text-white/70">${fmt2(usdcBalance)}</span>
+                <span className="text-[12px] font-mono font-semibold text-white/70">
+                  ${fmt2(usdcBalance)}
+                  {positionsValue > 0 && (
+                    <span className="ml-1.5 text-[10px] font-normal text-white/35">avail ${fmt2(usdcBalance - positionsValue)}</span>
+                  )}
+                </span>
               </div>
             )}
             {feeUsdc != null && (
@@ -284,6 +290,7 @@ export default function UserDashboard({ user, onSignOut }: Props) {
           <UserMenu
             user={user}
             usdcBalance={usdcBalance}
+            positionsValue={fundingStatus?.positions_value ?? 0}
             feeUsdc={feeUsdc}
             feeEth={feeEth}
             onSignOut={onSignOut}

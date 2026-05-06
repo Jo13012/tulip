@@ -862,6 +862,7 @@ function LaunchForm({ strategy, walletId, usdcBalance, onLaunched, displayName }
   strategy: Strategy; walletId: string; usdcBalance: number | null; onLaunched: () => void; displayName?: string
 }) {
   const addToast = useAppStore(s => s.addToast)
+  const positionsValue = useAppStore(s => s.fundingStatus?.positions_value ?? 0)
   const [capital,    setCapital]    = useState('')
   const [stopMode,   setStopMode]   = useState<'days' | 'volume'>('days')
   const [stopDays,   setStopDays]   = useState('7')
@@ -958,7 +959,14 @@ function LaunchForm({ strategy, walletId, usdcBalance, onLaunched, displayName }
         <Label>Trading Balance</Label>
         <div className="mt-1 text-[22px] font-bold font-mono tabular-nums leading-none text-white/85">
           {usdcBalance != null
-            ? `$${usdcBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            ? <>
+                ${usdcBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {positionsValue > 0 && (
+                  <span className="ml-2 text-[13px] font-normal text-white/35">
+                    avail ${(usdcBalance - positionsValue).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                )}
+              </>
             : <span className="text-white/20 text-lg">...</span>}
         </div>
       </div>

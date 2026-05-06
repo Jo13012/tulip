@@ -227,6 +227,11 @@ export function ProfileTab({ user }: Props) {
                     <Row label="Trading balance">
                       <span className="text-[12px] font-mono font-semibold text-white/65">
                         ${tradingBal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {(fundingStatus?.positions_value ?? 0) > 0 && (
+                          <span className="ml-1.5 text-[11px] font-normal text-white/35">
+                            avail ${(tradingBal - (fundingStatus?.positions_value ?? 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        )}
                       </span>
                     </Row>
                   )}
