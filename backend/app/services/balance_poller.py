@@ -224,11 +224,10 @@ class BalancePoller:
                 size = float(it.get("size") or 0)
                 if size < 0.01:
                     continue
-                val = size * float(it.get("curPrice") or 0)
                 if it.get("redeemable"):
-                    redeem_val += val
+                    redeem_val += size  # resolved: 1 token = $1 USDC
                 else:
-                    pos_val += val
+                    pos_val += size * float(it.get("curPrice") or 0)
             return pos_val, redeem_val
         except Exception:
             return 0.0, 0.0
