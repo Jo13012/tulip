@@ -31,7 +31,8 @@ class WalletBalances:
     wallet_usdc:     float | None = None
     wallet_eth:      float | None = None
     trading_balance: float | None = None
-    positions_value: float        = 0.0   # mark-to-market sum(size * cur_price) from Polymarket Data API
+    positions_value: float        = 0.0   # mark-to-market open positions (non-redeemable)
+    redeem_value:    float        = 0.0   # redeemable positions value
     fetched_at:      float = field(default_factory=time.monotonic)
 
 
@@ -94,9 +95,9 @@ class BalancePoller:
         except Exception:
             trading = prev.trading_balance
 
-        positions_value = await self._fetch_positions_value_safe(proxy_address)
+        positions_value, redeem_value = await self._fetch_positions_value_safe(proxy_address)
 
-        self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, trading_balance=trading, positions_value=positions_value)
+        self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, trading_balance=trading, positions_value=positions_value, redeem_value=redeem_value)
 
     async def wait_ready(self, timeout: float = 6.0) -> None:
         try:
@@ -174,9 +175,13 @@ class BalancePoller:
                 trading = prev.trading_balance if prev else None
 
             pv = positions_results[i]
-            positions_value = float(pv) if isinstance(pv, (float, int)) else (prev.positions_value if prev else 0.0)
+            if isinstance(pv, tuple):
+                positions_value, redeem_value = pv
+            else:
+                positions_value = prev.positions_value if prev else 0.0
+                redeem_value = prev.redeem_value if prev else 0.0
 
-            self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, trading_balance=trading, positions_value=positions_value)
+            self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, trading_balance=trading, positions_value=positions_value, redeem_value=redeem_value)
 
     async def _fetch_trading(self, proxy_address: str) -> float | None:
         if not proxy_address:
@@ -195,10 +200,10 @@ class BalancePoller:
         except Exception:
             return None
 
-    async def _fetch_positions_value_safe(self, proxy_address: str) -> float:
-        """Mark-to-market positions value from Polymarket public Data API. 0.0 on error."""
+    async def _fetch_positions_value_safe(self, proxy_address: str) -> tuple[float, float]:
+        """Returns (positions_value, redeem_value) from Polymarket public Data API. (0,0) on error."""
         if not proxy_address:
-            return 0.0
+            return 0.0, 0.0
         try:
             from app.core.config import settings
             resp = await asyncio.wait_for(
@@ -209,17 +214,24 @@ class BalancePoller:
                 timeout=6.0,
             )
             if not resp.is_success:
-                return 0.0
+                return 0.0, 0.0
             items = resp.json()
             if not isinstance(items, list):
-                return 0.0
-            return sum(
-                float(it.get("size") or 0) * float(it.get("curPrice") or 0)
-                for it in items
-                if float(it.get("size") or 0) >= 0.01
-            )
+                return 0.0, 0.0
+            pos_val = 0.0
+            redeem_val = 0.0
+            for it in items:
+                size = float(it.get("size") or 0)
+                if size < 0.01:
+                    continue
+                val = size * float(it.get("curPrice") or 0)
+                if it.get("redeemable"):
+                    redeem_val += val
+                else:
+                    pos_val += val
+            return pos_val, redeem_val
         except Exception:
-            return 0.0
+            return 0.0, 0.0
 
     def _data_client(self) -> "httpx.AsyncClient":
         """Shared httpx client for Polymarket Data API (public, no auth)."""

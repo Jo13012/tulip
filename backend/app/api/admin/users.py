@@ -134,7 +134,8 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
             session_live = active_session.id in live_engines
             session_status = active_session.status
 
-        positions_value = bal.positions_value  # mark-to-market from poller (Data API)
+        positions_value = bal.positions_value  # open positions mark-to-market
+        redeem_value    = bal.redeem_value     # redeemable positions value
 
         us = accurate.get(u.id, {"volume": 0.0, "pnl": 0.0})
         result.append({
@@ -153,8 +154,9 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
             "onboarding_completed_at": wallet.onboarding_completed_at.isoformat() if wallet and wallet.onboarding_completed_at else None,
             "wallet_usdc":         bal.wallet_usdc,
             "wallet_eth":          bal.wallet_eth,
-            "trading_balance":     round((bal.trading_balance or 0.0) + positions_value, 2) if bal.trading_balance is not None else None,
+            "trading_balance":     round((bal.trading_balance or 0.0) + positions_value + redeem_value, 2) if bal.trading_balance is not None else None,
             "positions_value":     round(positions_value, 2),
+            "redeem_value":        round(redeem_value, 2),
             "active_session_id":   active_session.id if active_session else None,
             "session_status":      session_status,
             "session_live":        session_live,

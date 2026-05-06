@@ -636,6 +636,15 @@ export default function AdminUsers() {
                   : 'text-emerald-400'
                 }`}>
                   {fmtUsdc(u.trading_balance)}
+                  {u.trading_balance != null && (u.positions_value ?? 0) + (u.redeem_value ?? 0) > 0 && (() => {
+                    const avail = u.trading_balance - (u.positions_value ?? 0) - (u.redeem_value ?? 0)
+                    return (
+                      <span className="ml-1 text-[10px] font-normal text-white/30">
+                        avail {fmtUsdc(avail)}
+                        {(u.redeem_value ?? 0) >= 5 && <> redeem {fmtUsdc(u.redeem_value)}</>}
+                      </span>
+                    )
+                  })()}
                 </td>
 
                 {/* Fee override (editable) */}
