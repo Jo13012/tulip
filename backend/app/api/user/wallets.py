@@ -201,6 +201,8 @@ class FundingStatusOut(BaseModel):
     funding_deposit_address_cached: str | None = None
     funding_bridge_started_at: str | None = None
     message: str
+    trading_available: float | None = None
+    positions_value: float = 0.0
 
 
 @router.get("/onboarding-status")
@@ -495,6 +497,8 @@ async def funding_status(user: CurrentUser, db: DbSession):
         funding_deposit_address_cached=wallet.funding_deposit_address_cached,
         funding_bridge_started_at=wallet.funding_bridge_started_at.isoformat() if wallet.funding_bridge_started_at else None,
         message=message,
+        trading_available=round((trading_balance or 0.0) - positions_value, 2) if trading_balance is not None else None,
+        positions_value=round(positions_value, 2),
     )
 
 

@@ -623,11 +623,17 @@ class SessionEngine:
             try:
                 from app.db.models import SessionSlot as DBSessionSlot
                 state_val = state.value if hasattr(state, "value") else str(state)
+                # Clear replacement queue from DB once switch completes — prevents
+                # false replacement_queued state on restart after a completed replacement.
+                clear_replacement = state in (SlotState.ACTIVE, SlotState.IDLE)
+                update_vals: dict = {"slot_state": state_val}
+                if clear_replacement:
+                    update_vals["replacement_strategy_slot_version_id"] = None
                 async with self._db_factory() as db:
                     await db.execute(
                         sa_update(DBSessionSlot)
                         .where(DBSessionSlot.id == session_slot_id)
-                        .values(slot_state=state_val)
+                        .values(**update_vals)
                     )
                     await db.commit()
             except Exception:
