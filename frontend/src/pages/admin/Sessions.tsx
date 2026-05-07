@@ -523,8 +523,8 @@ function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (s
 
   useEffect(() => {
     api.admin.listUsers(200).then((d: any) => {
-      // Only users without active session
-      const eligible = d.filter((u: any) => !u.active_session_id && u.wallet_id)
+      // Only users without active session and trading_balance >= 10
+      const eligible = d.filter((u: any) => !u.active_session_id && u.wallet_id && (u.trading_balance ?? 0) >= 5)
       setUsers(eligible)
     }).catch(() => {}).finally(() => setLoadingUsers(false))
   }, [])
@@ -574,24 +574,40 @@ function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (s
             {loadingUsers ? (
               <div className="h-10 bg-white/[0.03] rounded-xl animate-pulse" />
             ) : users.length === 0 ? (
-              <div className="text-[11px] text-white/30 px-3 py-2.5 border border-white/[0.07] rounded-xl">All users have active sessions</div>
+              <div className="text-[11px] text-white/30 px-3 py-2.5 border border-white/[0.07] rounded-xl">No eligible users (need ≥$5 trading balance, no active session)</div>
             ) : (
-              <select
-                className="w-full bg-[#0a0b0d] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white/70 text-[12px] focus:outline-none focus:border-brand/50 transition-all"
-                value={selectedUser?.id ?? ''}
-                onChange={e => {
-                  const u = users.find(u => u.id === e.target.value)
-                  setSelectedUser(u ?? null)
-                  if (u?.trading_balance) setCapital(String(Math.floor(u.trading_balance * 100) / 100))
-                }}
-              >
-                <option value="">Select a user…</option>
-                {users.map((u: any) => (
-                  <option key={u.id} value={u.id}>
-                    {u.display_name ?? u.id.slice(0, 12)} — ${(u.trading_balance ?? 0).toFixed(2)}
-                  </option>
-                ))}
-              </select>
+              <div className="border border-white/[0.08] rounded-xl overflow-hidden max-h-48 overflow-y-auto">
+                {users.map((u: any) => {
+                  const needsUsdc = (u.wallet_usdc ?? 0) < 2
+                  const needsEth  = (u.wallet_eth  ?? 0) < 0.0005
+                  const warn = needsUsdc || needsEth
+                  const isSelected = selectedUser?.id === u.id
+                  return (
+                    <button
+                      key={u.id}
+                      className={`w-full text-left px-3.5 py-2 text-[11px] flex items-center justify-between transition-colors ${
+                        isSelected ? 'bg-brand/20 text-white' : 'hover:bg-white/[0.04] text-white/70'
+                      }`}
+                      onClick={() => {
+                        setSelectedUser(u)
+                        if (u.trading_balance) setCapital(String(Math.floor(u.trading_balance * 100) / 100))
+                      }}
+                    >
+                      <span>{u.display_name ?? u.id.slice(0, 12)}</span>
+                      <span className="font-mono flex items-center gap-2">
+                        {warn && (
+                          <span className="text-red-400 text-[10px]">
+                            {needsUsdc && needsEth ? 'no USDC+ETH' : needsUsdc ? 'no USDC' : 'no ETH'}
+                          </span>
+                        )}
+                        <span className={warn ? 'text-red-400' : 'text-white/50'}>
+                          ${(u.trading_balance ?? 0).toFixed(2)}
+                        </span>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
             )}
           </div>
 

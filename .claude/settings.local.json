@@ -27,7 +27,23 @@
       "Bash(gh api *)",
       "WebFetch(domain:api.github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(xargs grep *)"
+      "Bash(xargs grep *)",
+      "WebFetch(domain:airdrop.bravadotrade.com)",
+      "Bash(curl -s \"https://data-api.polymarket.com/activity?user=0xF95816131968DEbF016177E3617d414EaA54F489&limit=1000\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(type\\(d\\), len\\(d\\) if isinstance\\(d,list\\) else d\\)\")",
+      "Bash(curl -s \"https://data-api.polymarket.com/activity?user=0xF95816131968DEbF016177E3617d414EaA54F489&limit=5\")",
+      "Bash(curl -s \"https://data-api.polymarket.com/profile/pnl?user=0xF95816131968DEbF016177E3617d414EaA54F489\")",
+      "Bash(curl -s \"https://data-api.polymarket.com/portfolio?user=0xF95816131968DEbF016177E3617d414EaA54F489\")",
+      "Bash(curl -s \"https://data-api.polymarket.com/markets-traded?user=0xF95816131968DEbF016177E3617d414EaA54F489&limit=5\")",
+      "Bash(curl -s \"https://data-api.polymarket.com/profile?address=0xF95816131968DEbF016177E3617d414EaA54F489\")",
+      "Bash(curl -s \"https://data-api.polymarket.com/activity?user=0xF95816131968DEbF016177E3617d414EaA54F489&limit=10000\" -o /tmp/activity.json)",
+      "Read(//tmp/**)",
+      "Bash(awk '{s+=$1} END {printf \"total_usdcSize=%.2f\\\\n\", s}')",
+      "Bash(curl -s \"https://data-api.polymarket.com/rankings?address=0xF95816131968DEbF016177E3617d414EaA54F489&limit=1\")",
+      "Bash(curl -s \"https://data-api.polymarket.com/leaderboard?window=all&country=&limit=100\")",
+      "WebFetch(domain:docs.polymarket.com)",
+      "Bash(curl -s \"https://data-api.polymarket.com/v1/leaderboard?user=0xF95816131968DEbF016177E3617d414EaA54F489&timePeriod=ALL&category=OVERALL\")",
+      "WebFetch(domain:gist.githubusercontent.com)"
     ]
   }
 }

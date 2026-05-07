@@ -164,11 +164,62 @@ async def run_nuclear_close(
         except Exception as e:
             results["errors"].append(f"sell {token_id[:16]}: {e}")
 
-    # ── Redeem resolved positions (DISABLED — auto-redeem removed) ───────────────
-    # Code kept for future re-enable. Redeem is not triggered automatically.
-    # redeemable_to_process contains positions flagged for redeem but they are skipped.
-    if redeemable_to_process:
-        for token_id, condition_id, size, outcome in redeemable_to_process:
-            log.info("nuclear_close: skipping redeem (disabled) token=%s size=%.2f", token_id[:16], size)
+    # ── Claim ALL redeemable positions (from data-api, not just sell_token_set) ──
+    # Mirrors claimAllRedeemablePositions.ts: fetch all redeemable, group by condition_id
+    all_redeemable = [
+        pos for pos in all_positions
+        if pos.get("redeemable") and pos.get("condition_id") and pos.get("token_id")
+    ]
+    # Merge with redeemable_to_process (fallback no-bids positions)
+    extra_cids = {cid for _, cid, _, _ in redeemable_to_process}
+    for pos in all_redeemable:
+        tid = pos["token_id"]
+        cid = pos["condition_id"]
+        if cid not in extra_cids and tid not in {t for t, _, _, _ in redeemable_to_process}:
+            size = float(pos.get("size") or 0.0)
+            outcome = (pos.get("outcome") or "").upper()
+            redeemable_to_process.append((tid, cid, size, outcome))
+            extra_cids.add(cid)
+
+    # Deduplicate by condition_id (redeem once per condition, not per token)
+    seen_conditions: set[str] = set()
+    deduped: list[tuple[str, str, float, str]] = []
+    for token_id, condition_id, size, outcome in redeemable_to_process:
+        if condition_id not in seen_conditions:
+            seen_conditions.add(condition_id)
+            deduped.append((token_id, condition_id, size, outcome))
+
+    if deduped:
+        from app.services.redeem_service import redeem_positions
+        privy_wallet_id = getattr(client, "privy_wallet_id", None)
+        eoa_address = getattr(client, "wallet_address", None)
+        safe_address = getattr(client, "proxy_address", None)
+
+        if not (privy_wallet_id and eoa_address and safe_address):
+            log.error("nuclear_close: cannot redeem — missing wallet credentials")
+        else:
+            for token_id, condition_id, size, outcome in deduped:
+                log.info("nuclear_close: redeeming condition=%s size=%.2f outcome=%s",
+                         condition_id[:20], size, outcome)
+                try:
+                    res = await redeem_positions(
+                        privy_wallet_id=privy_wallet_id,
+                        eoa_address=eoa_address,
+                        safe_address=safe_address,
+                        condition_id=condition_id,
+                        estimated_tokens=size,
+                        known_token_id=token_id,
+                        outcome=outcome,
+                    )
+                    results["redeemed_positions"].append({
+                        "token_id": token_id,
+                        "condition_id": condition_id,
+                        "size": size,
+                        "ok": res.get("ok"),
+                        "tx_hash": res.get("tx_hash"),
+                        "error": res.get("error"),
+                    })
+                except Exception as e:
+                    results["errors"].append(f"redeem {condition_id[:20]}: {e}")
 
     return results

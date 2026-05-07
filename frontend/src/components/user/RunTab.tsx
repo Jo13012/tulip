@@ -179,6 +179,9 @@ function SlotActivityList({ slots, loaded }: { slots: RuntimeSlotStats[]; loaded
             const img    = s.condition_id ? (imgs[s.condition_id] ?? null) : null
             const upnl   = s.unrealized_pnl
             const hasSelling = lots.some(l => l.status === 'SELLING')
+            const isOutOfRange = s.state === 'active'
+              && s.bid_price != null && s.price_min != null
+              && s.bid_price < s.price_min
 
             return (
               <div key={s.session_slot_id}>
@@ -196,10 +199,11 @@ function SlotActivityList({ slots, loaded }: { slots: RuntimeSlotStats[]; loaded
                     {/* Compact chips */}
                     <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
                       <span className={`text-[8px] font-semibold uppercase tracking-widest px-1 py-0.5 rounded ${
-                        s.state === 'active' ? 'bg-emerald-500/10 text-emerald-400/70'
+                        isOutOfRange ? 'bg-yellow-500/10 text-yellow-400/70'
+                        : s.state === 'active' ? 'bg-emerald-500/10 text-emerald-400/70'
                         : s.state === 'replacement_queued' ? 'bg-amber-500/10 text-amber-400/70'
                         : 'bg-white/[0.04] text-white/25'
-                      }`}>{s.state}</span>
+                      }`}>{isOutOfRange ? 'out of range' : s.state}</span>
                       {lots.length > 0 && (
                         <span className="text-[8px] font-mono text-white/30">{lots.length} pos</span>
                       )}

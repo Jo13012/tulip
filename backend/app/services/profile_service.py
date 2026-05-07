@@ -73,12 +73,12 @@ class ProfileService:
                 result = {"wallet_volume": fallback_volume, "wallet_pnl": fallback_pnl}
                 addr_lower = proxy_address.lower()
                 for entry in entries:
-                    if entry.get("proxyAddress", "").lower() == addr_lower or \
-                       entry.get("address", "").lower() == addr_lower:
+                    ew = (entry.get("proxyWallet") or entry.get("proxyAddress") or entry.get("address") or "").lower()
+                    if ew == addr_lower:
                         vol = float(entry.get("vol") or entry.get("volume") or 0)
                         pnl = float(entry.get("pnl") or 0)
                         result = {
-                            "wallet_volume": round(max(vol, fallback_volume), 4),
+                            "wallet_volume": round(vol, 4),
                             "wallet_pnl":   round(pnl, 4),
                         }
                         break
