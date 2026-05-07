@@ -155,19 +155,21 @@ async def get_balances_batch(addresses: list[str]) -> dict[str, tuple[float | No
         if isinstance(item, dict):
             by_id[str(item.get("id", ""))] = item.get("result")
 
-    # Build result keyed by valid_addresses (correct index alignment)
+    # Build result keyed by lowercased address (normalize for lookup)
     valid_out: dict[str, tuple[float | None, float | None]] = {}
     for i, addr in enumerate(valid_addresses):
         usdc_hex = by_id.get(f"usdc_{i}")
         eth_hex  = by_id.get(f"eth_{i}")
-        usdc = (int(usdc_hex, 16) / 1_000_000) if usdc_hex and usdc_hex != "0x" else None
-        eth  = (int(eth_hex, 16) / 1e18)        if eth_hex  and eth_hex  != "0x" else None
-        valid_out[addr] = (usdc, eth)
+        # "0x" or "0x0...0" = genuine zero balance, not a missing result
+        usdc = (int(usdc_hex, 16) / 1_000_000) if usdc_hex not in (None, "") else None
+        eth  = (int(eth_hex, 16) / 1e18)        if eth_hex  not in (None, "") else None
+        valid_out[addr.strip().lower()] = (usdc, eth)
 
-    # Map back to original addresses list (normalize key to match valid_out)
+    # Map back to original addresses list (normalize key via lowercase)
     out: dict[str, tuple[float | None, float | None]] = {}
     for addr in addresses:
-        out[addr] = valid_out.get(addr.strip() if addr else addr, (None, None))
+        key = addr.strip().lower() if addr else ""
+        out[addr] = valid_out.get(key, (None, None))
     return out
 
 

@@ -83,7 +83,9 @@ class BalancePoller:
                 get_balances_batch([wallet_address]),
                 timeout=_ARB_BATCH_TIMEOUT,
             ) if wallet_address else {}
-            usdc, eth = arb.get(wallet_address, (prev.wallet_usdc, prev.wallet_eth))
+            new_usdc, new_eth = arb.get(wallet_address, (None, None))
+            usdc = new_usdc if new_usdc is not None else prev.wallet_usdc
+            eth  = new_eth  if new_eth  is not None else prev.wallet_eth
         except Exception:
             usdc, eth = prev.wallet_usdc, prev.wallet_eth
 
@@ -161,7 +163,10 @@ class BalancePoller:
         for i, (user_id, wa, _) in enumerate(wallet_rows):
             prev = self._cache.get(user_id)
             if wa and wa in arb_balances:
-                usdc, eth = arb_balances[wa]
+                new_usdc, new_eth = arb_balances[wa]
+                # Never overwrite a known value with None (partial RPC failure)
+                usdc = new_usdc if new_usdc is not None else (prev.wallet_usdc if prev else None)
+                eth  = new_eth  if new_eth  is not None else (prev.wallet_eth  if prev else None)
             else:
                 usdc = prev.wallet_usdc if prev else None
                 eth  = prev.wallet_eth  if prev else None

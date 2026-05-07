@@ -166,9 +166,11 @@ async def run_nuclear_close(
 
     # ── Claim ALL redeemable positions (from data-api, not just sell_token_set) ──
     # Mirrors claimAllRedeemablePositions.ts: fetch all redeemable, group by condition_id
+    # Skip dust < 0.5 tokens — relayer will PRECHECK_SKIPPED on zero on-chain balance
     all_redeemable = [
         pos for pos in all_positions
         if pos.get("redeemable") and pos.get("condition_id") and pos.get("token_id")
+        and float(pos.get("size") or 0) >= 0.5
     ]
     # Merge with redeemable_to_process (fallback no-bids positions)
     extra_cids = {cid for _, cid, _, _ in redeemable_to_process}
@@ -181,10 +183,13 @@ async def run_nuclear_close(
             redeemable_to_process.append((tid, cid, size, outcome))
             extra_cids.add(cid)
 
-    # Deduplicate by condition_id (redeem once per condition, not per token)
+    # Deduplicate by condition_id, skip dust
     seen_conditions: set[str] = set()
     deduped: list[tuple[str, str, float, str]] = []
     for token_id, condition_id, size, outcome in redeemable_to_process:
+        if size < 0.5:
+            log.info("nuclear_close: skip dust redeem token=%s size=%.4f", token_id[:16], size)
+            continue
         if condition_id not in seen_conditions:
             seen_conditions.add(condition_id)
             deduped.append((token_id, condition_id, size, outcome))
