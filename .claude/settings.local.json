@@ -43,7 +43,10 @@
       "Bash(curl -s \"https://data-api.polymarket.com/leaderboard?window=all&country=&limit=100\")",
       "WebFetch(domain:docs.polymarket.com)",
       "Bash(curl -s \"https://data-api.polymarket.com/v1/leaderboard?user=0xF95816131968DEbF016177E3617d414EaA54F489&timePeriod=ALL&category=OVERALL\")",
-      "WebFetch(domain:gist.githubusercontent.com)"
+      "WebFetch(domain:gist.githubusercontent.com)",
+      "WebFetch(domain:data-api.polymarket.com)",
+      "Bash(curl -s \"https://data-api.polymarket.com/v1/leaderboard?category=OVERALL&timePeriod=ALL&orderBy=PNL&limit=25&user=0x7ede88935860818120f3c3593d0b939723be2ab6\")",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

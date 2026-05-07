@@ -76,6 +76,87 @@ async def _user_accurate_stats(db, user_ids: list[str], live_engines: dict) -> d
 
     return stats
 
+_LEADERBOARD_URL = "https://data-api.polymarket.com/v1/leaderboard"
+_LB_TIMEOUT = 6.0
+_LB_TTL = 60.0  # seconds
+
+# cache: user_id -> (fetched_at, {"volume": float, "pnl": float})
+_lb_cache: dict[str, tuple[float, dict]] = {}
+
+
+async def _fetch_leaderboard_one(client, proxy_address: str) -> dict | None:
+    """Returns parsed dict on success, None on error/not found."""
+    try:
+        resp = await asyncio.wait_for(
+            client.get(_LEADERBOARD_URL, params={
+                "category": "OVERALL", "timePeriod": "ALL",
+                "orderBy": "PNL", "limit": "25",
+                "user": proxy_address.lower(),
+            }),
+            timeout=_LB_TIMEOUT,
+        )
+        if not resp.is_success:
+            return None
+        data = resp.json()
+        entries = data if isinstance(data, list) else data.get("data", [])
+        addr_lower = proxy_address.lower()
+        for entry in entries:
+            ew = (entry.get("proxyWallet") or entry.get("proxyAddress") or entry.get("address") or "").lower()
+            if ew == addr_lower:
+                vol = float(entry.get("vol") or entry.get("volume") or 0)
+                pnl = float(entry.get("pnl") or 0)
+                return {"volume": vol, "pnl": pnl}
+        return None
+    except Exception:
+        return None
+
+
+async def _fetch_leaderboard_batch(proxy_by_user: dict[str, str]) -> dict[str, dict]:
+    """Parallel leaderboard fetch for all users. Returns {user_id: {"volume": float, "pnl": float}}.
+    Uses 60s TTL cache; on error keeps last known non-zero value."""
+    if not proxy_by_user:
+        return {}
+
+    import time
+    import httpx
+
+    now = time.monotonic()
+    user_ids = list(proxy_by_user.keys())
+
+    # Split: stale (need refresh) vs fresh (use cache)
+    stale_ids = [uid for uid in user_ids if now - _lb_cache.get(uid, (0.0, {}))[0] >= _LB_TTL]
+    fresh_ids  = [uid for uid in user_ids if uid not in stale_ids]
+
+    out = {uid: _lb_cache[uid][1] for uid in fresh_ids}
+
+    if stale_ids:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=4.0, read=8.0, write=2.0, pool=1.0),
+            limits=httpx.Limits(max_connections=50, max_keepalive_connections=20, keepalive_expiry=30),
+            trust_env=False,
+        ) as client:
+            results = await asyncio.gather(
+                *[_fetch_leaderboard_one(client, proxy_by_user[uid]) for uid in stale_ids],
+                return_exceptions=True,
+            )
+        for uid, r in zip(stale_ids, results):
+            prev_val = _lb_cache.get(uid, (0.0, {"volume": 0.0, "pnl": 0.0}))[1]
+            if isinstance(r, dict):
+                # Keep last non-zero values if new fetch returned zeros
+                merged = {
+                    "volume": r["volume"] if r["volume"] != 0.0 else prev_val["volume"],
+                    "pnl":    r["pnl"]    if r["pnl"]    != 0.0 else prev_val["pnl"],
+                }
+                _lb_cache[uid] = (now, merged)
+                out[uid] = merged
+            else:
+                # Error: keep previous value, update timestamp only if we had data
+                _lb_cache[uid] = (now if prev_val["volume"] == 0.0 else _lb_cache.get(uid, (0.0, prev_val))[0], prev_val)
+                out[uid] = prev_val
+
+    return out
+
+
 router = APIRouter(prefix="/admin/users", tags=["admin:users"])
 
 
@@ -124,6 +205,10 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
     live_engines = {e.session_id: e for e in await session_registry.all()}
     accurate = await _user_accurate_stats(db, user_ids, live_engines)
 
+    # Fetch leaderboard stats for all users with proxy addresses in parallel
+    proxy_by_user = {u.id: w.proxy_address for u, w in pairs if w and w.proxy_address}
+    leaderboard_by_user = await _fetch_leaderboard_batch(proxy_by_user)
+
     result = []
     for u, wallet in pairs:
         bal = balance_poller.get(u.id)
@@ -138,6 +223,7 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
         redeem_value    = bal.redeem_value     # redeemable positions value
 
         us = accurate.get(u.id, {"volume": 0.0, "pnl": 0.0})
+        lb = leaderboard_by_user.get(u.id, {"volume": us["volume"], "pnl": us["pnl"]})
         result.append({
             "id":                  u.id,
             "display_name":        u.display_name,
@@ -145,8 +231,8 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
             "is_active":           u.is_active,
             "fee_override_bps":    u.fee_override_bps,
             "effective_fee_bps":   u.effective_fee_bps,
-            "trading_volume":      round(us["volume"], 2),
-            "bot_pnl":             round(us["pnl"], 2),
+            "trading_volume":      round(lb["volume"], 2),
+            "bot_pnl":             round(lb["pnl"], 2),
             "wallet_address":      wallet.wallet_address if wallet else None,
             "wallet_id":           wallet.id if wallet else None,
             "proxy_address":       wallet.proxy_address if wallet else None,

@@ -52,43 +52,42 @@ async def _is_neg_risk(http: httpx.AsyncClient, condition_id: str) -> bool:
     return False
 
 
-def _compute_position_id(collateral: str, condition_id_hex: str, index_set: int) -> int:
-    from eth_hash.auto import keccak as keccak_hash
-    cid = bytes.fromhex(condition_id_hex.lstrip("0x").zfill(64))
-    col_id = keccak_hash(abi_encode(["bytes32", "bytes32", "uint256"], [bytes(32), cid, index_set]))
-    pid = keccak_hash(abi_encode(["address", "bytes32"], [to_checksum_address(collateral), col_id]))
-    return int.from_bytes(pid, "big")
-
-
-async def _detect_collateral(http: httpx.AsyncClient, safe_address: str, condition_id: str) -> str:
-    """Return whichever collateral (pUSD or USDC.e) the Safe holds tokens for."""
-    # balanceOf(address,uint256) selector = 0x00fdd58e
-    BAL_SEL = "00fdd58e"
-    RPC = POLYGON_RPC
-    CTF_ADDR = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
-
-    for collateral in [PUSD, USDC_E]:
-        for idx in [1, 2]:
-            pid = _compute_position_id(collateral, condition_id, idx)
-            call_data = "0x" + BAL_SEL + abi_encode(
-                ["address", "uint256"], [to_checksum_address(safe_address), pid]
-            ).hex()
-            try:
-                resp = await http.post(RPC, json={
-                    "jsonrpc": "2.0", "method": "eth_call",
-                    "params": [{"to": CTF_ADDR, "data": call_data}, "latest"],
-                    "id": 1,
-                }, timeout=5.0)
-                result = resp.json().get("result", "0x")
-                bal = int(result, 16) if result and result != "0x" else 0
-                if bal > 0:
-                    log.info("detect_collateral: condition=%s collateral=%s idx=%d balance=%d",
-                             condition_id[:20], "pUSD" if collateral == PUSD else "USDC.e", idx, bal)
-                    return collateral
-            except Exception:
-                pass
-    log.warning("detect_collateral: no balance found for condition=%s, defaulting pUSD", condition_id[:20])
-    return PUSD
+async def _try_binary_redeem(
+    http: httpx.AsyncClient,
+    privy_wallet_id: str,
+    eoa_address: str,
+    safe_address: str,
+    condition_id: str,
+    collateral: str,
+    nonce: str,
+) -> dict | None:
+    """Submit one binary redeem attempt. Returns mined tx or None (incl. PRECHECK_SKIPPED)."""
+    calldata = _encode_binary_redeem(condition_id, collateral)
+    sig = await _sign_safe_tx(privy_wallet_id, safe_address, CTF, calldata, "0", 0, nonce)
+    body = {
+        "from": eoa_address,
+        "to": CTF,
+        "proxyWallet": safe_address,
+        "data": calldata,
+        "nonce": nonce,
+        "signature": sig,
+        "signatureParams": {
+            "gasPrice": "0", "operation": "0",
+            "safeTxnGas": "0", "baseGas": "0",
+            "gasToken": ZERO_ADDRESS, "refundReceiver": ZERO_ADDRESS,
+        },
+        "type": "SAFE",
+    }
+    try:
+        resp = await _relayer_post_authed(http, "/submit", body)
+    except Exception as e:
+        log.warning("redeem submit error collateral=%s: %s", collateral[-6:], e)
+        return None
+    tx_id = resp.get("transactionID")
+    if not tx_id:
+        return None
+    log.info("redeem polling collateral=%s tx_id=%s", "pUSD" if collateral == PUSD else "USDC.e", tx_id)
+    return await _poll_transaction(http, tx_id, max_polls=30)
 
 
 def _encode_binary_redeem(condition_id: str, collateral: str | None = None) -> str:
@@ -183,23 +182,33 @@ async def redeem_positions(
             if neg_risk:
                 calldata = _encode_neg_risk_redeem(condition_id, estimated_tokens)
                 to_contract = NEG_RISK
+                mined = await _submit_and_poll(
+                    http, privy_wallet_id, eoa_address, safe_address,
+                    to_contract, calldata, nonce=nonce,
+                )
             else:
-                collateral = await _detect_collateral(http, safe_address, condition_id)
-                calldata = _encode_binary_redeem(condition_id, collateral)
-                to_contract = CTF
-
-            mined = await _submit_and_poll(
-                http, privy_wallet_id, eoa_address, safe_address,
-                to_contract, calldata,
-                nonce=nonce,
-            )
+                # Try pUSD first, then USDC.e — relayer PRECHECK_SKIPS wrong collateral
+                # so only one will actually mine. Nonce increments after each submit.
+                cur_nonce = nonce or await _get_safe_nonce(http, safe_address)
+                mined = await _try_binary_redeem(
+                    http, privy_wallet_id, eoa_address, safe_address,
+                    condition_id, PUSD, cur_nonce,
+                )
+                if not mined:
+                    log.info("redeem pUSD skipped/failed, trying USDC.e condition=%s", condition_id[:20])
+                    # Nonce only increments on-chain if tx actually executed — re-fetch to be safe
+                    cur_nonce = await _get_safe_nonce(http, safe_address)
+                    mined = await _try_binary_redeem(
+                        http, privy_wallet_id, eoa_address, safe_address,
+                        condition_id, USDC_E, cur_nonce,
+                    )
 
             if mined:
                 result["ok"] = True
                 result["tx_hash"] = mined.get("transactionHash")
                 log.info("redeem MINED tx_hash=%s usdc~=%.2f", result["tx_hash"], estimated_tokens)
             else:
-                result["error"] = "STATE_FAILED or timeout"
+                result["error"] = "STATE_FAILED or timeout on both collaterals"
                 log.error("redeem FAILED condition=%s", condition_id[:20])
 
     except Exception as e:
