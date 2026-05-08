@@ -67,7 +67,14 @@ async def bridge_pol_for_gas(
             tx_data = items[0].get("data") or {}
             to    = tx_data.get("to")
             data  = tx_data.get("data") or "0x"
-            value = tx_data.get("value") or "0x0"
+            raw_value = tx_data.get("value") or "0"
+            # relay.link returns decimal string; Privy requires 0x hex
+            if isinstance(raw_value, str) and not raw_value.startswith("0x"):
+                value = hex(int(raw_value))
+            elif isinstance(raw_value, int):
+                value = hex(raw_value)
+            else:
+                value = raw_value
             if not to:
                 result["error"] = f"relay.link missing tx.to: {str(tx_data)[:200]}"
                 log.error("bridge_pol: %s", result["error"])
