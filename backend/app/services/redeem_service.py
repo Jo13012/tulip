@@ -34,22 +34,32 @@ NEG_RISK    = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"  # NegRiskAdapter
 POLYGON_RPC = "https://polygon-bor-rpc.publicnode.com"
 
 
-async def _is_neg_risk(http: httpx.AsyncClient, condition_id: str) -> bool:
-    """Check gamma API to determine if this is a neg-risk market."""
+async def _check_neg_risk_balance(http: httpx.AsyncClient, safe_address: str, token_id: str | None) -> bool:
+    """
+    Check if the Safe holds this token via NegRiskAdapter (ERC-1155 balanceOf).
+    More reliable than gamma API negRisk field which is inconsistent at market level.
+    """
+    if not token_id:
+        return False
     try:
-        resp = await http.get(
-            "https://gamma-api.polymarket.com/markets",
-            params={"conditionId": condition_id, "limit": 1},
-            timeout=8.0,
-        )
-        data = resp.json()
-        if isinstance(data, list) and data:
-            m = data[0]
-            if m.get("conditionId", "").lower() == condition_id.lower():
-                return bool(m.get("negRisk", False))
+        pid = int(token_id)
+    except (ValueError, TypeError):
+        return False
+    # balanceOf(address,uint256) = 0x00fdd58e
+    call_data = "0x00fdd58e" + abi_encode(
+        ["address", "uint256"], [to_checksum_address(safe_address), pid]
+    ).hex()
+    try:
+        resp = await http.post(POLYGON_RPC, json={
+            "jsonrpc": "2.0", "method": "eth_call",
+            "params": [{"to": NEG_RISK, "data": call_data}, "latest"],
+            "id": 1,
+        }, timeout=5.0)
+        result = resp.json().get("result", "0x")
+        bal = int(result, 16) if result and result not in ("0x", "") else 0
+        return bal > 0
     except Exception:
-        pass
-    return False
+        return False
 
 
 async def _try_binary_redeem(
@@ -176,19 +186,19 @@ async def redeem_positions(
 
     try:
         async with httpx.AsyncClient(timeout=30.0, trust_env=False) as http:
-            neg_risk = await _is_neg_risk(http, condition_id)
-            log.info("redeem neg_risk=%s condition=%s", neg_risk, condition_id[:20])
+            # Check neg-risk on-chain (gamma field unreliable at market level)
+            neg_risk = await _check_neg_risk_balance(http, safe_address, known_token_id)
+            log.info("redeem neg_risk=%s condition=%s token=%s", neg_risk, condition_id[:20],
+                     (known_token_id or "")[:20])
 
             if neg_risk:
                 calldata = _encode_neg_risk_redeem(condition_id, estimated_tokens)
-                to_contract = NEG_RISK
                 mined = await _submit_and_poll(
                     http, privy_wallet_id, eoa_address, safe_address,
-                    to_contract, calldata, nonce=nonce,
+                    NEG_RISK, calldata, nonce=nonce,
                 )
             else:
-                # Try pUSD first, then USDC.e — relayer PRECHECK_SKIPS wrong collateral
-                # so only one will actually mine. Nonce increments after each submit.
+                # Try pUSD then USDC.e — relayer PRECHECK_SKIPs wrong collateral, nonce unchanged
                 cur_nonce = nonce or await _get_safe_nonce(http, safe_address)
                 mined = await _try_binary_redeem(
                     http, privy_wallet_id, eoa_address, safe_address,
@@ -196,7 +206,6 @@ async def redeem_positions(
                 )
                 if not mined:
                     log.info("redeem pUSD skipped/failed, trying USDC.e condition=%s", condition_id[:20])
-                    # Nonce only increments on-chain if tx actually executed — re-fetch to be safe
                     cur_nonce = await _get_safe_nonce(http, safe_address)
                     mined = await _try_binary_redeem(
                         http, privy_wallet_id, eoa_address, safe_address,

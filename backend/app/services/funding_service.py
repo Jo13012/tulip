@@ -160,6 +160,9 @@ async def get_balances_batch(addresses: list[str]) -> dict[str, tuple[float | No
     for i, addr in enumerate(valid_addresses):
         usdc_hex = by_id.get(f"usdc_{i}")
         eth_hex  = by_id.get(f"eth_{i}")
+        if usdc_hex is None or eth_hex is None:
+            log.warning("[balances_batch] missing RPC result for addr=%s usdc_hex=%s eth_hex=%s",
+                        addr[:12], usdc_hex, eth_hex)
         # "0x" or "0x0...0" = genuine zero balance, not a missing result
         usdc = (int(usdc_hex, 16) / 1_000_000) if usdc_hex not in (None, "") else None
         eth  = (int(eth_hex, 16) / 1e18)        if eth_hex  not in (None, "") else None
