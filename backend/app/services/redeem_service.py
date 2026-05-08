@@ -62,6 +62,31 @@ async def _check_neg_risk_balance(http: httpx.AsyncClient, safe_address: str, to
         return False
 
 
+async def _check_erc1155_approval(http: httpx.AsyncClient, safe_address: str, operator: str) -> bool:
+    """isApprovedForAll(safe, operator) on CTF."""
+    # isApprovedForAll(address,address) = 0xe985e9c5
+    call_data = "0xe985e9c5" + abi_encode(
+        ["address", "address"], [to_checksum_address(safe_address), to_checksum_address(operator)]
+    ).hex()
+    try:
+        resp = await http.post(POLYGON_RPC, json={
+            "jsonrpc": "2.0", "method": "eth_call",
+            "params": [{"to": CTF, "data": call_data}, "latest"], "id": 1,
+        }, timeout=5.0)
+        result = resp.json().get("result", "0x")
+        return bool(int(result, 16)) if result and result not in ("0x", "") else False
+    except Exception:
+        return False
+
+
+def _encode_set_approval_for_all(operator: str) -> str:
+    """CTF.setApprovalForAll(operator, true)"""
+    from app.services.polymarket_onboarding_service import SET_APPROVAL_FOR_ALL_SELECTOR
+    spender_padded = bytes.fromhex(operator[2:].lower().zfill(64))
+    true_padded = (1).to_bytes(32, "big")
+    return "0x" + SET_APPROVAL_FOR_ALL_SELECTOR.hex() + spender_padded.hex() + true_padded.hex()
+
+
 async def _try_binary_redeem(
     http: httpx.AsyncClient,
     privy_wallet_id: str,
@@ -192,10 +217,24 @@ async def redeem_positions(
                      (known_token_id or "")[:20])
 
             if neg_risk:
+                # Ensure CTF.setApprovalForAll(NEG_RISK, true) — old wallets may lack it
+                cur_nonce = nonce or await _get_safe_nonce(http, safe_address)
+                approved = await _check_erc1155_approval(http, safe_address, NEG_RISK)
+                if not approved:
+                    log.info("redeem: NEG_RISK not approved, sending setApprovalForAll condition=%s", condition_id[:20])
+                    approval_calldata = _encode_set_approval_for_all(NEG_RISK)
+                    approval_mined = await _submit_and_poll(
+                        http, privy_wallet_id, eoa_address, safe_address,
+                        CTF, approval_calldata, nonce=cur_nonce,
+                    )
+                    if approval_mined:
+                        cur_nonce = await _get_safe_nonce(http, safe_address)
+                    else:
+                        log.error("redeem: setApprovalForAll failed condition=%s", condition_id[:20])
                 calldata = _encode_neg_risk_redeem(condition_id, estimated_tokens)
                 mined = await _submit_and_poll(
                     http, privy_wallet_id, eoa_address, safe_address,
-                    NEG_RISK, calldata, nonce=nonce,
+                    NEG_RISK, calldata, nonce=cur_nonce,
                 )
             else:
                 # Try pUSD then USDC.e — relayer PRECHECK_SKIPs wrong collateral, nonce unchanged

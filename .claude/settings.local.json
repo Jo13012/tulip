@@ -46,7 +46,8 @@
       "WebFetch(domain:gist.githubusercontent.com)",
       "WebFetch(domain:data-api.polymarket.com)",
       "Bash(curl -s \"https://data-api.polymarket.com/v1/leaderboard?category=OVERALL&timePeriod=ALL&orderBy=PNL&limit=25&user=0x7ede88935860818120f3c3593d0b939723be2ab6\")",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:polygonscan.com)"
     ]
   }
 }

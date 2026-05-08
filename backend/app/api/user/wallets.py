@@ -375,8 +375,10 @@ async def funding_status(user: CurrentUser, db: DbSession):
     if FUNDING_ENABLED and wallet_funded and auto_bridge_allowed:
         last_obs = wallet.funding_last_usdc_observed or 0.0
         observed_delta = usdc_balance - last_obs
+        # Only trigger on observed_delta if last_obs > 0 — avoids false trigger when
+        # last_obs=0 because balance was previously None (RPC failure) and is now restored
         should_auto_bridge = (
-            observed_delta >= bridge_trigger_amount
+            (last_obs > 0 and observed_delta >= bridge_trigger_amount)
             or bridge_available
         )
         log.info(
