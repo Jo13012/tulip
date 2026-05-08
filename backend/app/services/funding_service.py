@@ -124,30 +124,35 @@ async def get_balances_batch(addresses: list[str]) -> dict[str, tuple[float | No
     if not valid_addresses:
         return {a: (None, None) for a in addresses}
 
-    batch: list[dict] = []
-    for i, addr in enumerate(valid_addresses):
-        clean = addr.strip().lower().replace("0x", "").zfill(40)
-        batch.append({
-            "jsonrpc": "2.0", "id": f"usdc_{i}",
-            "method": "eth_call",
-            "params": [{"to": usdc_contract, "data": "0x70a08231" + clean.zfill(64)}, "latest"],
-        })
-        batch.append({
-            "jsonrpc": "2.0", "id": f"eth_{i}",
-            "method": "eth_getBalance",
-            "params": [addr.strip(), "latest"],
-        })
+    CHUNK_SIZE = 20  # 40 calls per chunk (usdc + eth) — avoids RPC batch size limits
 
-    http = _get_arb_client()
-    raw_results: list[dict] = []
-    for rpc in _arb_rpc_urls():
-        try:
-            resp = await http.post(rpc, json=batch, timeout=10.0)
-            if resp.is_success:
-                raw_results = resp.json()
-                break
-        except Exception:
-            continue
+    async def _fetch_chunk(chunk: list[str], offset: int) -> list[dict]:
+        batch: list[dict] = []
+        for i, addr in enumerate(chunk):
+            clean = addr.strip().lower().replace("0x", "").zfill(40)
+            batch.append({
+                "jsonrpc": "2.0", "id": f"usdc_{offset + i}",
+                "method": "eth_call",
+                "params": [{"to": usdc_contract, "data": "0x70a08231" + clean.zfill(64)}, "latest"],
+            })
+            batch.append({
+                "jsonrpc": "2.0", "id": f"eth_{offset + i}",
+                "method": "eth_getBalance",
+                "params": [addr.strip(), "latest"],
+            })
+        http = _get_arb_client()
+        for rpc in _arb_rpc_urls():
+            try:
+                resp = await http.post(rpc, json=batch, timeout=10.0)
+                if resp.is_success:
+                    return resp.json()
+            except Exception:
+                continue
+        return []
+
+    chunks = [valid_addresses[i:i + CHUNK_SIZE] for i in range(0, len(valid_addresses), CHUNK_SIZE)]
+    chunk_results = await asyncio.gather(*[_fetch_chunk(c, i * CHUNK_SIZE) for i, c in enumerate(chunks)])
+    raw_results: list[dict] = [item for chunk in chunk_results for item in chunk]
 
     # Parse results by id
     by_id: dict[str, str | None] = {}
