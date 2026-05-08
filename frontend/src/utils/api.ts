@@ -166,5 +166,7 @@ export const api = {
       request(`/api/v1/admin/users/${userId}/poly-state`),
     nuclearClose: (userId: string, body: { cancel_orders: boolean; cancel_order_ids?: string[]; sell_token_ids: string[] }) =>
       request(`/api/v1/admin/users/${userId}/nuclear-close`, { method: 'POST', body: JSON.stringify(body) }),
+    bridgePol: (userId: string) =>
+      request(`/api/v1/admin/users/${userId}/bridge-pol`, { method: 'POST' }),
   },
 }

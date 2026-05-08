@@ -240,6 +240,7 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
             "onboarding_completed_at": wallet.onboarding_completed_at.isoformat() if wallet and wallet.onboarding_completed_at else None,
             "wallet_usdc":         bal.wallet_usdc,
             "wallet_eth":          bal.wallet_eth,
+            "wallet_pol":          bal.wallet_pol,
             "trading_balance":     round((bal.trading_balance or 0.0) + positions_value, 2) if bal.trading_balance is not None else None,
             "positions_value":     round(positions_value, 2),
             "redeem_value":        round(redeem_value, 2),
@@ -534,3 +535,30 @@ async def nuclear_close(user_id: str, body: NuclearCloseRequest, db: DbSession, 
         await client.close()
 
     return {"ok": True, **results}
+
+
+@router.post("/{user_id}/bridge-pol")
+async def bridge_pol(user_id: str, db: DbSession, admin: AdminUser):
+    """Bridge $1 USDC (Arbitrum) → POL (Polygon) for the user's EOA wallet."""
+    from app.services.relay_bridge_service import bridge_pol_for_gas
+
+    w_q = await db.execute(
+        select(Wallet).where(Wallet.user_id == user_id, Wallet.is_primary == True).limit(1)
+    )
+    wallet = w_q.scalars().first()
+    if not wallet or not wallet.privy_wallet_id or not wallet.wallet_address:
+        raise HTTPException(400, "No primary wallet")
+
+    result = await bridge_pol_for_gas(
+        privy_wallet_id=wallet.privy_wallet_id,
+        eoa_address=wallet.wallet_address,
+    )
+
+    db.add(AuditLog(
+        actor_id=admin["sub"], actor_role="admin",
+        action="user.bridge_pol", entity_type="user", entity_id=user_id,
+        detail=f"ok={result['ok']} tx={result.get('tx_hash') or result.get('error')}",
+    ))
+    await db.commit()
+
+    return result

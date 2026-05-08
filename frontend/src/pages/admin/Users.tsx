@@ -499,6 +499,39 @@ function GrantFreeFeeCell({ user, onUpdated }: {
   )
 }
 
+function BridgePolButton({ userId }: { userId: string }) {
+  const [loading, setLoading] = useState(false)
+  const addToast = useAppStore(s => s.addToast)
+
+  const handle = async () => {
+    if (loading) return
+    setLoading(true)
+    try {
+      const r: any = await api.admin.bridgePol(userId)
+      if (r?.ok) {
+        addToast({ type: 'success', message: `POL bridge sent${r.tx_hash ? ' · ' + r.tx_hash.slice(0, 10) + '…' : ''}` })
+      } else {
+        addToast({ type: 'error', message: r?.error || 'Bridge failed' })
+      }
+    } catch (e: any) {
+      addToast({ type: 'error', message: e?.message || 'Bridge error' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <button
+      className="text-[10px] px-2 py-0.5 rounded bg-yellow-900/20 text-yellow-400/50 hover:text-yellow-300 hover:bg-yellow-900/40 border border-yellow-500/20 transition-colors disabled:opacity-30"
+      onClick={handle}
+      disabled={loading}
+      title="Bridge $1 USDC (Arbitrum) → POL (Polygon) for gas"
+    >
+      {loading ? '…' : '⛽ POL'}
+    </button>
+  )
+}
+
 const BALANCE_POLL_MS = 30_000
 
 export default function AdminUsers() {
@@ -601,7 +634,7 @@ export default function AdminUsers() {
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-white/[0.06]">
-              {['', 'Name', 'Wallet', 'USDC', 'ETH', 'Trading Bal', 'Override fee', 'Free fee', 'XP fee', 'Trading Vol', 'Bot PnL', 'Session', ''].map((h, i) => (
+              {['', 'Name', 'Wallet', 'USDC', 'ETH', 'POL', 'Trading Bal', 'Override fee', 'Free fee', 'XP fee', 'Trading Vol', 'Bot PnL', 'Session', ''].map((h, i) => (
                 <th key={i} className="text-left px-3 py-2 text-[10px] text-white/25 font-semibold uppercase tracking-wider">
                   {h}
                 </th>
@@ -647,6 +680,16 @@ export default function AdminUsers() {
                   : 'text-emerald-400'
                 }`}>
                   {fmtEth(u.wallet_eth)}
+                </td>
+
+                {/* Wallet POL */}
+                <td className={`px-3 py-2.5 font-mono text-xs ${
+                  u.wallet_pol == null    ? 'text-white/25'
+                  : u.wallet_pol < 0.01  ? 'text-red-400'
+                  : u.wallet_pol < 0.05  ? 'text-yellow-400'
+                  : 'text-emerald-400'
+                }`}>
+                  {u.wallet_pol == null ? '—' : u.wallet_pol < 0.001 ? '<0.001' : u.wallet_pol.toFixed(3)}
                 </td>
 
                 {/* Trading balance */}
@@ -728,6 +771,7 @@ export default function AdminUsers() {
                     >
                       ☢ nuclear
                     </button>
+                    <BridgePolButton userId={u.id} />
                   </div>
                 </td>
               </tr>

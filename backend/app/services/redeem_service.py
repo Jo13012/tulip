@@ -1,6 +1,7 @@
 """
-redeem_service.py — Redeem winning CTF tokens via Safe + Polymarket relayer.
-Logic mirrors poly-web3: binary markets use USDC CTF, neg-risk markets use NegRiskAdapter.
+redeem_service.py — Redeem winning CTF tokens via Safe.
+- Binary markets: via Polymarket relayer (PRECHECK validates CTF balance directly)
+- Neg-risk markets: direct RPC execTransaction (relayer PRECHECK fails on NegRisk-wrapped tokens)
 """
 from __future__ import annotations
 
@@ -8,104 +9,108 @@ import logging
 
 import httpx
 from eth_abi import encode as abi_encode
-from eth_utils import to_checksum_address
+from eth_utils import to_checksum_address, keccak
 
 from app.core.config import settings
 from app.services.polymarket_onboarding_service import (
     CTF,
     ZERO_ADDRESS,
+    CHAIN_ID,
     _relayer_post_authed,
     _get_safe_nonce,
     _sign_safe_tx,
+    _hash_safe_tx,
     _poll_transaction,
 )
+from app.services.privy_wallet_service import privy_wallet_service
 
 log = logging.getLogger("redeem")
 
-# Selectors
-REDEEM_SELECTOR          = bytes.fromhex("01b7037c")  # CTF redeemPositions(address,bytes32,bytes32,uint256[])
-NEG_RISK_REDEEM_SELECTOR = bytes.fromhex("01b7037c")  # same selector, different ABI
+REDEEM_SELECTOR = bytes.fromhex("01b7037c")  # CTF.redeemPositions(address,bytes32,bytes32,uint256[])
 
-# Addresses (Polygon mainnet)
-PUSD        = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"  # pUSD — V2 collateral (replaced USDC.e Apr 2026)
-USDC_E      = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # USDC.e — kept for old positions
-NEG_RISK    = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"  # NegRiskAdapter
+PUSD     = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
+USDC_E   = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+NEG_RISK = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
 
 POLYGON_RPC = "https://polygon-bor-rpc.publicnode.com"
+POLYGON_RPC_FALLBACK = "https://rpc.ankr.com/polygon"
+
+_NEG_RISK_REDEEM_SEL = keccak(b"redeemPositions(bytes32,uint256[])")[:4]
+_SET_APPROVAL_SEL    = bytes.fromhex("a22cb465")  # setApprovalForAll(address,bool)
 
 
-async def _check_neg_risk_balance(http: httpx.AsyncClient, safe_address: str, token_id: str | None) -> bool:
-    """
-    Check if the Safe holds this token via NegRiskAdapter (ERC-1155 balanceOf).
-    More reliable than gamma API negRisk field which is inconsistent at market level.
-    """
-    if not token_id:
-        return False
-    try:
-        pid = int(token_id)
-    except (ValueError, TypeError):
-        return False
-    # balanceOf(address,uint256) = 0x00fdd58e
-    call_data = "0x00fdd58e" + abi_encode(
-        ["address", "uint256"], [to_checksum_address(safe_address), pid]
-    ).hex()
-    try:
-        resp = await http.post(POLYGON_RPC, json={
-            "jsonrpc": "2.0", "method": "eth_call",
-            "params": [{"to": NEG_RISK, "data": call_data}, "latest"],
-            "id": 1,
-        }, timeout=5.0)
-        result = resp.json().get("result", "0x")
-        bal = int(result, 16) if result and result not in ("0x", "") else 0
-        return bal > 0
-    except Exception:
-        return False
+# ── On-chain helpers ───────────────────────────────────────────────────────────
+
+async def _rpc_call(http: httpx.AsyncClient, method: str, params: list) -> str | None:
+    for rpc in [POLYGON_RPC, POLYGON_RPC_FALLBACK]:
+        try:
+            r = await http.post(rpc, json={"jsonrpc": "2.0", "method": method, "params": params, "id": 1}, timeout=6.0)
+            result = r.json().get("result")
+            if result is not None:
+                return result
+        except Exception:
+            continue
+    return None
 
 
-async def _check_erc1155_approval(http: httpx.AsyncClient, safe_address: str, operator: str) -> bool:
-    """isApprovedForAll(safe, operator) on CTF."""
-    # isApprovedForAll(address,address) = 0xe985e9c5
-    call_data = "0xe985e9c5" + abi_encode(
-        ["address", "address"], [to_checksum_address(safe_address), to_checksum_address(operator)]
-    ).hex()
-    try:
-        resp = await http.post(POLYGON_RPC, json={
-            "jsonrpc": "2.0", "method": "eth_call",
-            "params": [{"to": CTF, "data": call_data}, "latest"], "id": 1,
-        }, timeout=5.0)
-        result = resp.json().get("result", "0x")
-        return bool(int(result, 16)) if result and result not in ("0x", "") else False
-    except Exception:
-        return False
+async def _erc1155_balance(http: httpx.AsyncClient, contract: str, owner: str, token_id: int) -> int:
+    data = "0x00fdd58e" + abi_encode(["address", "uint256"], [to_checksum_address(owner), token_id]).hex()
+    result = await _rpc_call(http, "eth_call", [{"to": contract, "data": data}, "latest"])
+    return int(result, 16) if result and result not in ("0x", "") else 0
+
+
+async def _is_approved_for_all(http: httpx.AsyncClient, owner: str, operator: str) -> bool:
+    data = "0xe985e9c5" + abi_encode(["address", "address"], [to_checksum_address(owner), to_checksum_address(operator)]).hex()
+    result = await _rpc_call(http, "eth_call", [{"to": CTF, "data": data}, "latest"])
+    return bool(int(result, 16)) if result and result not in ("0x", "") else False
+
+
+async def _wait_tx(http: httpx.AsyncClient, tx_hash: str, polls: int = 30) -> dict | None:
+    import asyncio
+    for _ in range(polls):
+        result = await _rpc_call(http, "eth_getTransactionReceipt", [tx_hash])
+        if result and result != "null" and isinstance(result, dict):
+            return result
+        await asyncio.sleep(3)
+    return None
+
+
+# ── Encoders ──────────────────────────────────────────────────────────────────
+
+def _encode_binary_redeem(condition_id: str, collateral: str) -> str:
+    cid = bytes.fromhex(condition_id.lstrip("0x").zfill(64))
+    encoded = abi_encode(
+        ["address", "bytes32", "bytes32", "uint256[]"],
+        [to_checksum_address(collateral), bytes(32), cid, [1, 2]],
+    )
+    return "0x" + REDEEM_SELECTOR.hex() + encoded.hex()
+
+
+def _encode_neg_risk_redeem(condition_id: str, amount: int) -> str:
+    cid = bytes.fromhex(condition_id.lstrip("0x").zfill(64))
+    encoded = abi_encode(["bytes32", "uint256[]"], [cid, [amount, amount]])
+    return "0x" + _NEG_RISK_REDEEM_SEL.hex() + encoded.hex()
 
 
 def _encode_set_approval_for_all(operator: str) -> str:
-    """CTF.setApprovalForAll(operator, true)"""
-    from app.services.polymarket_onboarding_service import SET_APPROVAL_FOR_ALL_SELECTOR
-    spender_padded = bytes.fromhex(operator[2:].lower().zfill(64))
-    true_padded = (1).to_bytes(32, "big")
-    return "0x" + SET_APPROVAL_FOR_ALL_SELECTOR.hex() + spender_padded.hex() + true_padded.hex()
+    return "0x" + _SET_APPROVAL_SEL.hex() + bytes.fromhex(operator[2:].lower().zfill(64)).hex() + (1).to_bytes(32, "big").hex()
 
 
-async def _try_binary_redeem(
+# ── Safe exec via relayer ──────────────────────────────────────────────────────
+
+async def _relayer_exec(
     http: httpx.AsyncClient,
     privy_wallet_id: str,
     eoa_address: str,
     safe_address: str,
-    condition_id: str,
-    collateral: str,
+    to: str,
+    calldata: str,
     nonce: str,
 ) -> dict | None:
-    """Submit one binary redeem attempt. Returns mined tx or None (incl. PRECHECK_SKIPPED)."""
-    calldata = _encode_binary_redeem(condition_id, collateral)
-    sig = await _sign_safe_tx(privy_wallet_id, safe_address, CTF, calldata, "0", 0, nonce)
+    sig = await _sign_safe_tx(privy_wallet_id, safe_address, to, calldata, "0", 0, nonce)
     body = {
-        "from": eoa_address,
-        "to": CTF,
-        "proxyWallet": safe_address,
-        "data": calldata,
-        "nonce": nonce,
-        "signature": sig,
+        "from": eoa_address, "to": to, "proxyWallet": safe_address,
+        "data": calldata, "nonce": nonce, "signature": sig,
         "signatureParams": {
             "gasPrice": "0", "operation": "0",
             "safeTxnGas": "0", "baseGas": "0",
@@ -116,77 +121,91 @@ async def _try_binary_redeem(
     try:
         resp = await _relayer_post_authed(http, "/submit", body)
     except Exception as e:
-        log.warning("redeem submit error collateral=%s: %s", collateral[-6:], e)
+        log.warning("relayer submit err: %s", e)
         return None
     tx_id = resp.get("transactionID")
     if not tx_id:
+        log.warning("redeem no tx_id resp=%s", str(resp)[:120])
         return None
-    log.info("redeem polling collateral=%s tx_id=%s", "pUSD" if collateral == PUSD else "USDC.e", tx_id)
     return await _poll_transaction(http, tx_id, max_polls=30)
 
 
-def _encode_binary_redeem(condition_id: str, collateral: str | None = None) -> str:
-    """Binary market: redeemPositions(collateral, 0x0, conditionId, [1,2])"""
-    if collateral is None:
-        collateral = PUSD
-    cid = bytes.fromhex(condition_id.lstrip("0x").zfill(64))
-    encoded = abi_encode(
-        ["address", "bytes32", "bytes32", "uint256[]"],
-        [to_checksum_address(collateral), bytes(32), cid, [1, 2]],
-    )
-    return "0x" + REDEEM_SELECTOR.hex() + encoded.hex()
+# ── Safe exec direct RPC (for neg-risk — relayer PRECHECK rejects NegRisk tokens) ──
 
-
-def _encode_neg_risk_redeem(condition_id: str, size: float) -> str:
-    """Neg-risk: NegRiskAdapter.redeemPositions(conditionId, [yes_amount, no_amount])"""
-    cid = bytes.fromhex(condition_id.lstrip("0x").zfill(64))
-    # amounts in base units (1e6), pass full size for both slots — contract handles payout
-    amount = int(size * 1_000_000)
-    encoded = abi_encode(
-        ["bytes32", "uint256[]"],
-        [cid, [amount, amount]],
-    )
-    # NegRiskAdapter.redeemPositions(bytes32,uint256[]) selector
-    from eth_hash.auto import keccak
-    sel = keccak(b"redeemPositions(bytes32,uint256[])")[:4]
-    return "0x" + sel.hex() + encoded.hex()
-
-
-async def _submit_and_poll(
+async def _direct_exec(
     http: httpx.AsyncClient,
     privy_wallet_id: str,
     eoa_address: str,
     safe_address: str,
-    to_contract: str,
+    to: str,
     calldata: str,
-    nonce: str | None = None,
-) -> dict | None:
-    """Sign via Safe, submit to relayer, poll. Returns mined tx or None."""
-    if nonce is None:
-        nonce = await _get_safe_nonce(http, safe_address)
-    sig = await _sign_safe_tx(privy_wallet_id, safe_address, to_contract, calldata, "0", 0, nonce)
-    body = {
-        "from": eoa_address,
-        "to": to_contract,
-        "proxyWallet": safe_address,
-        "data": calldata,
-        "nonce": nonce,
-        "signature": sig,
-        "signatureParams": {
-            "gasPrice": "0", "operation": "0",
-            "safeTxnGas": "0", "baseGas": "0",
-            "gasToken": ZERO_ADDRESS, "refundReceiver": ZERO_ADDRESS,
-        },
-        "type": "SAFE",
-    }
-    resp = await _relayer_post_authed(http, "/submit", body)
-    tx_id = resp.get("transactionID")
-    if not tx_id:
-        log.warning("redeem no tx_id: %s", resp)
-        return None
-    log.info("redeem polling tx_id=%s", tx_id)
-    return await _poll_transaction(http, tx_id, max_polls=40)
+    nonce: str,
+) -> str | None:
+    """
+    Execute Safe.execTransaction() via Privy eth_sendTransaction on Polygon.
+    Used for neg-risk redeem — Polymarket relayer PRECHECK_SKIPs NegRisk-wrapped tokens.
+    Returns tx_hash or None.
+    """
+    from app.services.privy_tx_service import _privy_rpc, PrivyTxError
 
+    safe_tx_hash = _hash_safe_tx(safe_address, to, calldata, "0", 0, nonce)
+    prefixed = keccak(b"\x19Ethereum Signed Message:\n32" + safe_tx_hash)
+    raw_sig = await privy_wallet_service.secp256k1_sign(privy_wallet_id, "0x" + prefixed.hex())
+
+    # Pack v: 27/28 → 31/32 (Safe eth_sign path)
+    sig_bytes = bytes.fromhex(raw_sig[2:] if raw_sig.startswith("0x") else raw_sig)
+    r, s, v = sig_bytes[:32], sig_bytes[32:64], sig_bytes[64]
+    if v in (0, 1):   v += 31
+    elif v in (27, 28): v += 4
+    packed_sig = r + s + v.to_bytes(1, "big")
+
+    calldata_bytes = bytes.fromhex(calldata[2:] if calldata.startswith("0x") else calldata)
+
+    # execTransaction(to,value,data,operation,safeTxGas,baseGas,gasPrice,gasToken,refundReceiver,signatures)
+    exec_data = bytes.fromhex("6a761202") + abi_encode(
+        ["address", "uint256", "bytes", "uint8", "uint256", "uint256", "uint256", "address", "address", "bytes"],
+        [to_checksum_address(to), 0, calldata_bytes, 0, 0, 0, 0,
+         to_checksum_address(ZERO_ADDRESS), to_checksum_address(ZERO_ADDRESS), packed_sig],
+    )
+
+    try:
+        result = await _privy_rpc(privy_wallet_id, {
+            "method": "eth_sendTransaction",
+            "caip2": f"eip155:{CHAIN_ID}",
+            "params": {
+                "transaction": {
+                    "from": eoa_address,
+                    "to": safe_address,
+                    "data": "0x" + exec_data.hex(),
+                    "value": "0x0",
+                }
+            },
+        })
+    except PrivyTxError as e:
+        log.error("direct_exec: privy rpc error: %s", e)
+        return None
+
+    data = result.get("data") or {}
+    tx_hash = data.get("hash") or data.get("txHash") or result.get("result") or result.get("hash")
+    if not tx_hash:
+        log.error("direct_exec: no tx_hash in response: %s", str(result)[:200])
+        return None
+
+    log.info("direct_exec: submitted tx=%s", tx_hash)
+    receipt = await _wait_tx(http, tx_hash)
+    if not receipt:
+        log.error("direct_exec: receipt timeout tx=%s", tx_hash)
+        return None
+    status = receipt.get("status")
+    ok = (int(status, 16) == 1) if isinstance(status, str) else bool(status)
+    if ok:
+        log.info("direct_exec: MINED tx=%s", tx_hash)
+        return tx_hash
+    log.error("direct_exec: REVERTED tx=%s", tx_hash)
+    return None
+
+
+# ── Main entry ────────────────────────────────────────────────────────────────
 
 async def redeem_positions(
     privy_wallet_id: str,
@@ -198,69 +217,92 @@ async def redeem_positions(
     outcome: str = "",
     nonce: str | None = None,
 ) -> dict:
-    result: dict = {
-        "ok": False,
-        "tx_id": None,
-        "tx_hash": None,
-        "condition_id": condition_id,
-        "estimated_usdc": round(estimated_tokens, 2),
-        "error": None,
-    }
-    log.info("redeem START condition=%s outcome=%s estimated=%.2f",
-             condition_id[:20], outcome, estimated_tokens)
+    result: dict = {"ok": False, "tx_hash": None, "condition_id": condition_id,
+                    "estimated_usdc": round(estimated_tokens, 2), "error": None}
+
+    try:
+        pid = int(known_token_id) if known_token_id else None
+    except (ValueError, TypeError):
+        pid = None
+
+    log.info("redeem cond=%s tok=%s size=%.2f", condition_id[:16], (known_token_id or "?")[:16], estimated_tokens)
 
     try:
         async with httpx.AsyncClient(timeout=30.0, trust_env=False) as http:
-            # Check neg-risk on-chain (gamma field unreliable at market level)
-            neg_risk = await _check_neg_risk_balance(http, safe_address, known_token_id)
-            log.info("redeem neg_risk=%s condition=%s token=%s", neg_risk, condition_id[:20],
-                     (known_token_id or "")[:20])
+
+            # ── Detect market type via on-chain balance ────────────────────────
+            neg_risk = False
+            if pid:
+                neg_bal = await _erc1155_balance(http, NEG_RISK, safe_address, pid)
+                ctf_bal = await _erc1155_balance(http, CTF,      safe_address, pid)
+                neg_risk = neg_bal > 0
+                log.info("redeem bal: neg_risk_bal=%d ctf_bal=%d → neg_risk=%s", neg_bal, ctf_bal, neg_risk)
+                if neg_bal == 0 and ctf_bal == 0:
+                    result["error"] = "zero balance on both CTF and NegRisk — already redeemed or dust"
+                    log.warning("redeem skip: zero balance cond=%s", condition_id[:16])
+                    return result
 
             if neg_risk:
-                # Ensure CTF.setApprovalForAll(NEG_RISK, true) — old wallets may lack it
-                cur_nonce = nonce or await _get_safe_nonce(http, safe_address)
-                approved = await _check_erc1155_approval(http, safe_address, NEG_RISK)
-                if not approved:
-                    log.info("redeem: NEG_RISK not approved, sending setApprovalForAll condition=%s", condition_id[:20])
-                    approval_calldata = _encode_set_approval_for_all(NEG_RISK)
-                    approval_mined = await _submit_and_poll(
+                # Direct RPC — relayer PRECHECK rejects NegRisk-wrapped tokens
+                # Requires EOA to have POL for gas
+                pol_bal_hex = await _rpc_call(http, "eth_getBalance", [eoa_address, "latest"])
+                pol_wei = int(pol_bal_hex, 16) if pol_bal_hex and pol_bal_hex not in ("0x", "") else 0
+                pol = pol_wei / 1e18
+                if pol < 0.01:
+                    result["error"] = f"insufficient POL for gas: eoa={eoa_address[:12]} pol={pol:.6f}"
+                    log.error("redeem neg-risk: %s", result["error"])
+                    return result
+
+                amount = int(estimated_tokens * 1_000_000)
+                safe_nonce = nonce or await _get_safe_nonce(http, safe_address)
+
+                if not await _is_approved_for_all(http, safe_address, NEG_RISK):
+                    log.info("redeem: missing NEG_RISK approval, adding cond=%s", condition_id[:16])
+                    approval_hash = await _direct_exec(
                         http, privy_wallet_id, eoa_address, safe_address,
-                        CTF, approval_calldata, nonce=cur_nonce,
+                        CTF, _encode_set_approval_for_all(NEG_RISK), safe_nonce,
                     )
-                    if approval_mined:
-                        cur_nonce = await _get_safe_nonce(http, safe_address)
-                    else:
-                        log.error("redeem: setApprovalForAll failed condition=%s", condition_id[:20])
-                calldata = _encode_neg_risk_redeem(condition_id, estimated_tokens)
-                mined = await _submit_and_poll(
+                    if approval_hash:
+                        safe_nonce = await _get_safe_nonce(http, safe_address)
+
+                calldata = _encode_neg_risk_redeem(condition_id, amount)
+                tx_hash = await _direct_exec(
                     http, privy_wallet_id, eoa_address, safe_address,
-                    NEG_RISK, calldata, nonce=cur_nonce,
+                    NEG_RISK, calldata, safe_nonce,
                 )
+                if tx_hash:
+                    result["ok"] = True
+                    result["tx_hash"] = tx_hash
+                else:
+                    result["error"] = "neg-risk direct exec failed"
+
             else:
-                # Try pUSD then USDC.e — relayer PRECHECK_SKIPs wrong collateral, nonce unchanged
+                # Binary — via relayer (PRECHECK works on CTF balance)
                 cur_nonce = nonce or await _get_safe_nonce(http, safe_address)
-                mined = await _try_binary_redeem(
+                mined = await _relayer_exec(
                     http, privy_wallet_id, eoa_address, safe_address,
-                    condition_id, PUSD, cur_nonce,
+                    CTF, _encode_binary_redeem(condition_id, PUSD), cur_nonce,
                 )
                 if not mined:
-                    log.info("redeem pUSD skipped/failed, trying USDC.e condition=%s", condition_id[:20])
+                    log.info("redeem binary pUSD failed, trying USDC.e cond=%s", condition_id[:16])
                     cur_nonce = await _get_safe_nonce(http, safe_address)
-                    mined = await _try_binary_redeem(
+                    mined = await _relayer_exec(
                         http, privy_wallet_id, eoa_address, safe_address,
-                        condition_id, USDC_E, cur_nonce,
+                        CTF, _encode_binary_redeem(condition_id, USDC_E), cur_nonce,
                     )
+                if mined:
+                    result["ok"] = True
+                    result["tx_hash"] = mined.get("transactionHash")
+                else:
+                    result["error"] = "binary relayer failed on pUSD and USDC.e"
 
-            if mined:
-                result["ok"] = True
-                result["tx_hash"] = mined.get("transactionHash")
-                log.info("redeem MINED tx_hash=%s usdc~=%.2f", result["tx_hash"], estimated_tokens)
+            if result["ok"]:
+                log.info("redeem OK tx=%s size=%.2f", result["tx_hash"], estimated_tokens)
             else:
-                result["error"] = "STATE_FAILED or timeout on both collaterals"
-                log.error("redeem FAILED condition=%s", condition_id[:20])
+                log.error("redeem FAIL cond=%s err=%s", condition_id[:16], result["error"])
 
     except Exception as e:
         result["error"] = str(e)
-        log.exception("redeem EXCEPTION condition=%s: %s", condition_id[:20], e)
+        log.exception("redeem EXCEPTION cond=%s", condition_id[:16])
 
     return result

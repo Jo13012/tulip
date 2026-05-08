@@ -30,6 +30,7 @@ _TRADING_TIMEOUT    = 4.0    # per-wallet Rust call timeout
 class WalletBalances:
     wallet_usdc:     float | None = None
     wallet_eth:      float | None = None
+    wallet_pol:      float | None = None  # native POL on Polygon (for gas)
     trading_balance: float | None = None
     positions_value: float        = 0.0   # mark-to-market open positions (non-redeemable)
     redeem_value:    float        = 0.0   # redeemable positions value
@@ -76,7 +77,7 @@ class BalancePoller:
 
     async def refresh_user(self, user_id: str, wallet_address: str, proxy_address: str) -> None:
         """Force-refresh one user (after bridge, or on cold cache miss)."""
-        from app.services.funding_service import get_balances_batch
+        from app.services.funding_service import get_balances_batch, get_pol_balances_batch
         prev = self._cache.get(user_id, WalletBalances())
         try:
             arb = await asyncio.wait_for(
@@ -90,6 +91,16 @@ class BalancePoller:
             usdc, eth = prev.wallet_usdc, prev.wallet_eth
 
         try:
+            pol_map = await asyncio.wait_for(
+                get_pol_balances_batch([wallet_address]),
+                timeout=_ARB_BATCH_TIMEOUT,
+            ) if wallet_address else {}
+            new_pol = pol_map.get(wallet_address)
+            pol = new_pol if new_pol is not None else prev.wallet_pol
+        except Exception:
+            pol = prev.wallet_pol
+
+        try:
             trading = await asyncio.wait_for(
                 self._fetch_trading(proxy_address),
                 timeout=_TRADING_TIMEOUT,
@@ -99,7 +110,7 @@ class BalancePoller:
 
         positions_value, redeem_value = await self._fetch_positions_value_safe(proxy_address)
 
-        self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, trading_balance=trading, positions_value=positions_value, redeem_value=redeem_value)
+        self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, wallet_pol=pol, trading_balance=trading, positions_value=positions_value, redeem_value=redeem_value)
 
     async def wait_ready(self, timeout: float = 6.0) -> None:
         try:
@@ -150,6 +161,16 @@ class BalancePoller:
         except Exception:
             arb_balances = {}  # keep previous cached values below
 
+        # Polygon POL balances batch (same EOA addresses, different chain)
+        try:
+            from app.services.funding_service import get_pol_balances_batch
+            pol_balances = await asyncio.wait_for(
+                get_pol_balances_batch(addresses),
+                timeout=_ARB_BATCH_TIMEOUT,
+            )
+        except Exception:
+            pol_balances = {}
+
         # All trading + positions in parallel
         combined_results = await asyncio.gather(
             *[self._fetch_trading_safe(pa) for pa in proxy_addresses],
@@ -171,6 +192,12 @@ class BalancePoller:
                 usdc = prev.wallet_usdc if prev else None
                 eth  = prev.wallet_eth  if prev else None
 
+            if wa and wa in pol_balances:
+                new_pol = pol_balances[wa]
+                pol = new_pol if new_pol is not None else (prev.wallet_pol if prev else None)
+            else:
+                pol = prev.wallet_pol if prev else None
+
             tr = trading_results[i]
             if isinstance(tr, (float, int)):
                 trading = float(tr)
@@ -186,7 +213,7 @@ class BalancePoller:
                 positions_value = prev.positions_value if prev else 0.0
                 redeem_value = prev.redeem_value if prev else 0.0
 
-            self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, trading_balance=trading, positions_value=positions_value, redeem_value=redeem_value)
+            self._cache[user_id] = WalletBalances(wallet_usdc=usdc, wallet_eth=eth, wallet_pol=pol, trading_balance=trading, positions_value=positions_value, redeem_value=redeem_value)
 
     async def _fetch_trading(self, proxy_address: str) -> float | None:
         if not proxy_address:

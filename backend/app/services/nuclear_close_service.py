@@ -188,7 +188,6 @@ async def run_nuclear_close(
     deduped: list[tuple[str, str, float, str]] = []
     for token_id, condition_id, size, outcome in redeemable_to_process:
         if size < 0.5:
-            log.info("nuclear_close: skip dust redeem token=%s size=%.4f", token_id[:16], size)
             continue
         if condition_id not in seen_conditions:
             seen_conditions.add(condition_id)

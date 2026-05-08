@@ -178,6 +178,75 @@ async def get_balances_batch(addresses: list[str]) -> dict[str, tuple[float | No
     return out
 
 
+_POLYGON_RPC_URLS = [
+    "https://polygon-bor-rpc.publicnode.com",
+    "https://rpc.ankr.com/polygon",
+]
+
+_poly_client: httpx.AsyncClient | None = None
+
+
+def _get_poly_client() -> httpx.AsyncClient:
+    global _poly_client
+    if _poly_client is None or _poly_client.is_closed:
+        _poly_client = httpx.AsyncClient(timeout=_TIMEOUT, limits=_LIMITS, trust_env=False)
+    return _poly_client
+
+
+async def get_pol_balances_batch(addresses: list[str]) -> dict[str, float | None]:
+    """
+    Fetch native POL (MATIC) balances on Polygon for multiple addresses via JSON-RPC batch.
+    Returns {address: pol_float | None}.
+    """
+    if not addresses:
+        return {}
+
+    valid_addresses = [a for a in addresses if a and a.strip()]
+    if not valid_addresses:
+        return {a: None for a in addresses}
+
+    CHUNK_SIZE = 30
+
+    async def _fetch_chunk(chunk: list[str], offset: int) -> list[dict]:
+        batch = [
+            {
+                "jsonrpc": "2.0", "id": f"pol_{offset + i}",
+                "method": "eth_getBalance",
+                "params": [addr.strip(), "latest"],
+            }
+            for i, addr in enumerate(chunk)
+        ]
+        http = _get_poly_client()
+        for rpc in _POLYGON_RPC_URLS:
+            try:
+                resp = await http.post(rpc, json=batch, timeout=10.0)
+                if resp.is_success:
+                    return resp.json()
+            except Exception:
+                continue
+        return []
+
+    chunks = [valid_addresses[i:i + CHUNK_SIZE] for i in range(0, len(valid_addresses), CHUNK_SIZE)]
+    chunk_results = await asyncio.gather(*[_fetch_chunk(c, i * CHUNK_SIZE) for i, c in enumerate(chunks)])
+    raw_results: list[dict] = [item for chunk in chunk_results for item in chunk]
+
+    by_id: dict[str, str | None] = {}
+    for item in raw_results:
+        if isinstance(item, dict):
+            by_id[str(item.get("id", ""))] = item.get("result")
+
+    valid_out: dict[str, float | None] = {}
+    for i, addr in enumerate(valid_addresses):
+        hex_val = by_id.get(f"pol_{i}")
+        valid_out[addr.strip().lower()] = (int(hex_val, 16) / 1e18) if hex_val not in (None, "") else None
+
+    out: dict[str, float | None] = {}
+    for addr in addresses:
+        key = addr.strip().lower() if addr else ""
+        out[addr] = valid_out.get(key, None)
+    return out
+
+
 async def get_trading_balance(proxy_address: str) -> float | None:
     """Trading balance (USDC on Polymarket) via Rust service."""
     if not proxy_address:

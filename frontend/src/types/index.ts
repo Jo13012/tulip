@@ -77,6 +77,7 @@ export interface AdminUser {
   onboarding_completed_at: string | null
   wallet_usdc:         number | null   // live Arb USDC balance
   wallet_eth:          number | null   // live Arb ETH balance
+  wallet_pol:          number | null   // live Polygon POL balance (gas)
   trading_balance:     number | null   // live Polymarket total (avail + positions + redeem)
   positions_value:     number          // open positions mark-to-market
   redeem_value:        number          // redeemable positions value
