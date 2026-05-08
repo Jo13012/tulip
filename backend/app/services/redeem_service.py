@@ -92,9 +92,15 @@ def _encode_binary_redeem(condition_id: str, collateral: str) -> str:
     return "0x" + REDEEM_SELECTOR.hex() + encoded.hex()
 
 
-def _encode_neg_risk_redeem(condition_id: str, amount: int) -> str:
+def _encode_neg_risk_redeem(condition_id: str, amount: int, outcome: str = "") -> str:
     cid = bytes.fromhex(condition_id.lstrip("0x").zfill(64))
-    encoded = abi_encode(["bytes32", "uint256[]"], [cid, [amount, amount]])
+    # YES = index 0, NO = index 1. Pass 0 for the side we don't hold.
+    if outcome.upper() in ("NO", "N"):
+        amounts = [0, amount]
+    else:
+        # YES or unknown — try YES first (index 0)
+        amounts = [amount, 0]
+    encoded = abi_encode(["bytes32", "uint256[]"], [cid, amounts])
     return "0x" + _NEG_RISK_REDEEM_SEL.hex() + encoded.hex()
 
 
@@ -272,8 +278,8 @@ async def redeem_positions(
                     if approval_hash:
                         safe_nonce = await _get_nonce_onchain(http, safe_address)
 
-                calldata = _encode_neg_risk_redeem(condition_id, amount)
-                log.info("redeem neg-risk: nonce=%s amount=%d cond=%s", safe_nonce, amount, condition_id[:16])
+                calldata = _encode_neg_risk_redeem(condition_id, amount, outcome)
+                log.info("redeem neg-risk: nonce=%s amount=%d outcome=%s cond=%s", safe_nonce, amount, outcome, condition_id[:16])
                 tx_hash = await _direct_exec(
                     http, privy_wallet_id, eoa_address, safe_address,
                     NEG_RISK, calldata, safe_nonce,
