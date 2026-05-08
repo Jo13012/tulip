@@ -65,6 +65,12 @@ async def _is_approved_for_all(http: httpx.AsyncClient, owner: str, operator: st
     return bool(int(result, 16)) if result and result not in ("0x", "") else False
 
 
+async def _get_nonce_onchain(http: httpx.AsyncClient, safe_address: str) -> str:
+    # Safe.nonce() selector = 0xaffed0e0
+    result = await _rpc_call(http, "eth_call", [{"to": safe_address, "data": "0xaffed0e0"}, "latest"])
+    return str(int(result, 16)) if result and result not in ("0x", "") else "0"
+
+
 async def _wait_tx(http: httpx.AsyncClient, tx_hash: str, polls: int = 30) -> dict | None:
     import asyncio
     for _ in range(polls):
@@ -254,7 +260,8 @@ async def redeem_positions(
                     return result
 
                 amount = int(estimated_tokens * 1_000_000)
-                safe_nonce = nonce or await _get_safe_nonce(http, safe_address)
+                # Use on-chain nonce directly — relayer nonce may diverge
+                safe_nonce = await _get_nonce_onchain(http, safe_address)
 
                 if not await _is_approved_for_all(http, safe_address, NEG_RISK):
                     log.info("redeem: missing NEG_RISK approval, adding cond=%s", condition_id[:16])
@@ -263,9 +270,10 @@ async def redeem_positions(
                         CTF, _encode_set_approval_for_all(NEG_RISK), safe_nonce,
                     )
                     if approval_hash:
-                        safe_nonce = await _get_safe_nonce(http, safe_address)
+                        safe_nonce = await _get_nonce_onchain(http, safe_address)
 
                 calldata = _encode_neg_risk_redeem(condition_id, amount)
+                log.info("redeem neg-risk: nonce=%s amount=%d cond=%s", safe_nonce, amount, condition_id[:16])
                 tx_hash = await _direct_exec(
                     http, privy_wallet_id, eoa_address, safe_address,
                     NEG_RISK, calldata, safe_nonce,
