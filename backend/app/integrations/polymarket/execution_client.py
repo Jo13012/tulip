@@ -142,7 +142,16 @@ class ExecutionClient:
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
-            raise ExecutionClientError(f"place_limit_order failed: {e}")
+            msg = str(e)
+            # Extract clean error message from Rust JSON response body
+            try:
+                import re
+                m = re.search(r'"error"\s*:\s*"([^"]+)"', msg)
+                if m:
+                    msg = m.group(1).replace("\\u003e", ">").replace("\\n", " ").strip()
+            except Exception:
+                pass
+            raise ExecutionClientError(msg)
 
     async def get_open_orders(self) -> dict[str, dict]:
         await self._ensure_ready()

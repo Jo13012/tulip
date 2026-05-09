@@ -345,27 +345,29 @@ async def redeem_all_neg_risk(
                 result["ok"] = True
                 return result
 
-            if len(calls) == 1:
-                # Single call — no need for Multisend
-                tx_hash = await _direct_exec(
-                    http, privy_wallet_id, eoa_address, safe_address,
-                    calls[0][0], calls[0][1],
-                )
-            else:
-                # Batch via Multisend (delegatecall, operation=1)
-                ms_data = _encode_multisend(calls)
-                tx_hash = await _direct_exec(
-                    http, privy_wallet_id, eoa_address, safe_address,
-                    SAFE_MULTISEND, ms_data, operation=1,
-                )
+            # Sequential direct exec — Multisend delegatecall blocked by Safe guard
+            tx_hash = None
+            failed = 0
+            for to, cd in calls:
+                h = await _direct_exec(http, privy_wallet_id, eoa_address, safe_address, to, cd)
+                if h:
+                    tx_hash = h
+                else:
+                    failed += 1
 
-            if tx_hash:
+            if failed == 0:
                 result["ok"] = True
                 result["tx_hash"] = tx_hash
                 result["redeemed"] = len(calls)
-                log.info("batch_neg_risk: OK tx=%s redeemed=%d", tx_hash, len(calls))
+                log.info("batch_neg_risk: OK redeemed=%d last_tx=%s", len(calls), tx_hash)
+            elif tx_hash:
+                result["ok"] = True  # partial success
+                result["tx_hash"] = tx_hash
+                result["redeemed"] = len(calls) - failed
+                result["error"] = f"{failed} failed"
+                log.warning("batch_neg_risk: partial redeemed=%d failed=%d", len(calls) - failed, failed)
             else:
-                result["error"] = "multisend direct exec failed"
+                result["error"] = "all neg-risk redeems failed"
 
     except Exception as e:
         result["error"] = str(e)
