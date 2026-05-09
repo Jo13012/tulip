@@ -192,15 +192,16 @@ async def _direct_exec(
     to: str,
     calldata: str,
     operation: int = 0,
+    nonce: str | None = None,
 ) -> str | None:
     """
     Execute Safe.execTransaction() via Privy on Polygon.
-    Reads nonce on-chain just before signing to avoid collisions.
-    operation=1 for delegatecall (Multisend).
+    Pass nonce explicitly when sending sequential txs to avoid GS013 collisions.
     """
     from app.services.privy_tx_service import _privy_rpc, PrivyTxError
 
-    nonce = await _get_nonce_onchain(http, safe_address)
+    if nonce is None:
+        nonce = await _get_nonce_onchain(http, safe_address)
     safe_tx_hash = _hash_safe_tx(safe_address, to, calldata, "0", operation, nonce)
     prefixed = keccak(b"\x19Ethereum Signed Message:\n32" + safe_tx_hash)
     raw_sig = await privy_wallet_service.secp256k1_sign(privy_wallet_id, "0x" + prefixed.hex())
@@ -366,13 +367,18 @@ async def redeem_all_neg_risk(
                 return result
 
             # Sequential direct exec — Multisend delegatecall blocked by Safe guard
+            # Read nonce once and increment manually to avoid GS013 on slow networks
+            seq_nonce = int(await _get_nonce_onchain(http, safe_address))
             tx_hash = None
             failed = 0
             for to, cd in calls:
-                h = await _direct_exec(http, privy_wallet_id, eoa_address, safe_address, to, cd)
+                h = await _direct_exec(http, privy_wallet_id, eoa_address, safe_address, to, cd, nonce=str(seq_nonce))
                 if h:
                     tx_hash = h
+                    seq_nonce += 1
                 else:
+                    # tx may still be in mempool — increment anyway to avoid collision
+                    seq_nonce += 1
                     failed += 1
 
             if failed == 0:

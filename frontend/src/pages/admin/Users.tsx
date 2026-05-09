@@ -6,6 +6,7 @@ import type { AdminUser } from '../../types'
 import { api } from '../../utils/api'
 import { fmtStoredBps, fmtStoredBpsPct, fmtUsd } from '../../utils/format'
 import { useAppStore } from '../../store'
+import { AddressField } from '../../components/ui/Field'
 
 // ── Nuclear Close Modal ───────────────────────────────────────────────────────
 
@@ -499,30 +500,25 @@ function GrantFreeFeeCell({ user, onUpdated }: {
   )
 }
 
-function ActionsDropdown({ user, onStop, stopping, onNuclear }: {
+function ActionsMenu({ user, onClose, onStop, onNuclear }: {
   user: AdminUser
+  onClose: () => void
   onStop: (mode: 'soft' | 'hard') => void
-  stopping: boolean
   onNuclear: () => void
 }) {
-  const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const addToast = useAppStore(s => s.addToast)
-  const ref = useRef<HTMLDivElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (!open) return
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [open])
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
 
   const run = async (key: string, fn: () => Promise<void>) => {
     setBusy(key)
-    setOpen(false)
-    try { await fn() } finally { setBusy(null) }
+    try { await fn() } finally { setBusy(null); onClose() }
   }
 
   const bridgePol = () => run('pol', async () => {
@@ -532,7 +528,6 @@ function ActionsDropdown({ user, onStop, stopping, onNuclear }: {
   })
 
   const reregisterClob = () => run('clob', async () => {
-    if (!window.confirm('Delete + recreate CLOB API key?')) return
     const r: any = await api.admin.reregisterClob(user.id)
     if (r?.ok) addToast({ type: 'success', message: `CLOB re-registered: ${r.clob_api_key?.slice(0, 8)}…` })
     else addToast({ type: 'error', message: r?.detail || 'Re-register failed' })
@@ -544,46 +539,85 @@ function ActionsDropdown({ user, onStop, stopping, onNuclear }: {
     else addToast({ type: 'error', message: r?.detail || 'Migration failed' })
   })
 
-  const isBusy = stopping || busy !== null
-
   const sep = <div className="my-1 border-t border-white/[0.06]" />
 
-  const item = (label: string, sub: string, color: string, onClick: () => void) => (
+  const item = (label: string, sub: string, color: string, onClick: () => void, disabled = false) => (
     <button
-      className={`flex w-full flex-col px-3 py-1.5 text-left hover:bg-white/[0.06] transition-colors ${color}`}
+      disabled={disabled || busy !== null}
+      className={`flex w-full flex-col px-4 py-2.5 text-left hover:bg-white/[0.05] transition-colors disabled:opacity-30 ${color}`}
       onClick={onClick}
     >
-      <span className="text-[11px] font-medium leading-tight">{label}</span>
-      <span className="text-[9px] text-white/25 leading-tight">{sub}</span>
+      <span className="text-[12px] font-medium leading-tight">{label}</span>
+      <span className="text-[10px] text-white/30 leading-tight mt-0.5">{sub}</span>
     </button>
   )
 
   return (
-    <div className="relative" ref={ref}>
+    <div
+      ref={overlayRef}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4"
+      onClick={e => { if (e.target === overlayRef.current) onClose() }}
+    >
+      <div className="bg-[#0f1012] border border-white/[0.08] rounded-2xl w-full max-w-xs shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-white/[0.05]">
+          <div>
+            <span className="text-sm font-semibold text-white/80">{user.display_name || user.id.slice(0, 12)}</span>
+            <span className="ml-2 text-[10px] font-mono text-white/25">{user.wallet_address?.slice(0, 8)}…</span>
+          </div>
+          <button className="w-6 h-6 flex items-center justify-center rounded-lg text-white/20 hover:text-white/55 hover:bg-white/[0.06] transition-all" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="py-1.5">
+          {user.active_session_id && <>
+            {item('Soft stop', 'Graceful shutdown, waits for open orders', 'text-white/70', () => { onClose(); onStop('soft') })}
+            {item('Hard stop', 'Immediate stop, cancels all orders now', 'text-red-400/80', () => { onClose(); onStop('hard') })}
+            {sep}
+          </>}
+          {item('Nuclear close', 'Cancel orders + sell / redeem all positions', 'text-red-400/70', () => { onClose(); onNuclear() })}
+          {sep}
+          {item('Bridge POL', 'Send $0.10 USDC (Arb) → POL on Polygon for gas', 'text-yellow-400/70', bridgePol)}
+          {item('Re-register CLOB', "Fix 'maker address not allowed': delete + recreate API key", 'text-blue-400/70', reregisterClob)}
+          {item('Migrate V2', 'Re-run pUSD + CTF × 3 approval txs on Safe', 'text-purple-400/60', migrateV2)}
+        </div>
+
+        {busy && (
+          <div className="px-4 py-2 border-t border-white/[0.05] text-[10px] text-white/30 animate-pulse">
+            Running {busy}…
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ActionsDropdown({ user, onStop, stopping, onNuclear }: {
+  user: AdminUser
+  onStop: (mode: 'soft' | 'hard') => void
+  stopping: boolean
+  onNuclear: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const isBusy = stopping
+
+  return (
+    <>
       <button
         className={`text-[11px] px-2 py-0.5 rounded bg-white/[0.05] text-white/40 hover:text-white/80 hover:bg-white/10 border border-white/10 transition-colors disabled:opacity-30 ${isBusy ? 'animate-pulse' : ''}`}
-        onClick={() => setOpen(v => !v)}
+        onClick={() => setOpen(true)}
         disabled={isBusy}
         title="Actions"
       >
         {isBusy ? '…' : '···'}
       </button>
-
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 min-w-[190px] rounded border border-white/10 bg-[#111] shadow-xl py-1">
-          {user.active_session_id && <>
-            {item('Soft stop', 'graceful shutdown, waits for open orders', 'text-white/60', () => { setOpen(false); onStop('soft') })}
-            {item('Hard stop', 'immediate stop, cancels all orders', 'text-red-400/80', () => { setOpen(false); onStop('hard') })}
-            {sep}
-          </>}
-          {item('Nuclear close', 'cancel orders + sell / redeem all positions', 'text-red-400/70', () => { setOpen(false); onNuclear() })}
-          {sep}
-          {item('Bridge POL', 'send $0.10 USDC (Arb) → POL (Polygon) for gas', 'text-yellow-400/70', bridgePol)}
-          {item('Re-register CLOB', "fix 'maker address not allowed': delete + recreate API key", 'text-blue-400/70', reregisterClob)}
-          {item('Migrate V2', 're-run pUSD + CTF × 3 approval txs on Safe', 'text-purple-400/60', migrateV2)}
-        </div>
+        <ActionsMenu
+          user={user}
+          onClose={() => setOpen(false)}
+          onStop={onStop}
+          onNuclear={onNuclear}
+        />
       )}
-    </div>
+    </>
   )
 }
 
@@ -713,8 +747,11 @@ export default function AdminUsers() {
                 </td>
 
                 {/* Wallet */}
-                <td className="px-3 py-2.5 font-mono text-white/40">
-                  {truncAddr(u.wallet_address)}
+                <td className="px-3 py-2.5 max-w-[130px]">
+                  {u.wallet_address
+                    ? <AddressField value={u.wallet_address} />
+                    : <span className="text-white/20 font-mono text-xs">—</span>
+                  }
                 </td>
 
                 {/* Wallet USDC */}
