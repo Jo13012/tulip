@@ -64,7 +64,22 @@
       "Bash(cd \"/c/Users/Josep/Documents/Code/Polybot fast volume micro spread - Copie/multi_user_bot\" && tail -200 backend/logs/app.log 2>/dev/null | grep -i \"vega\\\\|thevega\\\\|7c6d7e7d\\\\|368b6FF5\\\\|fE2Ccdcb\" | head -50)",
       "Read(//c/c/Users/Josep/Documents/Code/Polybot fast volume micro spread - Copie/multi_user_bot/backend/logs/**)",
       "Bash(curl -s \"https://clob.polymarket.com/auth/register?address=0xfE2Ccdcb7b7D4b13212C12DA8A5f30ab328E2Ec3\" -H \"User-Agent: Mozilla/5.0\")",
-      "Bash(curl -s \"https://clob-proxy.jolpmaker.workers.dev/auth/register-proxy?address=0xfE2Ccdcb7b7D4b13212C12DA8A5f30ab328E2Ec3\" -H \"User-Agent: Mozilla/5.0\")"
+      "Bash(curl -s \"https://clob-proxy.jolpmaker.workers.dev/auth/register-proxy?address=0xfE2Ccdcb7b7D4b13212C12DA8A5f30ab328E2Ec3\" -H \"User-Agent: Mozilla/5.0\")",
+      "WebFetch(domain:api.polygonscan.com)",
+      "Bash(curl -s \"https://api.polygonscan.com/api?module=contract&action=getabi&address=0x93070a847efEf7F70739046A929D47a521F5B8ee\")",
+      "Bash(curl -s \"https://api.etherscan.io/v2/api?chainid=137&module=contract&action=getabi&address=0x93070a847efEf7F70739046A929D47a521F5B8ee\")",
+      "Bash(curl -s \"https://www.4byte.directory/api/v1/signatures/?hex_signature=0x62355638\")",
+      "Bash(curl -s -X POST https://rpc.ankr.com/polygon -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(curl -s -X POST https://1rpc.io/matic -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(curl -s \"https://api.polygonscan.com/api?module=account&action=txlist&address=0x93070a847efEf7F70739046A929D47a521F5B8ee&sort=desc&page=1&offset=5\")",
+      "WebFetch(domain:api.etherscan.io)",
+      "WebFetch(domain:vscode.blockscan.com)",
+      "WebFetch(domain:openchain.xyz)",
+      "Bash(python3 -c \"from eth_hash.auto import keccak; sig=b'wrap\\(address,address,uint256\\)'; print\\(keccak\\(sig\\)[:4].hex\\(\\)\\)\")",
+      "Bash(python3 -c \"import hashlib; sig='wrap\\(address,address,uint256\\)'.encode\\(\\); h=hashlib.sha3_256\\(sig\\).digest\\(\\)[:4]; print\\(h.hex\\(\\)\\)\")",
+      "WebFetch(domain:www.coingecko.com)",
+      "WebFetch(domain:app.uniswap.org)",
+      "WebFetch(domain:info.uniswap.org)"
     ]
   }
 }

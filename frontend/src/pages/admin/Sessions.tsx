@@ -509,8 +509,17 @@ function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (s
   const [selectedUser, setSelectedUser] = useState<any | null>(null)
   const [capital, setCapital]     = useState('')
   const [stopMode, setStopMode]   = useState<'days' | 'volume'>('days')
-  const [stopDays, setStopDays]   = useState('30')
+  const [stopDays, setStopDays]   = useState('7')
   const [targetVol, setTargetVol] = useState('')
+
+  function computeTargetVol(cap: string) {
+    const g = parseFloat(cap)
+    if (!isNaN(g) && g > 0) {
+      const raw = g * 30
+      return String(Math.max(5000, Math.floor(raw / 5000) * 5000))
+    }
+    return ''
+  }
   const [slPct, setSlPct]         = useState('20')
   const [launching, setLaunching] = useState(false)
   const [error, setError]         = useState('')
@@ -590,7 +599,9 @@ function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (s
                       }`}
                       onClick={() => {
                         setSelectedUser(u)
-                        if (u.trading_balance) setCapital(String(Math.floor(u.trading_balance * 100) / 100))
+                        const cap = u.trading_balance ? String(Math.floor(u.trading_balance * 100) / 100) : ''
+                        setCapital(cap)
+                        setTargetVol(computeTargetVol(cap))
                       }}
                     >
                       <span>{u.display_name ?? u.id.slice(0, 12)}</span>
@@ -621,7 +632,7 @@ function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (s
                     className="w-full bg-transparent border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white font-mono text-sm placeholder:text-white/15 focus:outline-none focus:border-brand/50 transition-all"
                     type="number" min="0" step="1" placeholder="100"
                     value={capital}
-                    onChange={e => setCapital(e.target.value)}
+                    onChange={e => { setCapital(e.target.value); setTargetVol(computeTargetVol(e.target.value)) }}
                   />
                   {selectedUser.trading_balance != null && (
                     <div className="text-[9px] text-white/25 mt-1">Balance: ${selectedUser.trading_balance.toFixed(2)}</div>

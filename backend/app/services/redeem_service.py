@@ -255,6 +255,15 @@ async def _direct_exec(
 
 # ── Wrap USDC.e → pUSD via relayer ────────────────────────────────────────────
 
+async def _erc20_allowance(http: httpx.AsyncClient, token: str, owner: str, spender: str) -> int:
+    data = "0xdd62ed3e" + abi_encode(
+        ["address", "address"],
+        [to_checksum_address(owner), to_checksum_address(spender)],
+    ).hex()
+    result = await _rpc_call(http, "eth_call", [{"to": token, "data": data}, "latest"])
+    return int(result, 16) if result and result not in ("0x", "") else 0
+
+
 async def _wrap_usdce_to_pusd(
     http: httpx.AsyncClient,
     privy_wallet_id: str,
@@ -263,8 +272,7 @@ async def _wrap_usdce_to_pusd(
 ) -> bool:
     """
     Wrap all USDC.e in Safe to pUSD via CollateralOnramp.
-    Two txs: approve + wrap. Uses on-chain nonce (not relayer) to avoid nonce divergence.
-    Reads nonce fresh before each tx so nonce increments correctly after first tx mines.
+    Uses _direct_exec (real tx receipt) — relayer marks tx mined even on ExecutionFailure.
     """
     balance = await _erc20_balance(http, USDC_E, safe_address)
     if balance < 1_000_000:  # < $1 USDC.e — skip
@@ -272,23 +280,34 @@ async def _wrap_usdce_to_pusd(
 
     log.info("wrap_usdce: balance=%d wrapping to pUSD safe=%s", balance, safe_address[:12])
 
-    # tx1: approve CollateralOnramp to spend USDC.e — read on-chain nonce
-    nonce = await _get_nonce_onchain(http, safe_address)
+    # tx1: approve CollateralOnramp to spend USDC.e
     approve_cd = _encode_approve(COLLATERAL_ONRAMP, balance)
-    ok1 = await _relayer_exec(http, privy_wallet_id, eoa_address, safe_address, USDC_E, approve_cd, nonce)
-    if not ok1:
-        log.error("wrap_usdce: approve failed")
+    h1 = await _direct_exec(http, privy_wallet_id, eoa_address, safe_address, USDC_E, approve_cd)
+    if not h1:
+        log.error("wrap_usdce: approve tx failed")
         return False
 
-    # tx2: wrap — read on-chain nonce again (approve already mined, nonce incremented)
-    nonce = await _get_nonce_onchain(http, safe_address)
+    # Verify allowance was actually set
+    allowance = await _erc20_allowance(http, USDC_E, safe_address, COLLATERAL_ONRAMP)
+    if allowance < balance:
+        log.error("wrap_usdce: approve mined but allowance=%d < balance=%d — inner exec failed", allowance, balance)
+        return False
+    log.info("wrap_usdce: approve OK allowance=%d", allowance)
+
+    # tx2: wrap — nonce read fresh inside _direct_exec
     wrap_cd = _encode_wrap(USDC_E, safe_address, balance)
-    ok2 = await _relayer_exec(http, privy_wallet_id, eoa_address, safe_address, COLLATERAL_ONRAMP, wrap_cd, nonce)
-    if not ok2:
-        log.error("wrap_usdce: wrap failed")
+    h2 = await _direct_exec(http, privy_wallet_id, eoa_address, safe_address, COLLATERAL_ONRAMP, wrap_cd)
+    if not h2:
+        log.error("wrap_usdce: wrap tx failed")
         return False
 
-    log.info("wrap_usdce: OK wrapped %d USDC.e → pUSD", balance)
+    # Verify USDC.e balance actually dropped
+    new_balance = await _erc20_balance(http, USDC_E, safe_address)
+    if new_balance >= balance:
+        log.error("wrap_usdce: wrap mined but USDC.e balance unchanged=%d — inner exec failed", new_balance)
+        return False
+
+    log.info("wrap_usdce: OK wrapped %d USDC.e → pUSD tx=%s", balance, h2)
     return True
 
 
