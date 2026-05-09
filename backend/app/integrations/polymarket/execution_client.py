@@ -139,19 +139,19 @@ class ExecutionClient:
                     "neg_risk": neg_risk,
                 },
             )
-            resp.raise_for_status()
+            if not resp.is_success:
+                try:
+                    body = resp.json()
+                    msg = body.get("error") or body.get("message") or resp.text
+                except Exception:
+                    msg = resp.text or str(resp.status_code)
+                msg = msg.replace("\\u003e", ">").replace("\\n", " ").strip()
+                raise ExecutionClientError(msg)
             return resp.json()
+        except ExecutionClientError:
+            raise
         except Exception as e:
-            msg = str(e)
-            # Extract clean error message from Rust JSON response body
-            try:
-                import re
-                m = re.search(r'"error"\s*:\s*"([^"]+)"', msg)
-                if m:
-                    msg = m.group(1).replace("\\u003e", ">").replace("\\n", " ").strip()
-            except Exception:
-                pass
-            raise ExecutionClientError(msg)
+            raise ExecutionClientError(str(e))
 
     async def get_open_orders(self) -> dict[str, dict]:
         await self._ensure_ready()

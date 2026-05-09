@@ -272,7 +272,15 @@ async def run_nuclear_close(
             usdce_bal = await _erc20_balance(http, USDC_E, safe_address)
             if usdce_bal >= 1_000_000:
                 log.info("nuclear_close: wrapping %d USDC.e → pUSD", usdce_bal)
-                await _wrap_usdce_to_pusd(http, privy_wallet_id, eoa_address, safe_address)
+                wrapped = await _wrap_usdce_to_pusd(http, privy_wallet_id, eoa_address, safe_address)
+                if wrapped:
+                    try:
+                        from app.services.balance_poller import balance_poller
+                        uid = getattr(client, "_user_id", None)
+                        if uid:
+                            await balance_poller.refresh_user(uid, eoa_address, safe_address)
+                    except Exception:
+                        pass
     except Exception as e:
         results["errors"].append(f"wrap_usdce: {e}")
 

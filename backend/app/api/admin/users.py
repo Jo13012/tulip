@@ -511,6 +511,7 @@ async def nuclear_close(user_id: str, body: NuclearCloseRequest, db: DbSession, 
         raise HTTPException(400, "Nothing to do")
 
     client = await _get_user_client(user_id, db)
+    client._user_id = user_id
     try:
         results = await _run_nuclear_close(
             client,
