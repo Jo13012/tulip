@@ -194,7 +194,12 @@ async def run_nuclear_close(
             deduped.append((token_id, condition_id, size, outcome))
 
     if deduped:
-        from app.services.redeem_service import redeem_positions
+        from app.services.redeem_service import (
+            redeem_positions, redeem_all_neg_risk, _wrap_usdce_to_pusd,
+            _erc20_balance, _erc1155_balance, NEG_RISK, CTF, USDC_E,
+        )
+        import httpx as _httpx
+
         privy_wallet_id = getattr(client, "privy_wallet_id", None)
         eoa_address = getattr(client, "wallet_address", None)
         safe_address = getattr(client, "proxy_address", None)
@@ -202,9 +207,36 @@ async def run_nuclear_close(
         if not (privy_wallet_id and eoa_address and safe_address):
             log.error("nuclear_close: cannot redeem — missing wallet credentials")
         else:
-            for token_id, condition_id, size, outcome in deduped:
-                log.info("nuclear_close: redeeming condition=%s size=%.2f outcome=%s",
-                         condition_id[:20], size, outcome)
+            # Split binary vs neg-risk — neg-risk detected by token balance at redeem time
+            # For now separate by: positions not yet known as neg-risk go through redeem_positions
+            # which internally delegates neg-risk to batch. But we can pre-split using known_token_id.
+            # Strategy: collect all, run binary ones individually, batch all neg-risk together.
+
+            binary_positions = []
+            neg_risk_positions = []
+
+            # Pre-check neg-risk via on-chain balance for positions with known token_id
+            async with _httpx.AsyncClient(timeout=20.0, trust_env=False) as http:
+                for token_id, condition_id, size, outcome in deduped:
+                    try:
+                        pid = int(token_id) if token_id else None
+                    except (ValueError, TypeError):
+                        pid = None
+                    if pid:
+                        neg_bal = await _erc1155_balance(http, NEG_RISK, safe_address, pid)
+                        ctf_bal = await _erc1155_balance(http, CTF, safe_address, pid)
+                        if neg_bal == 0 and ctf_bal == 0:
+                            continue  # already redeemed
+                        if neg_bal > 0:
+                            neg_risk_positions.append({"condition_id": condition_id, "token_id": token_id, "size": size, "outcome": outcome})
+                        else:
+                            binary_positions.append((token_id, condition_id, size, outcome))
+                    else:
+                        binary_positions.append((token_id, condition_id, size, outcome))
+
+            # Binary: sequential via relayer
+            for token_id, condition_id, size, outcome in binary_positions:
+                log.info("nuclear_close: binary redeem condition=%s size=%.2f", condition_id[:20], size)
                 try:
                     res = await redeem_positions(
                         privy_wallet_id=privy_wallet_id,
@@ -216,14 +248,39 @@ async def run_nuclear_close(
                         outcome=outcome,
                     )
                     results["redeemed_positions"].append({
-                        "token_id": token_id,
-                        "condition_id": condition_id,
-                        "size": size,
-                        "ok": res.get("ok"),
-                        "tx_hash": res.get("tx_hash"),
-                        "error": res.get("error"),
+                        "token_id": token_id, "condition_id": condition_id, "size": size,
+                        "ok": res.get("ok"), "tx_hash": res.get("tx_hash"), "error": res.get("error"),
                     })
                 except Exception as e:
                     results["errors"].append(f"redeem {condition_id[:20]}: {e}")
+
+            # Neg-risk: single batched Multisend tx
+            if neg_risk_positions:
+                log.info("nuclear_close: batch neg-risk redeem count=%d", len(neg_risk_positions))
+                try:
+                    batch_res = await redeem_all_neg_risk(
+                        privy_wallet_id=privy_wallet_id,
+                        eoa_address=eoa_address,
+                        safe_address=safe_address,
+                        positions=neg_risk_positions,
+                    )
+                    for pos in neg_risk_positions:
+                        results["redeemed_positions"].append({
+                            "token_id": pos["token_id"], "condition_id": pos["condition_id"],
+                            "size": pos["size"], "ok": batch_res["ok"],
+                            "tx_hash": batch_res.get("tx_hash"), "error": batch_res.get("error"),
+                        })
+                except Exception as e:
+                    results["errors"].append(f"batch_neg_risk: {e}")
+
+            # Wrap USDC.e → pUSD once at the end if balance > $1
+            try:
+                async with _httpx.AsyncClient(timeout=20.0, trust_env=False) as http:
+                    usdce_bal = await _erc20_balance(http, USDC_E, safe_address)
+                    if usdce_bal >= 1_000_000:  # > $1
+                        log.info("nuclear_close: wrapping %d USDC.e → pUSD", usdce_bal)
+                        await _wrap_usdce_to_pusd(http, privy_wallet_id, eoa_address, safe_address)
+            except Exception as e:
+                results["errors"].append(f"wrap_usdce: {e}")
 
     return results

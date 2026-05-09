@@ -51,7 +51,8 @@
       "WebFetch(domain:relayer-v2.polymarket.com)",
       "WebFetch(domain:docs.relay.link)",
       "WebFetch(domain:api.relay.link)",
-      "Bash(python3 -c \"from eth_utils import keccak; print\\(keccak\\(text='execTransaction\\(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes\\)'\\).hex\\(\\)[:8]\\)\")"
+      "Bash(python3 -c \"from eth_utils import keccak; print\\(keccak\\(text='execTransaction\\(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes\\)'\\).hex\\(\\)[:8]\\)\")",
+      "Bash(curl -s \"https://docs.polymarket.com/concepts/pusd\")"
     ]
   }
 }
