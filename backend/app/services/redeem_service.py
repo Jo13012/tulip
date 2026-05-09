@@ -262,25 +262,26 @@ async def _wrap_usdce_to_pusd(
     safe_address: str,
 ) -> bool:
     """
-    Check USDC.e balance in Safe, wrap all of it to pUSD via CollateralOnramp.
-    Two relayer txs: approve(CollateralOnramp, amount) + wrap(USDC_E, safe, amount)
+    Wrap all USDC.e in Safe to pUSD via CollateralOnramp.
+    Two txs: approve + wrap. Uses on-chain nonce (not relayer) to avoid nonce divergence.
+    Reads nonce fresh before each tx so nonce increments correctly after first tx mines.
     """
     balance = await _erc20_balance(http, USDC_E, safe_address)
-    if balance == 0:
+    if balance < 1_000_000:  # < $1 USDC.e — skip
         return True
 
     log.info("wrap_usdce: balance=%d wrapping to pUSD safe=%s", balance, safe_address[:12])
 
-    # tx1: approve CollateralOnramp to spend USDC.e
-    nonce = await _get_safe_nonce(http, safe_address)
+    # tx1: approve CollateralOnramp to spend USDC.e — read on-chain nonce
+    nonce = await _get_nonce_onchain(http, safe_address)
     approve_cd = _encode_approve(COLLATERAL_ONRAMP, balance)
     ok1 = await _relayer_exec(http, privy_wallet_id, eoa_address, safe_address, USDC_E, approve_cd, nonce)
     if not ok1:
         log.error("wrap_usdce: approve failed")
         return False
 
-    # tx2: wrap(USDC_E, safe, balance)
-    nonce = await _get_safe_nonce(http, safe_address)
+    # tx2: wrap — read on-chain nonce again (approve already mined, nonce incremented)
+    nonce = await _get_nonce_onchain(http, safe_address)
     wrap_cd = _encode_wrap(USDC_E, safe_address, balance)
     ok2 = await _relayer_exec(http, privy_wallet_id, eoa_address, safe_address, COLLATERAL_ONRAMP, wrap_cd, nonce)
     if not ok2:

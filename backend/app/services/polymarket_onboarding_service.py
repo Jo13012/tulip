@@ -565,4 +565,77 @@ _CLOB_HEADERS = {
     "sec-fetch-site": "same-site",
 }
 
+async def recreate_clob_creds(
+    privy_wallet_id: str,
+    eoa_address: str,
+    safe_address: str,
+) -> dict:
+    """
+    Force-recreate CLOB API credentials: delete existing key then create new one.
+    Use when 'maker address not allowed' persists after onboarding.
+    """
+    timestamp = str(int(time.time()))
+    nonce = 0
+
+    typed_data = {
+        "domain": {"name": "ClobAuthDomain", "version": "1", "chainId": CHAIN_ID},
+        "types": {"ClobAuth": [
+            {"name": "address", "type": "address"},
+            {"name": "timestamp", "type": "string"},
+            {"name": "nonce", "type": "uint256"},
+            {"name": "message", "type": "string"},
+        ]},
+        "primary_type": "ClobAuth",
+        "message": {
+            "address": eoa_address,
+            "timestamp": timestamp,
+            "nonce": nonce,
+            "message": "This message attests that I control the given wallet",
+        },
+    }
+    sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
+
+    headers = {
+        "POLY_ADDRESS": eoa_address,
+        "POLY_SIGNATURE": sig,
+        "POLY_TIMESTAMP": timestamp,
+        "POLY_NONCE": str(nonce),
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=30.0, trust_env=False, headers=_CLOB_HEADERS) as http:
+        # 1. Delete existing key
+        del_resp = await http.delete(f"{CLOB_URL}/auth/api-key", headers=headers, timeout=15.0)
+        log.info("delete api-key → %d %s", del_resp.status_code, del_resp.text[:200])
+
+        # 2. Refresh signature after delete
+        timestamp = str(int(time.time()))
+        typed_data["message"]["timestamp"] = timestamp
+        sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
+        headers["POLY_SIGNATURE"] = sig
+        headers["POLY_TIMESTAMP"] = timestamp
+
+        # 3. Create new key
+        for attempt in range(5):
+            if attempt > 0:
+                wait = 5 * attempt
+                log.info("recreate_clob_creds attempt %d/5 — waiting %ds...", attempt + 1, wait)
+                await _async_sleep(wait)
+                timestamp = str(int(time.time()))
+                typed_data["message"]["timestamp"] = timestamp
+                sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
+                headers["POLY_SIGNATURE"] = sig
+                headers["POLY_TIMESTAMP"] = timestamp
+
+            resp = await http.post(f"{CLOB_URL}/auth/api-key", headers=headers, timeout=15.0)
+            log.info("recreate api-key → %d %s", resp.status_code, resp.text[:200])
+            if resp.is_success:
+                data = resp.json()
+                if data.get("apiKey") and data.get("secret") and data.get("passphrase"):
+                    log.info("Recreated CLOB creds for safe=%s", safe_address[:10])
+                    return {"key": data["apiKey"], "secret": data["secret"], "passphrase": data["passphrase"]}
+
+        raise RuntimeError(f"Failed to recreate CLOB API key after 5 attempts")
+
+
 polymarket_onboarding_service = None  # singleton placeholder — just import and call onboard_wallet()

@@ -52,7 +52,19 @@
       "WebFetch(domain:docs.relay.link)",
       "WebFetch(domain:api.relay.link)",
       "Bash(python3 -c \"from eth_utils import keccak; print\\(keccak\\(text='execTransaction\\(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes\\)'\\).hex\\(\\)[:8]\\)\")",
-      "Bash(curl -s \"https://docs.polymarket.com/concepts/pusd\")"
+      "Bash(curl -s \"https://docs.polymarket.com/concepts/pusd\")",
+      "Bash(curl -s -X POST https://polygon-bor-rpc.publicnode.com -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"eth_getCode\",\"params\":[\"0xfE2Ccdcb7b7D4b13212C12DA8A5f30ab328E2Ec3\",\"latest\"],\"id\":1}')",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); code=d.get\\('result',''\\); print\\('deployed:', len\\(code\\) > 2, 'codeLen:', len\\(code\\)\\)\")",
+      "Bash(curl -s \"https://clob-proxy.jolpmaker.workers.dev/is-registered?address=0xfE2Ccdcb7b7D4b13212C12DA8A5f30ab328E2Ec3\")",
+      "Bash(curl -s \"https://clob.polymarket.com/is-registered?address=0xfE2Ccdcb7b7D4b13212C12DA8A5f30ab328E2Ec3\")",
+      "Bash(curl -s \"https://clob.polymarket.com/is-registered?address=0xfE2Ccdcb7b7D4b13212C12DA8A5f30ab328E2Ec3\" -H \"User-Agent: Mozilla/5.0\")",
+      "Bash(curl -s 'https://clob.polymarket.com/balance-allowance?asset_type=COLLATERAL' -H 'User-Agent: Mozilla/5.0' -H 'POLY_ADDRESS: 0x368b6FF5cE9dbbd252C76335C9bBBdbb4210Ab82' -H 'POLY_PROXY_ADDRESS: 0xfE2Ccdcb7b7D4b13212C12DA8A5f30ab328E2Ec3')",
+      "Bash(curl -s \"https://relayer.polymarket.com/deployed?address=0xfE2Ccdcb7b7D4b13212C12DA8A5f30ab328E2Ec3\" -H \"User-Agent: Mozilla/5.0\")",
+      "Bash(curl -s \"https://relayer-v2.polymarket.com/deployed?address=0xfE2Ccdcb7b7D4b13212C12DA8A5f30ab328E2Ec3\" -H \"User-Agent: Mozilla/5.0\")",
+      "Bash(cd \"/c/Users/Josep/Documents/Code/Polybot fast volume micro spread - Copie/multi_user_bot\" && tail -200 backend/logs/app.log 2>/dev/null | grep -i \"vega\\\\|thevega\\\\|7c6d7e7d\\\\|368b6FF5\\\\|fE2Ccdcb\" | head -50)",
+      "Read(//c/c/Users/Josep/Documents/Code/Polybot fast volume micro spread - Copie/multi_user_bot/backend/logs/**)",
+      "Bash(curl -s \"https://clob.polymarket.com/auth/register?address=0xfE2Ccdcb7b7D4b13212C12DA8A5f30ab328E2Ec3\" -H \"User-Agent: Mozilla/5.0\")",
+      "Bash(curl -s \"https://clob-proxy.jolpmaker.workers.dev/auth/register-proxy?address=0xfE2Ccdcb7b7D4b13212C12DA8A5f30ab328E2Ec3\" -H \"User-Agent: Mozilla/5.0\")"
     ]
   }
 }

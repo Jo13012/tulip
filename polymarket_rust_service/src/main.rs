@@ -340,7 +340,8 @@ async fn client_place_limit_order(State(state): State<AppState>, Json(body): Jso
             tracing::error!("place_limit_order failed (detail): {msg}");
             // Propagate Polymarket CLOB rejections as 400 Bad Request so Python can read the actual error
             let is_poly_rejection = ["not enough balance", "balance is not enough", "not enough allowance",
-                "lower than minimum", "insufficient", "400", "bad request", "orderbook is closed"]
+                "lower than minimum", "insufficient", "400", "bad request", "orderbook is closed",
+                "maker address not allowed", "not allowed", "unauthorized maker"]
                 .iter().any(|kw| msg.to_lowercase().contains(kw));
             if is_poly_rejection {
                 AppError::BadRequest(format!("place_limit_order failed: {msg}"))

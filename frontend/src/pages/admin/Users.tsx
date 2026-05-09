@@ -499,69 +499,91 @@ function GrantFreeFeeCell({ user, onUpdated }: {
   )
 }
 
-function MigrateV2Button({ userId }: { userId: string }) {
-  const [loading, setLoading] = useState(false)
+function ActionsDropdown({ user, onStop, stopping, onNuclear }: {
+  user: AdminUser
+  onStop: (mode: 'soft' | 'hard') => void
+  stopping: boolean
+  onNuclear: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
   const addToast = useAppStore(s => s.addToast)
+  const ref = useRef<HTMLDivElement>(null)
 
-  const handle = async () => {
-    if (loading) return
-    setLoading(true)
-    try {
-      const r: any = await api.admin.migrateV2(userId)
-      if (r?.ok) {
-        addToast({ type: 'success', message: `V2 migration done${r.tx_hash ? ' · ' + r.tx_hash.slice(0, 10) + '…' : ''}` })
-      } else {
-        addToast({ type: 'error', message: r?.detail || r?.error || 'Migration failed' })
-      }
-    } catch (e: any) {
-      addToast({ type: 'error', message: e?.message || 'Migration error' })
-    } finally {
-      setLoading(false)
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
     }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const run = async (key: string, fn: () => Promise<void>) => {
+    setBusy(key)
+    setOpen(false)
+    try { await fn() } finally { setBusy(null) }
   }
 
-  return (
+  const bridgePol = () => run('pol', async () => {
+    const r: any = await api.admin.bridgePol(user.id)
+    if (r?.ok) addToast({ type: 'success', message: `POL bridge sent${r.tx_hash ? ' · ' + r.tx_hash.slice(0, 10) + '…' : ''}` })
+    else addToast({ type: 'error', message: r?.error || 'Bridge failed' })
+  })
+
+  const reregisterClob = () => run('clob', async () => {
+    if (!window.confirm('Delete + recreate CLOB API key?')) return
+    const r: any = await api.admin.reregisterClob(user.id)
+    if (r?.ok) addToast({ type: 'success', message: `CLOB re-registered: ${r.clob_api_key?.slice(0, 8)}…` })
+    else addToast({ type: 'error', message: r?.detail || 'Re-register failed' })
+  })
+
+  const migrateV2 = () => run('v2', async () => {
+    const r: any = await api.admin.migrateV2(user.id)
+    if (r?.ok) addToast({ type: 'success', message: `V2 migration done${r.tx_hash ? ' · ' + r.tx_hash.slice(0, 10) + '…' : ''}` })
+    else addToast({ type: 'error', message: r?.detail || 'Migration failed' })
+  })
+
+  const isBusy = stopping || busy !== null
+
+  const sep = <div className="my-1 border-t border-white/[0.06]" />
+
+  const item = (label: string, sub: string, color: string, onClick: () => void) => (
     <button
-      className="text-[10px] px-2 py-0.5 rounded bg-purple-900/20 text-purple-400/60 hover:text-purple-300 hover:bg-purple-900/40 border border-purple-500/20 transition-colors disabled:opacity-30"
-      onClick={handle}
-      disabled={loading}
-      title="Re-run V2 token approvals (pUSD + CTF × 3 spenders)"
+      className={`flex w-full flex-col px-3 py-1.5 text-left hover:bg-white/[0.06] transition-colors ${color}`}
+      onClick={onClick}
     >
-      {loading ? '…' : 'v2 migrate'}
+      <span className="text-[11px] font-medium leading-tight">{label}</span>
+      <span className="text-[9px] text-white/25 leading-tight">{sub}</span>
     </button>
   )
-}
-
-function BridgePolButton({ userId }: { userId: string }) {
-  const [loading, setLoading] = useState(false)
-  const addToast = useAppStore(s => s.addToast)
-
-  const handle = async () => {
-    if (loading) return
-    setLoading(true)
-    try {
-      const r: any = await api.admin.bridgePol(userId)
-      if (r?.ok) {
-        addToast({ type: 'success', message: `POL bridge sent${r.tx_hash ? ' · ' + r.tx_hash.slice(0, 10) + '…' : ''}` })
-      } else {
-        addToast({ type: 'error', message: r?.error || 'Bridge failed' })
-      }
-    } catch (e: any) {
-      addToast({ type: 'error', message: e?.message || 'Bridge error' })
-    } finally {
-      setLoading(false)
-    }
-  }
 
   return (
-    <button
-      className="text-[10px] px-2 py-0.5 rounded bg-yellow-900/20 text-yellow-400/50 hover:text-yellow-300 hover:bg-yellow-900/40 border border-yellow-500/20 transition-colors disabled:opacity-30"
-      onClick={handle}
-      disabled={loading}
-      title="Bridge $1 USDC (Arbitrum) → POL (Polygon) for gas"
-    >
-      {loading ? '…' : '⛽ POL'}
-    </button>
+    <div className="relative" ref={ref}>
+      <button
+        className={`text-[11px] px-2 py-0.5 rounded bg-white/[0.05] text-white/40 hover:text-white/80 hover:bg-white/10 border border-white/10 transition-colors disabled:opacity-30 ${isBusy ? 'animate-pulse' : ''}`}
+        onClick={() => setOpen(v => !v)}
+        disabled={isBusy}
+        title="Actions"
+      >
+        {isBusy ? '…' : '···'}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-50 min-w-[190px] rounded border border-white/10 bg-[#111] shadow-xl py-1">
+          {user.active_session_id && <>
+            {item('Soft stop', 'graceful shutdown, waits for open orders', 'text-white/60', () => { setOpen(false); onStop('soft') })}
+            {item('Hard stop', 'immediate stop, cancels all orders', 'text-red-400/80', () => { setOpen(false); onStop('hard') })}
+            {sep}
+          </>}
+          {item('Nuclear close', 'cancel orders + sell / redeem all positions', 'text-red-400/70', () => { setOpen(false); onNuclear() })}
+          {sep}
+          {item('Bridge POL', 'send $0.10 USDC (Arb) → POL (Polygon) for gas', 'text-yellow-400/70', bridgePol)}
+          {item('Re-register CLOB', "fix 'maker address not allowed': delete + recreate API key", 'text-blue-400/70', reregisterClob)}
+          {item('Migrate V2', 're-run pUSD + CTF × 3 approval txs on Safe', 'text-purple-400/60', migrateV2)}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -667,7 +689,7 @@ export default function AdminUsers() {
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-white/[0.06]">
-              {['', 'Name', 'Wallet', 'USDC', 'ETH', 'POL', 'Trading Bal', 'Override fee', 'Free fee', 'XP fee', 'Trading Vol', 'Bot PnL', 'Session', ''].map((h, i) => (
+              {['', 'Name', 'Wallet', 'USDC', 'ETH', 'POL', 'Trading Bal', 'Override fee', 'Free fee', 'XP fee', 'Trading Vol', 'Bot PnL', 'Session', '⋯'].map((h, i) => (
                 <th key={i} className="text-left px-3 py-2 text-[10px] text-white/25 font-semibold uppercase tracking-wider">
                   {h}
                 </th>
@@ -778,34 +800,14 @@ export default function AdminUsers() {
                   ) : '—'}
                 </td>
 
-                {/* Stop controls */}
+                {/* Actions */}
                 <td className="px-3 py-2.5">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {u.active_session_id && (<>
-                      <button
-                        className="text-[10px] px-2 py-0.5 rounded bg-white/[0.06] text-white/40 hover:text-white/70 hover:bg-white/10 transition-colors disabled:opacity-30"
-                        onClick={() => handleStop(u.id, 'soft')}
-                        disabled={stopping === u.id + 'soft'}
-                      >
-                        soft stop
-                      </button>
-                      <button
-                        className="text-[10px] px-2 py-0.5 rounded bg-red-500/10 text-red-400/60 hover:text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-30"
-                        onClick={() => handleStop(u.id, 'hard')}
-                        disabled={stopping === u.id + 'hard'}
-                      >
-                        hard stop
-                      </button>
-                    </>)}
-                    <button
-                      className="text-[10px] px-2 py-0.5 rounded bg-red-900/30 text-red-400/50 hover:text-red-300 hover:bg-red-900/50 border border-red-500/20 transition-colors"
-                      onClick={() => setNuclearUser(u)}
-                      title="Cancel orders and/or taker-sell positions directly on Polymarket"
-                    >
-                      ☢ nuclear
-                    </button>
-                    <BridgePolButton userId={u.id} />
-                  </div>
+                  <ActionsDropdown
+                    user={u}
+                    onStop={(mode) => handleStop(u.id, mode)}
+                    stopping={stopping === u.id + 'soft' || stopping === u.id + 'hard'}
+                    onNuclear={() => setNuclearUser(u)}
+                  />
                 </td>
               </tr>
             ))}
