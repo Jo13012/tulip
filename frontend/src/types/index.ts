@@ -73,8 +73,10 @@ export interface AdminUser {
   bot_pnl:             number
   wallet_address:      string | null
   proxy_address:       string | null
+  wallet_id:           string | null
   onboarding_complete: boolean
   onboarding_completed_at: string | null
+  v2_migration_done:   boolean
   wallet_usdc:         number | null   // live Arb USDC balance
   wallet_eth:          number | null   // live Arb ETH balance
   wallet_pol:          number | null   // live Polygon POL balance (gas)

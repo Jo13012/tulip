@@ -499,6 +499,39 @@ function GrantFreeFeeCell({ user, onUpdated }: {
   )
 }
 
+function MigrateV2Button({ userId }: { userId: string }) {
+  const [loading, setLoading] = useState(false)
+  const addToast = useAppStore(s => s.addToast)
+
+  const handle = async () => {
+    if (loading) return
+    setLoading(true)
+    try {
+      const r: any = await api.admin.migrateV2(userId)
+      if (r?.ok) {
+        addToast({ type: 'success', message: `V2 migration done${r.tx_hash ? ' · ' + r.tx_hash.slice(0, 10) + '…' : ''}` })
+      } else {
+        addToast({ type: 'error', message: r?.detail || r?.error || 'Migration failed' })
+      }
+    } catch (e: any) {
+      addToast({ type: 'error', message: e?.message || 'Migration error' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <button
+      className="text-[10px] px-2 py-0.5 rounded bg-purple-900/20 text-purple-400/60 hover:text-purple-300 hover:bg-purple-900/40 border border-purple-500/20 transition-colors disabled:opacity-30"
+      onClick={handle}
+      disabled={loading}
+      title="Re-run V2 token approvals (pUSD + CTF × 3 spenders)"
+    >
+      {loading ? '…' : 'v2 migrate'}
+    </button>
+  )
+}
+
 function BridgePolButton({ userId }: { userId: string }) {
   const [loading, setLoading] = useState(false)
   const addToast = useAppStore(s => s.addToast)

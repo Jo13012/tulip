@@ -238,6 +238,7 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
             "proxy_address":       wallet.proxy_address if wallet else None,
             "onboarding_complete": wallet.onboarding_complete if wallet else False,
             "onboarding_completed_at": wallet.onboarding_completed_at.isoformat() if wallet and wallet.onboarding_completed_at else None,
+            "v2_migration_done":   wallet.v2_migration_done if wallet else False,
             "wallet_usdc":         bal.wallet_usdc,
             "wallet_eth":          bal.wallet_eth,
             "wallet_pol":          bal.wallet_pol,
@@ -563,3 +564,64 @@ async def bridge_pol(user_id: str, db: DbSession, admin: AdminUser):
     await db.commit()
 
     return result
+
+
+@router.post("/{user_id}/migrate-v2")
+async def migrate_v2(user_id: str, db: DbSession, admin: AdminUser):
+    """Re-run V2 token approvals (pUSD + CTF × 3 spenders) for the user's Safe."""
+    import httpx as _httpx
+    from app.services.polymarket_onboarding_service import (
+        _build_approval_txns, _encode_multisend, _get_safe_nonce,
+        _sign_safe_tx, _relayer_post_authed, _poll_transaction,
+        SAFE_MULTISEND, ZERO_ADDRESS,
+    )
+
+    w_q = await db.execute(
+        select(Wallet).where(Wallet.user_id == user_id, Wallet.is_primary == True).limit(1)
+    )
+    wallet = w_q.scalars().first()
+    if not wallet or not wallet.privy_wallet_id or not wallet.wallet_address or not wallet.proxy_address:
+        raise HTTPException(400, "No primary wallet")
+
+    privy_wallet_id = wallet.privy_wallet_id
+    eoa_address     = wallet.wallet_address
+    safe_address    = wallet.proxy_address
+
+    try:
+        async with _httpx.AsyncClient(timeout=60.0, trust_env=False) as http:
+            txns = _build_approval_txns()
+            multisend_data = _encode_multisend(txns)
+            agg = {"to": SAFE_MULTISEND, "data": multisend_data, "value": "0", "operation": 1}
+
+            nonce = await _get_safe_nonce(http, safe_address)
+            sig   = await _sign_safe_tx(privy_wallet_id, safe_address,
+                                        agg["to"], agg["data"], agg["value"], 1, nonce)
+            body = {
+                "from": eoa_address, "to": agg["to"], "proxyWallet": safe_address,
+                "data": agg["data"], "nonce": nonce, "signature": sig,
+                "signatureParams": {"gasPrice": "0", "operation": "1",
+                                    "safeTxnGas": "0", "baseGas": "0",
+                                    "gasToken": ZERO_ADDRESS, "refundReceiver": ZERO_ADDRESS},
+                "type": "SAFE", "metadata": "v2 migration approvals",
+            }
+            resp = await _relayer_post_authed(http, "/submit", body)
+            tx_id = resp.get("transactionID")
+            if not tx_id:
+                raise HTTPException(500, f"Relayer no tx_id: {resp}")
+            result = await _poll_transaction(http, tx_id, max_polls=30)
+            if not result:
+                raise HTTPException(500, "Approvals tx timeout")
+
+        wallet.v2_migration_done = True
+        db.add(AuditLog(
+            actor_id=admin["sub"], actor_role="admin",
+            action="user.migrate_v2", entity_type="user", entity_id=user_id,
+            detail=f"safe={safe_address[:12]} tx={result.get('transactionHash', '')[:16]}",
+        ))
+        await db.commit()
+        return {"ok": True, "tx_hash": result.get("transactionHash")}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
