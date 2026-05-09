@@ -311,11 +311,6 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
   )
 }
 
-function truncAddr(addr: string | null): string {
-  if (!addr) return '—'
-  return `${addr.slice(0, 6)}…${addr.slice(-4)}`
-}
-
 function fmtEth(v: number | null): string {
   if (v == null) return '—'
   return v.toFixed(5)

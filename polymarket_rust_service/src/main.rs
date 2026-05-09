@@ -294,7 +294,8 @@ async fn client_open(
         )
         .await
         .map_err(|e| {
-            tracing::error!("live client init failed (detail): {:?}", e);
+            let short = format!("{e}").chars().take(120).collect::<String>();
+            tracing::error!("[open] {} — {}", &body.wallet_address[..body.wallet_address.len().min(10)], short);
             AppError::Internal(format!("live client init failed: {e:#}"))
         })?;
 
@@ -333,19 +334,32 @@ async fn client_ensure_sell_allowance(State(state): State<AppState>, Json(body):
 async fn client_place_limit_order(State(state): State<AppState>, Json(body): Json<PlaceLimitOrderRequest>) -> AppResult<Json<Value>> {
     let tick = body.tick_size.as_deref();
     let neg_risk = body.neg_risk.unwrap_or(false);
+    let token_short = &body.token_id[..body.token_id.len().min(12)];
+    let client_short = &body.client_id[..body.client_id.len().min(8)];
     let resp = get_client(&state, &body.client_id)?
         .place_limit_order(&body.token_id, body.price, body.size, &body.side, tick, neg_risk).await
         .map_err(|e| {
             let msg = format!("{e:#}");
-            tracing::error!("place_limit_order failed (detail): {msg}");
-            // Propagate Polymarket CLOB rejections as 400 Bad Request so Python can read the actual error
+            let msg_lc = msg.to_lowercase();
             let is_poly_rejection = ["not enough balance", "balance is not enough", "not enough allowance",
                 "lower than minimum", "insufficient", "400", "bad request", "orderbook is closed",
                 "maker address not allowed", "not allowed", "unauthorized maker"]
-                .iter().any(|kw| msg.to_lowercase().contains(kw));
+                .iter().any(|kw| msg_lc.contains(kw));
+            // Extract first meaningful error fragment (skip chain prefixes)
+            let short_err = msg.lines()
+                .find(|l| l.contains('{') || l.contains("error") || l.contains("Error"))
+                .unwrap_or(&msg)
+                .chars().take(120).collect::<String>();
             if is_poly_rejection {
+                // balance/allowance errors are noisy and handled by Python — log at warn, compact
+                if msg_lc.contains("balance") || msg_lc.contains("allowance") {
+                    tracing::warn!("[order] {} {} {:.4}@{:.4} — balance/allowance rejected", client_short, body.side, body.size, body.price);
+                } else {
+                    tracing::warn!("[order] {} {} {:.4}@{:.4} tok={} — {}", client_short, body.side, body.size, body.price, token_short, short_err);
+                }
                 AppError::BadRequest(format!("place_limit_order failed: {msg}"))
             } else {
+                tracing::error!("[order] {} {} {:.4}@{:.4} tok={} — {}", client_short, body.side, body.size, body.price, token_short, short_err);
                 AppError::Internal(format!("place_limit_order failed: {msg}"))
             }
         })?;
