@@ -83,6 +83,12 @@ async def _get_nonce_onchain(http: httpx.AsyncClient, safe_address: str) -> str:
     return str(int(result, 16)) if result and result not in ("0x", "") else "0"
 
 
+async def _get_eoa_tx_count_pending(http: httpx.AsyncClient, eoa_address: str) -> int:
+    """EOA tx count including pending mempool — reflects Privy's internal nonce state."""
+    result = await _rpc_call(http, "eth_getTransactionCount", [eoa_address, "pending"])
+    return int(result, 16) if result and result not in ("0x", "") else 0
+
+
 async def _wait_tx(http: httpx.AsyncClient, tx_hash: str, polls: int = 30) -> dict | None:
     import asyncio
     for _ in range(polls):
@@ -382,8 +388,8 @@ async def redeem_all_neg_risk(
                     tx_hash = h
                     seq_nonce += 1
                 else:
-                    # tx may still be in mempool — increment anyway to avoid collision
-                    seq_nonce += 1
+                    # tx reverted — Safe nonce did NOT increment, re-read on-chain to stay in sync
+                    seq_nonce = int(await _get_nonce_onchain(http, safe_address))
                     failed += 1
 
             if failed == 0:
