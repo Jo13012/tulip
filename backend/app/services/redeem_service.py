@@ -207,6 +207,7 @@ async def _direct_exec(
 
     if nonce is None:
         nonce = await _get_nonce_onchain(http, safe_address)
+    log.info("direct_exec: safe=%s to=%s nonce=%s op=%d", safe_address[:12], to[:12], nonce, operation)
     safe_tx_hash = _hash_safe_tx(safe_address, to, calldata, "0", operation, nonce)
     prefixed = keccak(b"\x19Ethereum Signed Message:\n32" + safe_tx_hash)
     raw_sig = await privy_wallet_service.secp256k1_sign(privy_wallet_id, "0x" + prefixed.hex())
@@ -371,39 +372,24 @@ async def redeem_all_neg_risk(
                 result["ok"] = True
                 return result
 
-            # Submit each redeem via relayer (same as migrate_v2 / binary redeems)
-            # Relayer manages nonce internally — no GS013/GS026
+            # Direct exec — relayer PRECHECK rejects neg-risk tokens (zero balance on CTF).
+            # Wait for each tx receipt before sending next to keep Safe nonce in sync.
+            import asyncio as _asyncio
             tx_hash = None
             failed = 0
+            seq_nonce = int(await _get_nonce_onchain(http, safe_address))
+            log.info("batch_neg_risk: starting direct exec nonce=%d calls=%d", seq_nonce, len(calls))
             for to, cd in calls:
-                nonce = await _get_safe_nonce(http, safe_address)
-                sig = await _sign_safe_tx(privy_wallet_id, safe_address, to, cd, "0", 0, nonce)
-                body = {
-                    "from": eoa_address, "to": to, "proxyWallet": safe_address,
-                    "data": cd, "nonce": nonce, "signature": sig,
-                    "signatureParams": {
-                        "gasPrice": "0", "operation": "0",
-                        "safeTxnGas": "0", "baseGas": "0",
-                        "gasToken": ZERO_ADDRESS, "refundReceiver": ZERO_ADDRESS,
-                    },
-                    "type": "SAFE",
-                }
-                try:
-                    resp = await _relayer_post_authed(http, "/submit", body)
-                    tx_id = resp.get("transactionID")
-                    if not tx_id:
-                        log.error("batch_neg_risk: relayer no tx_id resp=%s", str(resp)[:120])
-                        failed += 1
-                        continue
-                    result_tx = await _poll_transaction(http, tx_id, max_polls=30)
-                    if result_tx and result_tx.get("transactionHash"):
-                        tx_hash = result_tx["transactionHash"]
-                        log.info("batch_neg_risk: OK tx=%s", tx_hash)
-                    else:
-                        log.error("batch_neg_risk: poll timeout tx_id=%s", tx_id)
-                        failed += 1
-                except Exception as e:
-                    log.error("batch_neg_risk: relayer error: %s", e)
+                h = await _direct_exec(http, privy_wallet_id, eoa_address, safe_address,
+                                       to, cd, nonce=str(seq_nonce))
+                if h:
+                    tx_hash = h
+                    seq_nonce += 1
+                else:
+                    # revert: Safe nonce unchanged, re-read to stay in sync then pause
+                    await _asyncio.sleep(3)
+                    seq_nonce = int(await _get_nonce_onchain(http, safe_address))
+                    log.warning("batch_neg_risk: tx failed, re-read nonce=%d", seq_nonce)
                     failed += 1
 
             if failed == 0:
