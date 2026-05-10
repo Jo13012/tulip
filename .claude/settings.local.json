@@ -90,7 +90,8 @@
       "Bash(curl -s \"https://api.polygonscan.com/api?module=account&action=tokentx&address=0x585C25A57E06C8c6014644075f2A2467Ed5a2AC5&contractaddress=0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174&sort=desc&apikey=YourApiKeyToken\")",
       "Bash(curl -s \"https://api.etherscan.io/v2/api?chainid=137&module=account&action=tokentx&address=0x585C25A57E06C8c6014644075f2A2467Ed5a2AC5&sort=desc&page=1&offset=20\")",
       "Bash(curl -s \"https://polygon-bor-rpc.publicnode.com\" -X POST -H \"Content-Type: application/json\" -d \"{\\\\\"jsonrpc\\\\\":\\\\\"2.0\\\\\",\\\\\"method\\\\\":\\\\\"eth_getLogs\\\\\",\\\\\"params\\\\\":[{\\\\\"fromBlock\\\\\":\\\\\"0x40000000\\\\\",\\\\\"toBlock\\\\\":\\\\\"latest\\\\\",\\\\\"address\\\\\":\\\\\"0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174\\\\\",\\\\\"topics\\\\\":[\\\\\"0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef\\\\\",null,\\\\\"0x000000000000000000000000585C25A57E06C8c6014644075f2A2467Ed5a2AC5\\\\\"],\\\\\"limit\\\\\":5}],\\\\\"id\\\\\":1}\")",
-      "Bash(curl -s https://polygon-bor-rpc.publicnode.com -X POST -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"eth_call\",\"params\":[{\"to\":\"0x585C25A57E06C8c6014644075f2A2467Ed5a2AC5\",\"data\":\"0xaffed0e0\"},\"latest\"],\"id\":1}')"
+      "Bash(curl -s https://polygon-bor-rpc.publicnode.com -X POST -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"eth_call\",\"params\":[{\"to\":\"0x585C25A57E06C8c6014644075f2A2467Ed5a2AC5\",\"data\":\"0xaffed0e0\"},\"latest\"],\"id\":1}')",
+      "Bash(journalctl -u tulip-backend --no-pager --since \"2026-05-09 00:00:00\")"
     ]
   }
 }

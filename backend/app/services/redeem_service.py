@@ -79,14 +79,12 @@ async def _is_approved_for_all(http: httpx.AsyncClient, owner: str, operator: st
 
 
 async def _get_nonce_onchain(http: httpx.AsyncClient, safe_address: str) -> str:
-    result = await _rpc_call(http, "eth_call", [{"to": safe_address, "data": "0xaffed0e0"}, "latest"])
-    return str(int(result, 16)) if result and result not in ("0x", "") else "0"
-
-
-async def _get_eoa_tx_count_pending(http: httpx.AsyncClient, eoa_address: str) -> int:
-    """EOA tx count including pending mempool — reflects Privy's internal nonce state."""
-    result = await _rpc_call(http, "eth_getTransactionCount", [eoa_address, "pending"])
-    return int(result, 16) if result and result not in ("0x", "") else 0
+    # Try pending first (accounts for txs in mempool), fall back to latest
+    for block in ("pending", "latest"):
+        result = await _rpc_call(http, "eth_call", [{"to": safe_address, "data": "0xaffed0e0"}, block])
+        if result and result not in ("0x", ""):
+            return str(int(result, 16))
+    return "0"
 
 
 async def _wait_tx(http: httpx.AsyncClient, tx_hash: str, polls: int = 30) -> dict | None:
