@@ -79,7 +79,10 @@
       "Bash(python3 -c \"import hashlib; sig='wrap\\(address,address,uint256\\)'.encode\\(\\); h=hashlib.sha3_256\\(sig\\).digest\\(\\)[:4]; print\\(h.hex\\(\\)\\)\")",
       "WebFetch(domain:www.coingecko.com)",
       "WebFetch(domain:app.uniswap.org)",
-      "WebFetch(domain:info.uniswap.org)"
+      "WebFetch(domain:info.uniswap.org)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }

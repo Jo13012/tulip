@@ -367,8 +367,13 @@ async def redeem_all_neg_risk(
                 return result
 
             # Sequential direct exec — Multisend delegatecall blocked by Safe guard
-            # Read nonce once and increment manually to avoid GS013 on slow networks
-            seq_nonce = int(await _get_nonce_onchain(http, safe_address))
+            # Use relayer nonce (not on-chain) — Privy tracks relayer nonce internally,
+            # and GS026 fires when we send a nonce lower than what Privy expects.
+            relayer_nonce = int(await _get_safe_nonce(http, safe_address))
+            onchain_nonce = int(await _get_nonce_onchain(http, safe_address))
+            seq_nonce = max(relayer_nonce, onchain_nonce)
+            log.info("batch_neg_risk: relayer_nonce=%d onchain_nonce=%d using=%d",
+                     relayer_nonce, onchain_nonce, seq_nonce)
             tx_hash = None
             failed = 0
             for to, cd in calls:
