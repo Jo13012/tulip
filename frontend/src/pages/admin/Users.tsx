@@ -419,7 +419,7 @@ function RedeemModal({ user, onClose }: { user: AdminUser; onClose: () => void }
                 <p className="text-[10px] text-emerald-400/80 font-semibold">{fmtDollar(totalUsd)} total</p>
               </div>
               {positions.map(pos => {
-                const collateral = pos.condition_id ? 'pUSD' : 'USDC.e'
+                const collateral = pos.collateral_type || (pos.condition_id ? 'pUSD' : 'USDC.e')
                 return (
                   <div key={pos.token_id} className="flex items-center gap-2 px-3 py-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5">
                     <div className="w-5 h-5 rounded bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center shrink-0">

@@ -459,6 +459,62 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
         # Build lookup by token_id from raw_positions (data-api already has redeemable + condition_id)
         pos_by_tid = {p["token_id"]: p for p in raw_positions if p.get("token_id")}
 
+        # For resolved positions, check on-chain which contract holds the tokens (NEG_RISK vs CTF)
+        # to determine collateral type accurately (pUSD vs USDC.e)
+        safe_address = None
+        try:
+            from app.db.models import Wallet as WalletModel
+            wallet_row = await db.execute(
+                select(WalletModel).where(WalletModel.user_id == user_id)
+            )
+            wallet_obj = wallet_row.scalar_one_or_none()
+            if wallet_obj:
+                safe_address = wallet_obj.safe_address
+        except Exception:
+            pass
+
+        resolved_collateral: dict[str, str] = {}
+        resolved_tids = [
+            p["token_id"] for p in raw_positions
+            if p.get("redeemable") and p.get("token_id") and float(p.get("size") or 0) >= 0.01
+        ]
+        if resolved_tids and safe_address:
+            import httpx
+            from eth_abi import encode as abi_encode
+            from eth_utils import to_checksum_address
+            NEG_RISK_ADDR = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
+            CTF_ADDR      = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
+
+            async def _erc1155_bal(http: httpx.AsyncClient, contract: str, owner: str, tid: str) -> int:
+                try:
+                    data = "0x00fdd58e" + abi_encode(
+                        ["address", "uint256"],
+                        [to_checksum_address(owner), int(tid)],
+                    ).hex()
+                    r = await http.post(
+                        "https://polygon-bor-rpc.publicnode.com",
+                        json={"jsonrpc": "2.0", "method": "eth_call",
+                              "params": [{"to": contract, "data": data}, "latest"], "id": 1},
+                        timeout=5.0,
+                    )
+                    result = r.json().get("result")
+                    return int(result, 16) if result and result not in ("0x", "") else 0
+                except Exception:
+                    return 0
+
+            async def _check_collateral(tid: str) -> tuple[str, str]:
+                async with httpx.AsyncClient(trust_env=False) as http:
+                    neg_bal = await _erc1155_bal(http, NEG_RISK_ADDR, safe_address, tid)
+                    if neg_bal > 0:
+                        return tid, "pUSD"
+                    ctf_bal = await _erc1155_bal(http, CTF_ADDR, safe_address, tid)
+                    if ctf_bal > 0:
+                        return tid, "USDC.e"
+                    return tid, "pUSD"  # default: newer markets use pUSD
+
+            collateral_results = await asyncio.gather(*[_check_collateral(tid) for tid in resolved_tids])
+            resolved_collateral = dict(collateral_results)
+
         positions_list = []
         for pos in raw_positions:
             tid = pos.get("token_id") or ""
@@ -468,16 +524,18 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
             cur = float(pos.get("cur_price") or 0)
             mid = mids.get(tid, cur)
             price = float(mid) if float(mid) > 0 else cur
+            is_resolved = bool(pos.get("redeemable"))
             positions_list.append({
-                "token_id":     tid,
-                "question":     (pos.get("question") or "").strip(),
-                "outcome":      pos.get("outcome") or "",
-                "balance":      round(bal, 4),
-                "mid":          round(price, 4),
-                "value_usd":    round(bal * price, 2),
-                "resolved":     bool(pos.get("redeemable")),
-                "condition_id": pos.get("condition_id") or "",
-                "icon":         pos.get("icon") or "",
+                "token_id":       tid,
+                "question":       (pos.get("question") or "").strip(),
+                "outcome":        pos.get("outcome") or "",
+                "balance":        round(bal, 4),
+                "mid":            round(price, 4),
+                "value_usd":      round(bal * price, 2),
+                "resolved":       is_resolved,
+                "condition_id":   pos.get("condition_id") or "",
+                "icon":           pos.get("icon") or "",
+                "collateral_type": resolved_collateral.get(tid, "") if is_resolved else "",
             })
 
         total_value_usd = round(sum(p["value_usd"] for p in positions_list), 2)
