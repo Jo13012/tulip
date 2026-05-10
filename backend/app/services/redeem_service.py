@@ -370,25 +370,36 @@ async def redeem_all_neg_risk(
                 result["ok"] = True
                 return result
 
-            # Sequential direct exec — Multisend delegatecall blocked by Safe guard
-            # Use relayer nonce (not on-chain) — Privy tracks relayer nonce internally,
-            # and GS026 fires when we send a nonce lower than what Privy expects.
-            relayer_nonce = int(await _get_safe_nonce(http, safe_address))
-            onchain_nonce = int(await _get_nonce_onchain(http, safe_address))
-            seq_nonce = max(relayer_nonce, onchain_nonce)
-            log.info("batch_neg_risk: relayer_nonce=%d onchain_nonce=%d using=%d",
-                     relayer_nonce, onchain_nonce, seq_nonce)
+            # Try relayer first (no nonce management needed), fall back to direct exec
             tx_hash = None
             failed = 0
+            direct_calls: list[tuple[str, str]] = []
+
             for to, cd in calls:
-                h = await _direct_exec(http, privy_wallet_id, eoa_address, safe_address, to, cd, nonce=str(seq_nonce))
-                if h:
-                    tx_hash = h
-                    seq_nonce += 1
+                cur_nonce = await _get_safe_nonce(http, safe_address)
+                mined = await _relayer_exec(
+                    http, privy_wallet_id, eoa_address, safe_address, to, cd, cur_nonce
+                )
+                if mined and mined.get("transactionHash"):
+                    tx_hash = mined["transactionHash"]
+                    log.info("batch_neg_risk: relayer OK tx=%s", tx_hash)
                 else:
-                    # tx reverted — Safe nonce did NOT increment, re-read on-chain to stay in sync
-                    seq_nonce = int(await _get_nonce_onchain(http, safe_address))
-                    failed += 1
+                    log.info("batch_neg_risk: relayer rejected, queuing for direct exec")
+                    direct_calls.append((to, cd))
+
+            # Direct exec for any that relayer rejected
+            if direct_calls:
+                onchain_nonce = int(await _get_nonce_onchain(http, safe_address))
+                log.info("batch_neg_risk: direct exec %d calls nonce=%d", len(direct_calls), onchain_nonce)
+                seq_nonce = onchain_nonce
+                for to, cd in direct_calls:
+                    h = await _direct_exec(http, privy_wallet_id, eoa_address, safe_address, to, cd, nonce=str(seq_nonce))
+                    if h:
+                        tx_hash = h
+                        seq_nonce += 1
+                    else:
+                        seq_nonce = int(await _get_nonce_onchain(http, safe_address))
+                        failed += 1
 
             if failed == 0:
                 result["ok"] = True
