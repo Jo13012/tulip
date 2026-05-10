@@ -35,6 +35,8 @@ pub struct ClientOpenRequest {
     pub signature_type: Option<i32>,
     /// V2: bytes32 hex string, e.g. "0xabc...". Overrides Settings.builder_code if provided.
     pub builder_code: Option<String>,
+    /// Human-readable label for logs (display_name or username)
+    pub display_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -70,6 +72,8 @@ pub struct PlaceLimitOrderRequest {
     pub side: String,
     pub tick_size: Option<String>,
     pub neg_risk: Option<bool>,
+    /// Human-readable slot label for logs
+    pub slot_label: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

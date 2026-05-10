@@ -1018,6 +1018,7 @@ class SessionSlotRuntime:
             side="BUY",
             tick_size=m.tick_size or "0.001",
             neg_risk=m.neg_risk,
+            slot_label=(m.question or "")[:30],
         )
         order_id = resp.get("orderID") or resp.get("order_id") or "?"
         status   = resp.get("status", "")
@@ -1055,6 +1056,7 @@ class SessionSlotRuntime:
             side="SELL",
             tick_size=m.tick_size or "0.001",
             neg_risk=m.neg_risk,
+            slot_label=(m.question or "")[:30],
         )
         order_id = resp.get("orderID") or resp.get("order_id") or "?"
         return order_id, norm(price), dust_frac

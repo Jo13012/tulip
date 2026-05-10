@@ -444,6 +444,7 @@ class SessionManager:
                 privy_wallet_id=wallet.privy_wallet_id,
                 wallet_address=wallet.wallet_address,
                 proxy_address=wallet.proxy_address or "",
+                display_name=user.display_name if user else "",
             )
             await client.initialize()
 

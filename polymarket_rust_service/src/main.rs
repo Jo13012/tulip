@@ -36,6 +36,8 @@ struct AppState {
     settings: Settings,
     http: Client,
     clients: Arc<DashMap<String, Arc<LiveClientHandle>>>,
+    // client_id → wallet_short (first 10 chars) for logging
+    wallets: Arc<DashMap<String, String>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -84,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
         settings: settings.clone(),
         http: Client::builder().use_rustls_tls().build().expect("http client"),
         clients: Arc::new(DashMap::new()),
+        wallets: Arc::new(DashMap::new()),
     };
 
     let app = Router::new()
@@ -300,6 +303,13 @@ async fn client_open(
         })?;
 
         state.clients.insert(client_id.clone(), Arc::new(handle));
+        let label = body.display_name.clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                let w = &body.wallet_address;
+                format!("{}…{}", &w[..w.len().min(6)], &w[w.len().saturating_sub(4)..])
+            });
+        state.wallets.insert(client_id.clone(), label);
     }
 
     Ok(Json(ClientOpenResponse { client_id, mode: "live".to_string() }))
@@ -307,6 +317,7 @@ async fn client_open(
 
 async fn client_close(State(state): State<AppState>, Json(body): Json<ClientIdRequest>) -> AppResult<Json<Value>> {
     state.clients.remove(&body.client_id);
+    state.wallets.remove(&body.client_id);
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -334,8 +345,10 @@ async fn client_ensure_sell_allowance(State(state): State<AppState>, Json(body):
 async fn client_place_limit_order(State(state): State<AppState>, Json(body): Json<PlaceLimitOrderRequest>) -> AppResult<Json<Value>> {
     let tick = body.tick_size.as_deref();
     let neg_risk = body.neg_risk.unwrap_or(false);
-    let token_short = &body.token_id[..body.token_id.len().min(12)];
-    let client_short = &body.client_id[..body.client_id.len().min(8)];
+    let who = state.wallets.get(&body.client_id)
+        .map(|r| r.clone())
+        .unwrap_or_else(|| body.client_id[..body.client_id.len().min(8)].to_string());
+    let slot = body.slot_label.as_deref().unwrap_or("?");
     let resp = get_client(&state, &body.client_id)?
         .place_limit_order(&body.token_id, body.price, body.size, &body.side, tick, neg_risk).await
         .map_err(|e| {
@@ -345,21 +358,19 @@ async fn client_place_limit_order(State(state): State<AppState>, Json(body): Jso
                 "lower than minimum", "insufficient", "400", "bad request", "orderbook is closed",
                 "maker address not allowed", "not allowed", "unauthorized maker"]
                 .iter().any(|kw| msg_lc.contains(kw));
-            // Extract first meaningful error fragment (skip chain prefixes)
             let short_err = msg.lines()
                 .find(|l| l.contains('{') || l.contains("error") || l.contains("Error"))
                 .unwrap_or(&msg)
-                .chars().take(120).collect::<String>();
+                .chars().take(100).collect::<String>();
             if is_poly_rejection {
-                // balance/allowance errors are noisy and handled by Python — log at warn, compact
                 if msg_lc.contains("balance") || msg_lc.contains("allowance") {
-                    tracing::warn!("[order] {} {} {:.4}@{:.4} — balance/allowance rejected", client_short, body.side, body.size, body.price);
+                    tracing::warn!("[{}] [{}] {} {:.2}@{:.4} — balance/allowance rejected", who, slot, body.side, body.size, body.price);
                 } else {
-                    tracing::warn!("[order] {} {} {:.4}@{:.4} tok={} — {}", client_short, body.side, body.size, body.price, token_short, short_err);
+                    tracing::warn!("[{}] [{}] {} {:.2}@{:.4} — {}", who, slot, body.side, body.size, body.price, short_err);
                 }
                 AppError::BadRequest(format!("place_limit_order failed: {msg}"))
             } else {
-                tracing::error!("[order] {} {} {:.4}@{:.4} tok={} — {}", client_short, body.side, body.size, body.price, token_short, short_err);
+                tracing::error!("[{}] [{}] {} {:.2}@{:.4} — {}", who, slot, body.side, body.size, body.price, short_err);
                 AppError::Internal(format!("place_limit_order failed: {msg}"))
             }
         })?;

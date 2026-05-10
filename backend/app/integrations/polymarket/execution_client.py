@@ -26,12 +26,14 @@ class ExecutionClient:
         chain_id: int = DEFAULT_CHAIN_ID,
         proxy_address: str = "",
         signature_type: int = DEFAULT_SIGNATURE_TYPE,
+        display_name: str = "",
     ):
         self._privy_wallet_id = privy_wallet_id
         self._wallet_address = wallet_address
         self._chain_id = chain_id
         self._proxy_address = proxy_address
         self._signature_type = signature_type
+        self._display_name = display_name
         self._client_id: Optional[str] = None
         self._http = httpx.AsyncClient(timeout=30.0, trust_env=False)
         self._initialized = False
@@ -52,6 +54,7 @@ class ExecutionClient:
                     "proxy_address": self._proxy_address or None,
                     "signature_type": self._signature_type,
                     "builder_code": settings.POLYMARKET_BUILDER_CODE or None,
+                    "display_name": self._display_name or None,
                 },
             )
             if not resp.is_success:
@@ -124,6 +127,7 @@ class ExecutionClient:
         side: str,
         tick_size: str = "0.001",
         neg_risk: bool = False,
+        slot_label: str = "",
     ) -> dict:
         await self._ensure_ready()
         try:
@@ -137,6 +141,7 @@ class ExecutionClient:
                     "side": side,
                     "tick_size": tick_size,
                     "neg_risk": neg_risk,
+                    "slot_label": slot_label or None,
                 },
             )
             if not resp.is_success:
