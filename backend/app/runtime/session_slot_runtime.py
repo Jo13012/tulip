@@ -274,6 +274,20 @@ class SessionSlotRuntime:
             self._poll_task.cancel()
         await self._set_state(SlotState.IDLE, reason)
 
+    async def _on_market_resolved(self):
+        """Market orderbook gone. If replacement queued → switch immediately. Else → IDLE."""
+        self._running = False
+        self._stop_new_entries = True
+        # Stop poll loop — no more fills/sells on a resolved market
+        if self._poll_task:
+            self._poll_task.cancel()
+        if self._pending_replacement:
+            await self._log("INFO", f"[MARKET] Resolved — switching to queued replacement")
+            await self._execute_switch()
+        else:
+            await self._log("WARN", f"[MARKET] Resolved — no replacement queued, slot idle (needs force-replace)")
+            await self._set_state(SlotState.IDLE, "market resolved")
+
     async def _reconcile_lots_vs_poly(self):
         """
         When waiting for replacement, check actual token balance on Poly.
@@ -573,8 +587,8 @@ class SessionSlotRuntime:
                 try:
                     book = await market_data_service.get_order_book(m.active_token_id)
                 except MarketClosedError as e:
-                    await self._log("INFO", f"[MARKET] {e} — market resolved, slot idle")
-                    await self._set_state(SlotState.IDLE, "market resolved")
+                    await self._log("INFO", f"[MARKET] {e} — market resolved")
+                    await self._on_market_resolved()
                     return
                 except Exception:
                     await asyncio.sleep(POLL_S)
@@ -994,8 +1008,8 @@ class SessionSlotRuntime:
                 await self._log("ERROR", f"[BUY] Permanent error @ {h(level)}: {e} — slot to error")
                 await self._set_state(SlotState.ERROR, str(e)[:120])
             elif "does not exist" in err_str and "orderbook" in err_str:
-                await self._log("INFO", f"[BUY] Orderbook gone @ {h(level)} — market resolved, slot idle")
-                await self._set_state(SlotState.IDLE, "market resolved")
+                await self._log("INFO", f"[BUY] Orderbook gone @ {h(level)} — market resolved")
+                await self._on_market_resolved()
                 return
             elif "not enough balance" in err_str or "balance is not enough" in err_str:
                 await self._log("WARN", f"[BUY] Balance unavailable @ {h(level)} — retry in {BUY_FAIL_COOLDOWN:.0f}s")

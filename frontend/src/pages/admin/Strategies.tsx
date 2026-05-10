@@ -1241,28 +1241,32 @@ function StrategyDetail({ onRefreshList }: { onRefreshList?: () => void }) {
             <div className="px-4 py-8 text-center text-[11px] text-white/20 animate-pulse">Loading…</div>
           ) : (
             <div className="overflow-x-auto">
-              <div className="grid grid-cols-7 gap-2 px-4 py-2 bg-white/[0.015] min-w-[520px]">
-                {['Slot', 'Alloc', 'Volume', '×', '24h Vol', 'PnL', 'Fees'].map(h => (
+              <div className="grid grid-cols-6 gap-2 px-4 py-2 bg-white/[0.015] min-w-[480px]">
+                {['Slot', 'Alloc', '24h Vol', '24h ×', '48h Vol', 'PnL'].map(h => (
                   <div key={h} className="text-[9px] font-semibold uppercase tracking-widest text-white/20">{h}</div>
                 ))}
               </div>
               {slotVol.map((sv: any) => {
-                const sessions = s?.slots?.length ?? 0
+                const x24 = sv.alloc_pct > 0 && sv.daily_volume > 0
+                  ? (sv.daily_volume / sv.alloc_pct).toFixed(1)
+                  : null
+                const x48 = sv.alloc_pct > 0 && sv.volume_48h > 0
+                  ? (sv.volume_48h / sv.alloc_pct).toFixed(1)
+                  : null
                 return (
-                  <div key={sv.slot_id} className="grid grid-cols-7 gap-2 px-4 py-2.5 border-t border-white/[0.04] hover:bg-white/[0.02] min-w-[520px]">
+                  <div key={sv.slot_id} className="grid grid-cols-6 gap-2 px-4 py-2.5 border-t border-white/[0.04] hover:bg-white/[0.02] min-w-[480px]">
                     <div className="text-[11px] font-mono text-white/60 truncate">{sv.label || sv.slot_id.slice(0, 8)}</div>
                     <div className="text-[10px] font-mono text-white/30">{sv.alloc_pct}%</div>
-                    <div className="text-[11px] font-mono text-white/50 tabular-nums">{fmtUsd(sv.total_volume, 0)}</div>
-                    <div className="text-[10px] font-mono text-white/30 tabular-nums">
-                      {sv.alloc_pct > 0 && sv.total_volume > 0
-                        ? `${(sv.total_volume / (sv.alloc_pct)).toFixed(1)}×`
-                        : '—'}
-                    </div>
-                    <div className="text-[10px] font-mono text-white/30 tabular-nums">
+                    <div className="text-[10px] font-mono text-white/40 tabular-nums">
                       {sv.daily_volume > 0 ? fmtUsd(sv.daily_volume, 0) : '—'}
                     </div>
+                    <div className="text-[10px] font-mono text-white/30 tabular-nums">
+                      {x24 ? `${x24}×` : '—'}
+                    </div>
+                    <div className="text-[10px] font-mono text-white/30 tabular-nums">
+                      {sv.volume_48h > 0 ? fmtUsd(sv.volume_48h, 0) : '—'}
+                    </div>
                     <div className={`text-[11px] font-mono font-semibold tabular-nums ${pnlColor(sv.total_pnl)}`}>{fmtUsd(sv.total_pnl)}</div>
-                    <div className="text-[10px] font-mono text-white/25 tabular-nums">{fmtUsd(sv.total_fees)}</div>
                   </div>
                 )
               })}

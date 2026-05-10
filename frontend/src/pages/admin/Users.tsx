@@ -27,6 +27,7 @@ interface PolyPosition {
   value_usd: number
   resolved: boolean
   condition_id?: string
+  collateral_type?: string
 }
 
 function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void }) {
@@ -311,6 +312,155 @@ function NuclearModal({ user, onClose }: { user: AdminUser; onClose: () => void 
   )
 }
 
+// ── Redeem Only Modal ────────────────────────────────────────────────────────
+
+function RedeemModal({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+  const [loading, setLoading]     = useState(true)
+  const [executing, setExecuting] = useState(false)
+  const [positions, setPositions] = useState<PolyPosition[]>([])
+  const [result, setResult]       = useState<any>(null)
+  const addToast = useAppStore(s => s.addToast)
+
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const d: any = await api.admin.getUserPolyState(user.id)
+        const resolved = (d.positions || []).filter((p: PolyPosition) => p.resolved)
+        setPositions(resolved)
+      } catch (e: any) {
+        addToast({ type: 'error', message: e.message })
+        onClose()
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [])
+
+  const totalUsd = positions.reduce((s, p) => s + p.balance, 0)
+
+  async function execute() {
+    setExecuting(true)
+    try {
+      const res: any = await api.admin.nuclearClose(user.id, {
+        cancel_orders: false,
+        cancel_order_ids: [],
+        sell_token_ids: positions.map(p => p.token_id),
+      })
+      setResult(res)
+      const n = res.redeemed_positions?.length ?? 0
+      addToast({ type: 'success', message: `Redeemed: ${n} position${n !== 1 ? 's' : ''}` })
+    } catch (e: any) {
+      addToast({ type: 'error', message: e.message })
+    } finally {
+      setExecuting(false)
+    }
+  }
+
+  const fmtDollar = (v: number) => '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
+      <div
+        className="bg-[#0d0e10] border border-white/[0.08] rounded-2xl w-full max-w-md mx-4 p-5 space-y-4 max-h-[85vh] overflow-y-auto"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-semibold text-emerald-400">Redeem positions</p>
+            <p className="text-[10px] text-white/30">{user.display_name || user.id}</p>
+          </div>
+          <button className="text-white/30 hover:text-white/70 text-sm" onClick={onClose}>✕</button>
+        </div>
+
+        {loading ? (
+          <p className="text-[11px] text-white/30 text-center py-8">Fetching positions…</p>
+
+        ) : result ? (
+          <div className="space-y-3">
+            <p className="text-[11px] text-emerald-400 font-semibold">Done</p>
+            {result.redeemed_positions?.map((p: any, i: number) => (
+              <div key={i} className={`flex items-center justify-between px-3 py-2 rounded-xl border ${p.ok ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-yellow-500/5 border-yellow-500/20'}`}>
+                <div className="flex-1 min-w-0 pr-2">
+                  <p className="text-[10px] text-white/60 truncate">{p.question || p.token_id?.slice(0, 20) + '…'}</p>
+                  {p.ok && p.tx_hash && (
+                    <a href={`https://polygonscan.com/tx/${p.tx_hash}`} target="_blank" rel="noreferrer"
+                      className="text-[9px] text-emerald-400/50 hover:text-emerald-400 font-mono"
+                    >{p.tx_hash.slice(0, 14)}…</a>
+                  )}
+                  {!p.ok && p.error && <p className="text-[9px] text-yellow-400/70">{p.error.slice(0, 60)}</p>}
+                </div>
+                <p className={`text-[10px] font-semibold shrink-0 ${p.ok ? 'text-emerald-400' : 'text-yellow-400'}`}>
+                  {p.ok ? '✓ ' : '⚠ '}{fmtDollar(p.estimated_usdc ?? 0)}
+                </p>
+              </div>
+            ))}
+            {result.errors?.length > 0 && (
+              <div className="space-y-0.5">
+                {result.errors.map((e: string, i: number) => (
+                  <p key={i} className="text-[10px] text-red-400/60 font-mono">{e.slice(0, 80)}</p>
+                ))}
+              </div>
+            )}
+            <button className="text-[11px] text-white/30 hover:text-white/60 pt-1" onClick={onClose}>Close</button>
+          </div>
+
+        ) : positions.length === 0 ? (
+          <div className="text-center py-8 space-y-1">
+            <p className="text-[12px] text-white/40">No resolved positions</p>
+            <p className="text-[10px] text-white/20">Only resolved (winning) positions can be redeemed</p>
+            <button className="mt-3 text-[11px] text-white/30 hover:text-white/60" onClick={onClose}>Close</button>
+          </div>
+
+        ) : (
+          <>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] text-white/30 font-semibold uppercase tracking-wider">Resolved positions</p>
+                <p className="text-[10px] text-emerald-400/80 font-semibold">{fmtDollar(totalUsd)} total</p>
+              </div>
+              {positions.map(pos => {
+                const collateral = pos.condition_id ? 'pUSD' : 'USDC.e'
+                return (
+                  <div key={pos.token_id} className="flex items-center gap-2 px-3 py-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5">
+                    <div className="w-5 h-5 rounded bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center shrink-0">
+                      <span className="text-[9px] text-emerald-400 font-bold">$</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-[11px] text-white/80 truncate flex-1">{pos.question || pos.token_id.slice(0, 20) + '…'}</p>
+                        {pos.outcome && <span className="text-[9px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded shrink-0">{pos.outcome}</span>}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <p className="text-[10px] text-emerald-400 font-semibold">{fmtDollar(pos.balance)}</p>
+                        <span className="text-[9px] text-white/30">{pos.balance.toFixed(2)} tokens × $1.00</span>
+                        <span className="text-[9px] text-white/25 bg-white/[0.05] px-1.5 py-0.5 rounded font-mono">{collateral}</span>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="px-3 py-2.5 rounded-xl bg-emerald-500/5 border border-emerald-500/20">
+              <p className="text-[10px] text-emerald-400/70">
+                Winning positions — each token redeems at $1.00 on-chain via Safe.
+              </p>
+            </div>
+
+            <button
+              className="w-full py-2.5 rounded-xl bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 text-[11px] font-semibold hover:bg-emerald-500/30 transition-colors disabled:opacity-40"
+              onClick={execute}
+              disabled={executing}
+            >
+              {executing ? 'Redeeming…' : `Redeem ${positions.length} position${positions.length !== 1 ? 's' : ''} — ${fmtDollar(totalUsd)}`}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function fmtEth(v: number | null): string {
   if (v == null) return '—'
   return v.toFixed(5)
@@ -495,11 +645,12 @@ function GrantFreeFeeCell({ user, onUpdated }: {
   )
 }
 
-function ActionsMenu({ user, onClose, onStop, onNuclear }: {
+function ActionsMenu({ user, onClose, onStop, onNuclear, onRedeem }: {
   user: AdminUser
   onClose: () => void
   onStop: (mode: 'soft' | 'hard') => void
   onNuclear: () => void
+  onRedeem: () => void
 }) {
   const [busy, setBusy] = useState<string | null>(null)
   const addToast = useAppStore(s => s.addToast)
@@ -568,9 +719,10 @@ function ActionsMenu({ user, onClose, onStop, onNuclear }: {
             {item('Hard stop', 'Immediate stop, cancels all orders now', 'text-red-400/80', () => { onClose(); onStop('hard') })}
             {sep}
           </>}
+          {item('Redeem positions', 'Redeem resolved (winning) positions on-chain', 'text-emerald-400/70', () => { onClose(); onRedeem() })}
           {item('Nuclear close', 'Cancel orders + sell / redeem all positions', 'text-red-400/70', () => { onClose(); onNuclear() })}
           {sep}
-          {item('Bridge POL', 'Send $0.10 USDC (Arb) → POL on Polygon for gas', 'text-yellow-400/70', bridgePol)}
+          {item('Bridge POL', 'Send $0.50 USDC (Arb) → POL on Polygon for gas', 'text-yellow-400/70', bridgePol)}
           {item('Re-register CLOB', "Fix 'maker address not allowed': delete + recreate API key", 'text-blue-400/70', reregisterClob)}
           {item('Migrate V2', 'Re-run pUSD + CTF × 3 approval txs on Safe', 'text-purple-400/60', migrateV2)}
         </div>
@@ -585,11 +737,12 @@ function ActionsMenu({ user, onClose, onStop, onNuclear }: {
   )
 }
 
-function ActionsDropdown({ user, onStop, stopping, onNuclear }: {
+function ActionsDropdown({ user, onStop, stopping, onNuclear, onRedeem }: {
   user: AdminUser
   onStop: (mode: 'soft' | 'hard') => void
   stopping: boolean
   onNuclear: () => void
+  onRedeem: () => void
 }) {
   const [open, setOpen] = useState(false)
   const isBusy = stopping
@@ -610,6 +763,7 @@ function ActionsDropdown({ user, onStop, stopping, onNuclear }: {
           onClose={() => setOpen(false)}
           onStop={onStop}
           onNuclear={onNuclear}
+          onRedeem={onRedeem}
         />
       )}
     </>
@@ -624,6 +778,7 @@ export default function AdminUsers() {
   const [refreshing, setRefreshing] = useState(false)
   const [stopping, setStopping]       = useState<string | null>(null)
   const [nuclearUser, setNuclearUser] = useState<AdminUser | null>(null)
+  const [redeemUser, setRedeemUser]   = useState<AdminUser | null>(null)
   const [onboardedOnly, setOnboardedOnly] = useState(true)
   const [forcingReplaceAll, setForcingReplaceAll] = useState(false)
   const addToast = useAppStore(s => s.addToast)
@@ -790,10 +945,10 @@ export default function AdminUsers() {
                   {u.trading_balance != null && (u.positions_value ?? 0) + (u.redeem_value ?? 0) > 0 && (() => {
                     const avail = u.trading_balance - (u.positions_value ?? 0) - (u.redeem_value ?? 0)
                     return (
-                      <span className="ml-1 text-[10px] font-normal text-white/30">
-                        avail {fmtUsdc(avail)}
-                        {(u.redeem_value ?? 0) >= 5 && <> redeem {fmtUsdc(u.redeem_value)}</>}
-                      </span>
+                      <div className="text-[9px] font-normal text-white/30 leading-tight mt-0.5">
+                        <div>avail {fmtUsdc(avail)}</div>
+                        {(u.redeem_value ?? 0) >= 5 && <div>redeem {fmtUsdc(u.redeem_value)}</div>}
+                      </div>
                     )
                   })()}
                 </td>
@@ -839,6 +994,7 @@ export default function AdminUsers() {
                     onStop={(mode) => handleStop(u.id, mode)}
                     stopping={stopping === u.id + 'soft' || stopping === u.id + 'hard'}
                     onNuclear={() => setNuclearUser(u)}
+                    onRedeem={() => setRedeemUser(u)}
                   />
                 </td>
               </tr>
@@ -853,6 +1009,9 @@ export default function AdminUsers() {
 
       {nuclearUser && (
         <NuclearModal user={nuclearUser} onClose={() => setNuclearUser(null)} />
+      )}
+      {redeemUser && (
+        <RedeemModal user={redeemUser} onClose={() => setRedeemUser(null)} />
       )}
     </div>
   )

@@ -290,6 +290,7 @@ async def get_slot_volume_stats(db: DbSession, admin: AdminUser):
             "total_pnl":    total_pnl,
             "total_fees":   total_fees,
             "daily_volume": round(daily_vol, 2),
+            "volume_48h":   round(daily_vol * 2, 2),
             "session_count": len(session_ids),
         })
 
