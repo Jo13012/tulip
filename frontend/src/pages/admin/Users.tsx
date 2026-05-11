@@ -779,7 +779,8 @@ export default function AdminUsers() {
   const [stopping, setStopping]       = useState<string | null>(null)
   const [nuclearUser, setNuclearUser] = useState<AdminUser | null>(null)
   const [redeemUser, setRedeemUser]   = useState<AdminUser | null>(null)
-  const [onboardedOnly, setOnboardedOnly] = useState(true)
+  const [filterAccountReady, setFilterAccountReady] = useState(false)
+  const [filterFunded, setFilterFunded] = useState(false)
   const [forcingReplaceAll, setForcingReplaceAll] = useState(false)
   const addToast = useAppStore(s => s.addToast)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -851,13 +852,25 @@ export default function AdminUsers() {
             {forcingReplaceAll ? 'replacing…' : '⟳ force replace all'}
           </button>
           <button
-            className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${onboardedOnly ? 'bg-brand/20 text-brand border-brand/30' : 'bg-white/[0.04] text-white/30 border-white/10 hover:text-white/60'}`}
-            onClick={() => setOnboardedOnly(v => !v)}
-            title="Show only onboarded users"
+            className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${filterAccountReady ? 'bg-brand/20 text-brand border-brand/30' : 'bg-white/[0.04] text-white/30 border-white/10 hover:text-white/60'}`}
+            onClick={() => setFilterAccountReady(v => !v)}
+            title="Show only account-ready users"
           >
-            onboarded only
+            Account ready
           </button>
-          <span className="text-xs text-white/25">{users.filter(u => !onboardedOnly || u.onboarding_complete).length} / {users.length}</span>
+          <button
+            className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${filterFunded ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-white/[0.04] text-white/30 border-white/10 hover:text-white/60'}`}
+            onClick={() => setFilterFunded(v => !v)}
+            title="Show only funded users"
+          >
+            Funded
+          </button>
+          <span className="text-xs text-white/25">
+            {users.filter(u =>
+              (!filterAccountReady || u.account_ready) &&
+              (!filterFunded || u.is_funded)
+            ).length} / {users.length}
+          </span>
           <button
             className="text-[10px] text-white/30 hover:text-white/60 transition-colors"
             onClick={() => fetchUsers()}
@@ -881,7 +894,10 @@ export default function AdminUsers() {
             </tr>
           </thead>
           <tbody>
-            {users.filter(u => !onboardedOnly || u.onboarding_complete).map(u => (
+            {users.filter(u =>
+              (!filterAccountReady || u.account_ready) &&
+              (!filterFunded || u.is_funded)
+            ).map(u => (
               <tr key={u.id} className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
                 {/* Status dot */}
                 <td className="px-3 py-2.5">
@@ -889,11 +905,21 @@ export default function AdminUsers() {
                 </td>
 
                 {/* Name */}
-                <td className="px-3 py-2.5 text-white/70 max-w-[140px] truncate">
-                  {u.display_name || <span className="text-white/20">—</span>}
-                  {u.is_admin && (
-                    <span className="ml-1 text-[9px] text-brand/70 font-semibold">ADMIN</span>
-                  )}
+                <td className="px-3 py-2.5 max-w-[160px]">
+                  <div className="truncate text-white/70">
+                    {u.display_name || <span className="text-white/20">—</span>}
+                    {u.is_admin && (
+                      <span className="ml-1 text-[9px] text-brand/70 font-semibold">ADMIN</span>
+                    )}
+                  </div>
+                  <div className="flex gap-1 mt-0.5">
+                    {u.account_ready && (
+                      <span className="text-[8px] px-1 py-0 rounded bg-emerald-500/15 text-emerald-400 font-semibold">READY</span>
+                    )}
+                    {u.is_funded && (
+                      <span className="text-[8px] px-1 py-0 rounded bg-blue-500/15 text-blue-400 font-semibold">FUNDED</span>
+                    )}
+                  </div>
                 </td>
 
                 {/* Wallet */}
@@ -904,23 +930,13 @@ export default function AdminUsers() {
                   }
                 </td>
 
-                {/* Wallet USDC */}
-                <td className={`px-3 py-2.5 font-mono text-xs ${
-                  u.wallet_usdc == null ? 'text-white/25'
-                  : u.wallet_usdc < 2   ? 'text-red-400'
-                  : u.wallet_usdc < 10  ? 'text-yellow-400'
-                  : 'text-emerald-400'
-                }`}>
+                {/* Wallet USDC (Arb EOA — debug only) */}
+                <td className="px-3 py-2.5 font-mono text-xs text-white/20">
                   {fmtUsdc(u.wallet_usdc)}
                 </td>
 
-                {/* Wallet ETH */}
-                <td className={`px-3 py-2.5 font-mono text-xs ${
-                  u.wallet_eth == null    ? 'text-white/25'
-                  : u.wallet_eth < 0.001 ? 'text-red-400'
-                  : u.wallet_eth < 0.002 ? 'text-yellow-400'
-                  : 'text-emerald-400'
-                }`}>
+                {/* Wallet ETH (Arb EOA — debug only) */}
+                <td className="px-3 py-2.5 font-mono text-xs text-white/20">
                   {fmtEth(u.wallet_eth)}
                 </td>
 

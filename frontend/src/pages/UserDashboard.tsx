@@ -11,7 +11,6 @@ import { useAppStore } from '../store'
 import { api } from '../utils/api'
 import type { AppUser } from '../types'
 import tulipLogo from '../assets/tulip.png'
-import { FUNDING_STATUS_REFRESH_MS } from '../utils/bridge'
 
 import { RunTab } from '../components/user/RunTab'
 import { HistoryTab } from '../components/user/HistoryTab'
@@ -28,12 +27,10 @@ interface Props {
   onSignOut: () => void
 }
 
-function UserMenu({ user, usdcBalance, positionsValue, feeUsdc, feeEth, onSignOut }: {
+function UserMenu({ user, usdcBalance, positionsValue, onSignOut }: {
   user: AppUser
   usdcBalance: number | null
   positionsValue: number
-  feeUsdc: number | null
-  feeEth: number | null
   onSignOut: () => void
 }) {
   const [open, setOpen] = useState(false)
@@ -65,10 +62,9 @@ function UserMenu({ user, usdcBalance, positionsValue, feeUsdc, feeEth, onSignOu
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1.5 w-64 rounded-xl border border-white/[0.08] bg-[#0f1012] shadow-2xl z-50 overflow-hidden animate-[fadeIn_120ms_ease-out]">
-          {/* Balances */}
-          <div className="px-4 py-3 space-y-2.5 border-b border-white/[0.06]">
-            {usdcBalance != null && (
+        <div className="absolute right-0 top-full mt-1.5 w-56 rounded-xl border border-white/[0.08] bg-[#0f1012] shadow-2xl z-50 overflow-hidden animate-[fadeIn_120ms_ease-out]">
+          <div className="px-4 py-3 border-b border-white/[0.06]">
+            {usdcBalance != null ? (
               <div className="flex items-center justify-between">
                 <span className="text-[10px] text-white/30 uppercase tracking-widest font-semibold">Trading</span>
                 <span className="text-[12px] font-mono font-semibold text-white/70">
@@ -78,25 +74,10 @@ function UserMenu({ user, usdcBalance, positionsValue, feeUsdc, feeEth, onSignOu
                   )}
                 </span>
               </div>
-            )}
-            {feeUsdc != null && (
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-white/30 uppercase tracking-widest font-semibold">Wallet USDC</span>
-                <span className="text-[12px] font-mono font-semibold text-white/70">${fmt2(feeUsdc)}</span>
-              </div>
-            )}
-            {feeEth != null && (
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-white/30 uppercase tracking-widest font-semibold">Wallet ETH</span>
-                <span className="text-[12px] font-mono font-semibold text-white/50">{feeEth.toFixed(5)}</span>
-              </div>
-            )}
-            {usdcBalance == null && feeUsdc == null && feeEth == null && (
-              <span className="text-[11px] text-white/20">Loading balances…</span>
+            ) : (
+              <span className="text-[11px] text-white/20">Loading…</span>
             )}
           </div>
-
-          {/* Sign out */}
           <div className="px-2 py-1.5">
             <button
               onClick={() => { setOpen(false); onSignOut() }}
@@ -117,15 +98,8 @@ export default function UserDashboard({ user, onSignOut }: Props) {
   const [tab, setTab] = useState<Tab>('run')
   const [loading, setLoading] = useState(true)
   const [usdcBalance, setUsdcBalance] = useState<number | null>(null)
+  const [positionsValue, setPositionsValue] = useState(0)
   const [showLowBalance, setShowLowBalance] = useState(false)
-  const [feeUsdc, setFeeUsdc] = useState<number | null>(null)
-  const [feeEth, setFeeEth] = useState<number | null>(null)
-  const [needsUsdc, setNeedsUsdc] = useState(false)
-  const [needsEth, setNeedsEth] = useState(false)
-  const [warnUsdc, setWarnUsdc] = useState(false)
-  const [warnEth, setWarnEth] = useState(false)
-  const [warnDismissed, setWarnDismissed] = useState(false)
-  const [fundingMessage, setFundingMessage] = useState('')
 
   async function refreshFundingStatus() {
     let status: any
@@ -136,14 +110,8 @@ export default function UserDashboard({ user, onSignOut }: Props) {
       throw err
     }
     setFundingStatus(status)
-    setFeeUsdc(status.usdc_balance ?? null)
-    setFeeEth(status.eth_balance ?? null)
     setUsdcBalance(status.trading_balance ?? null)
-    setNeedsUsdc(Boolean(status.needs_usdc))
-    setNeedsEth(Boolean(status.needs_eth))
-    setWarnUsdc(Boolean(status.warn_usdc))
-    setWarnEth(Boolean(status.warn_eth))
-    setFundingMessage(status.message || '')
+    setPositionsValue(status.positions_value ?? 0)
   }
 
   useEffect(() => {
@@ -158,12 +126,10 @@ export default function UserDashboard({ user, onSignOut }: Props) {
         setActiveSession(session)
         refreshFundingStatus().catch(() => {})
       } catch (err: any) {
-        // Privy token not yet ready after F5 — retry up to 3 times with backoff
         if (err?.message === 'UNAUTHORIZED' && attempt < 3) {
           setTimeout(() => loadData(attempt + 1), 800 * (attempt + 1))
           return
         }
-        // Auth lost permanently — kick back to login
         if (err?.message === 'UNAUTHORIZED') {
           onSignOut()
           return
@@ -177,14 +143,11 @@ export default function UserDashboard({ user, onSignOut }: Props) {
   }, [])
 
   useEffect(() => {
-    const isFundingCritical = !fundingStatus?.onboarding_complete
-      || needsUsdc || needsEth || warnUsdc || warnEth
-    const intervalMs = isFundingCritical ? FUNDING_STATUS_REFRESH_MS : 30000
     const interval = setInterval(() => {
       refreshFundingStatus().catch(() => {})
-    }, intervalMs)
+    }, 30000)
     return () => clearInterval(interval)
-  }, [needsUsdc, needsEth, warnUsdc, warnEth, fundingStatus?.onboarding_complete])
+  }, [])
 
   useEffect(() => {
     if (usdcBalance == null) return
@@ -290,44 +253,13 @@ export default function UserDashboard({ user, onSignOut }: Props) {
           <UserMenu
             user={user}
             usdcBalance={usdcBalance}
-            positionsValue={fundingStatus?.positions_value ?? 0}
-            feeUsdc={feeUsdc}
-            feeEth={feeEth}
+            positionsValue={positionsValue}
             onSignOut={onSignOut}
           />
         </div>
       </div>
 
-      {(needsUsdc || needsEth || ((warnUsdc || warnEth) && !warnDismissed)) && (
-        <div className="px-5">
-          <div className="mt-3 mb-2 border border-amber-400/20 bg-amber-500/5 rounded-xl px-4 py-3 flex items-center justify-between gap-4 animate-[fadeIn_200ms_ease-out]">
-            <div className="text-[11px] text-amber-200/90">
-              {fundingMessage || 'Please fund your wallet to continue.'}{' '}
-              <button
-                type="button"
-                onClick={() => setTab('profile')}
-                className="underline underline-offset-2 text-amber-200/90 hover:text-amber-100"
-              >
-                Profile
-              </button>
-            </div>
-            {!needsUsdc && !needsEth && (
-              <button
-                type="button"
-                onClick={() => setWarnDismissed(true)}
-                className="flex-shrink-0 text-amber-200/40 hover:text-amber-200/80 transition-colors"
-                aria-label="Dismiss"
-              >
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                  <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                </svg>
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      {showLowBalance && !needsUsdc && !needsEth && !warnUsdc && !warnEth && (
+      {showLowBalance && (
         <div className="px-5">
           <div className="mt-3 mb-2 border border-white/[0.08] bg-[#15161a] rounded-xl px-4 py-3 flex items-center justify-between gap-4 animate-[fadeIn_200ms_ease-out]">
             <div className="text-[11px] text-white/70">

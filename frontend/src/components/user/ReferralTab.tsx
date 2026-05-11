@@ -205,9 +205,7 @@ export function ReferralTab({ user }: Props) {
               </div>
             ))}
             <div className="px-3 py-3 text-[10px] font-mono text-white/20 text-center leading-relaxed">
-              Earn <span className="text-white/80">10%</span> of your referrals' trading fees,
-              credited instantly in <span className="text-white/80 font-semibold">USDC</span> to your{" "}
-              <span className="text-white/80">Arbitrum wallet</span>.{" "}
+              Earn <span className="text-white/80">10%</span> of your referrals' trading fees.{" "}
               <span className="text-white/20">
                 We reserve the right to withhold rewards in cases of abuse, including self-referrals, multi-accounting, or other unfair practices.
               </span>

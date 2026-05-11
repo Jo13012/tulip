@@ -4,23 +4,25 @@ user/wallets.py - User wallet endpoints.
 from __future__ import annotations
 
 import logging
-import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from app.core.config import settings
 from app.core.deps import CurrentUser, DbSession
 from app.db.models import Wallet, FundingTransaction
 from app.integrations.polymarket.bridge_client import bridge_client, BridgeClientError
-from app.services import funding_service
-from app.services.privy_tx_service import transfer_usdc, PrivyTxError
 
 router = APIRouter(prefix="/wallets", tags=["user:wallets"])
-FUNDING_ENABLED = True
+FUNDING_ENABLED = False  # auto-bridge disabled — users deposit directly to Polymarket
+BUILDER_FEE_BPS = 40     # informational only — not charged by app
 log = logging.getLogger("uvicorn.error")
+
+
+def estimate_builder_fee(volume_usdc: float) -> float:
+    return round(volume_usdc * BUILDER_FEE_BPS / 10_000, 6)
 
 
 
@@ -105,54 +107,145 @@ def _get_positions_value(user_id: str) -> tuple[float, float]:
     return bal.positions_value, bal.redeem_value
 
 
-def _funding_thresholds(usdc_balance: float, eth_balance: float, trading_balance: float | None, positions_value: float = 0.0) -> dict[str, float | bool]:
-    required_usdc       = funding_service.compute_reserve_target(usdc_balance, trading_balance, positions_value)
-    warn_usdc_threshold = funding_service.compute_warn_threshold(required_usdc)
-    required_eth        = settings.FEE_WALLET_ETH_MIN
-    warn_eth_threshold  = settings.FEE_WALLET_ETH_MIN_WARN
-    suggested_usdc      = required_usdc   # show the real target, not a hardcoded number
-    suggested_eth       = settings.FUNDING_ETH_MIN
-    min_usdc            = required_usdc
-    min_eth             = max(suggested_eth, required_eth)
-    needs_usdc          = usdc_balance < settings.FEE_WALLET_USDC_STOP
-    needs_eth           = eth_balance < required_eth
-    warn_usdc           = not needs_usdc and usdc_balance < warn_usdc_threshold
-    warn_eth            = not needs_eth and eth_balance < warn_eth_threshold
-    wallet_funded       = not needs_usdc and not needs_eth
-    return {
-        "suggested_usdc": suggested_usdc,
-        "suggested_eth": suggested_eth,
-        "required_usdc": required_usdc,
-        "required_eth": required_eth,
-        "warn_usdc_threshold": warn_usdc_threshold,
-        "warn_eth_threshold": warn_eth_threshold,
-        "min_usdc": min_usdc,
-        "min_eth": min_eth,
-        "needs_usdc": needs_usdc,
-        "needs_eth": needs_eth,
-        "warn_usdc": warn_usdc,
-        "warn_eth": warn_eth,
-        "wallet_funded": wallet_funded,
-    }
 
+async def _ensure_cached_deposit_addresses(wallet: Wallet, db: DbSession) -> dict[str, str]:
+    """Return {evm, svm} deposit addresses, fetching from Polymarket API if not cached."""
+    evm = wallet.deposit_address_evm or wallet.funding_deposit_address_cached or ""
+    svm = wallet.deposit_address_svm or ""
 
-async def _ensure_cached_deposit_address(wallet: Wallet, db: DbSession) -> str:
-    deposit_address = wallet.funding_deposit_address_cached or ""
-    if deposit_address:
-        return deposit_address
+    if evm and svm:
+        return {"evm": evm, "svm": svm}
+
     seed_address = _deposit_seed_address(wallet)
     if not seed_address:
-        raise BridgeClientError("Polymarket deposit seed address not available")
-    deposit_addresses = await bridge_client.create_deposit_addresses(seed_address)
-    address_block = deposit_addresses.get("address") or {}
-    deposit_address = address_block.get("evm") or ""
-    if not deposit_address:
-        raise BridgeClientError("Bridge deposit address not available")
-    wallet.funding_deposit_address_cached = deposit_address
-    wallet.funding_deposit_cached_at = datetime.now(timezone.utc)
-    await db.commit()
-    return deposit_address
+        raise BridgeClientError("Polymarket account not ready yet (proxy_address missing)")
 
+    data = await bridge_client.create_deposit_addresses(seed_address)
+    address_block = data.get("address") or {}
+    new_evm = address_block.get("evm") or ""
+    new_svm = address_block.get("svm") or ""
+
+    if not evm and new_evm:
+        wallet.deposit_address_evm = new_evm
+        evm = new_evm
+    if not svm and new_svm:
+        wallet.deposit_address_svm = new_svm
+        svm = new_svm
+
+    wallet.deposit_addresses_cached_at = datetime.now(timezone.utc)
+
+    # Keep legacy column in sync for compat
+    if new_evm and not wallet.funding_deposit_address_cached:
+        wallet.funding_deposit_address_cached = new_evm
+        wallet.funding_deposit_cached_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    return {"evm": evm, "svm": svm}
+
+
+# Supported chains/tokens for deposit UI
+_DEPOSIT_CHAINS = [
+    {"chain_id": "42161", "chain_name": "Arbitrum", "address_type": "evm",
+     "tokens": ["ETH", "USDC"]},
+    {"chain_id": "8453",  "chain_name": "Base",     "address_type": "evm",
+     "tokens": ["ETH", "USDC"]},
+    {"chain_id": "solana","chain_name": "Solana",   "address_type": "svm",
+     "tokens": ["SOL", "USDC"]},
+]
+
+_ALLOWED_CHAINS = {"42161", "8453", "solana"}
+_ALLOWED_TOKENS = {"ETH", "USDC", "SOL"}
+
+_supported_assets_cache: dict[str, Any] = {}
+_supported_assets_cached_at: float = 0.0
+_ASSETS_CACHE_TTL = 3600.0  # 1 hour
+
+
+async def _get_supported_assets() -> list[dict]:
+    """Fetch and cache Polymarket supported assets, filtered to known chains/tokens."""
+    import time
+    global _supported_assets_cache, _supported_assets_cached_at
+    now = time.monotonic()
+    if _supported_assets_cache and now - _supported_assets_cached_at < _ASSETS_CACHE_TTL:
+        return _supported_assets_cache.get("chains", [])
+
+    try:
+        raw = await bridge_client.get_supported_assets()
+        assets = raw if isinstance(raw, list) else raw.get("assets", raw.get("data", []))
+        chains_out: list[dict] = []
+        for chain_cfg in _DEPOSIT_CHAINS:
+            chain_id = chain_cfg["chain_id"]
+            addr_type = chain_cfg["address_type"]
+            tokens_out = []
+            for token_sym in chain_cfg["tokens"]:
+                token_data: dict | None = None
+                for asset in assets:
+                    a_chain = str(asset.get("chainId") or asset.get("chain_id") or "")
+                    a_sym = (asset.get("symbol") or asset.get("token", {}).get("symbol") or "").upper()
+                    if a_chain == chain_id and a_sym == token_sym:
+                        token_data = asset
+                        break
+                token_entry: dict = {"symbol": token_sym, "address": "", "decimals": 6 if token_sym == "USDC" else 18, "min_checkout_usd": None}
+                if token_data:
+                    tok = token_data.get("token") or token_data
+                    token_entry["address"] = tok.get("address") or tok.get("tokenAddress") or ""
+                    token_entry["decimals"] = int(tok.get("decimals") or token_entry["decimals"])
+                    min_usd = token_data.get("minCheckoutUsd") or token_data.get("min_checkout_usd")
+                    if min_usd is not None:
+                        token_entry["min_checkout_usd"] = float(min_usd)
+                tokens_out.append(token_entry)
+            chains_out.append({
+                "chain_id": chain_id,
+                "chain_name": chain_cfg["chain_name"],
+                "address_type": addr_type,
+                "tokens": tokens_out,
+            })
+        _supported_assets_cache = {"chains": chains_out}
+        _supported_assets_cached_at = now
+        return chains_out
+    except Exception as e:
+        log.warning("[deposit_config] supported_assets fetch failed: %s", e)
+        # Return minimal fallback without min_checkout_usd
+        return [
+            {"chain_id": c["chain_id"], "chain_name": c["chain_name"],
+             "address_type": c["address_type"],
+             "tokens": [{"symbol": t, "address": "", "decimals": 6 if t == "USDC" else 18, "min_checkout_usd": None} for t in c["tokens"]]}
+            for c in _DEPOSIT_CHAINS
+        ]
+
+
+
+class DepositAddressesOut(BaseModel):
+    evm: str = ""
+    svm: str = ""
+
+
+class DepositTokenOut(BaseModel):
+    symbol: str
+    address: str = ""
+    decimals: int = 6
+    min_checkout_usd: float | None = None
+
+
+class DepositChainOut(BaseModel):
+    chain_id: str
+    chain_name: str
+    address_type: str   # "evm" | "svm"
+    tokens: list[DepositTokenOut]
+
+
+class DepositConfigOut(BaseModel):
+    polymarket_address: str
+    deposit_addresses: DepositAddressesOut
+    chains: list[DepositChainOut]
+    trading_balance: float | None = None
+    trading_cash_available: float | None = None  # balance minus open positions
+    positions_value: float = 0.0
+    redeem_value: float = 0.0
+    account_ready: bool
+    onboarding_state: str
+    onboarding_complete: bool
+    is_funded_now: bool
 
 
 class WalletOut(BaseModel):
@@ -223,6 +316,74 @@ async def onboarding_status(user: CurrentUser, db: DbSession):
     }
 
 
+@router.get("/deposit-config", response_model=DepositConfigOut)
+async def deposit_config(user: CurrentUser, db: DbSession):
+    """
+    Returns Polymarket deposit addresses (EVM + SVM), supported chains/tokens,
+    and current trading balance. No auto-bridge triggered here.
+    If Polymarket API fails for address fetch, returns error with deposit_unavailable flag.
+    """
+    from app.services.balance_poller import balance_poller
+
+    wallet = await _get_primary_wallet(user["sub"], db)
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Primary wallet not found")
+
+    account_ready = bool(
+        wallet.onboarding_state == "ready"
+        and wallet.proxy_address
+        and wallet.clob_api_key
+    )
+
+    cached = balance_poller.get(user["sub"])
+    trading_balance = cached.trading_balance
+    positions_value, redeem_value = _get_positions_value(user["sub"])
+    trading_cash = (trading_balance or 0.0)  # cash not in positions
+    is_funded_now = (trading_balance is not None and trading_balance > 0)
+
+    # Lazy backfill onboarding_complete
+    if is_funded_now and not wallet.onboarding_complete:
+        wallet.onboarding_complete = True
+        wallet.onboarding_completed_at = datetime.now(timezone.utc)
+        await db.commit()
+
+    deposit_addresses: dict[str, str] = {"evm": "", "svm": ""}
+    chains: list[dict] = []
+    deposit_error: str | None = None
+
+    if account_ready:
+        try:
+            deposit_addresses = await _ensure_cached_deposit_addresses(wallet, db)
+            chains = await _get_supported_assets()
+        except BridgeClientError as e:
+            deposit_error = str(e)
+            log.warning("[deposit_config] deposit address fetch failed: %s", e)
+
+    chains_out = [
+        DepositChainOut(
+            chain_id=c["chain_id"],
+            chain_name=c["chain_name"],
+            address_type=c["address_type"],
+            tokens=[DepositTokenOut(**t) for t in c["tokens"]],
+        )
+        for c in chains
+    ]
+
+    return DepositConfigOut(
+        polymarket_address=wallet.proxy_address or "",
+        deposit_addresses=DepositAddressesOut(**deposit_addresses),
+        chains=chains_out,
+        trading_balance=round(trading_balance, 2) if trading_balance is not None else None,
+        trading_cash_available=round(trading_cash, 2) if trading_balance is not None else None,
+        positions_value=round(positions_value, 2),
+        redeem_value=round(redeem_value, 2),
+        account_ready=account_ready,
+        onboarding_state=wallet.onboarding_state,
+        onboarding_complete=wallet.onboarding_complete,
+        is_funded_now=is_funded_now,
+    )
+
+
 @router.get("/", response_model=list[WalletOut])
 async def list_wallets(
     user: CurrentUser,
@@ -248,254 +409,64 @@ async def list_wallets(
 
 @router.get("/funding-status", response_model=FundingStatusOut)
 async def funding_status(user: CurrentUser, db: DbSession):
-    import asyncio, time
+    """
+    Legacy compat endpoint. Returns neutral values for Arbitrum fields (no auto-bridge).
+    Use /deposit-config for the new deposit flow.
+    """
     from app.services.balance_poller import balance_poller
 
     wallet = await _get_primary_wallet(user["sub"], db)
     if not wallet:
         raise HTTPException(status_code=404, detail="Primary wallet not found")
-    if not wallet.wallet_address or not wallet.privy_wallet_id:
-        raise HTTPException(status_code=400, detail="Wallet not ready")
 
-    # Instant cache read — poller refreshes every 10s
     cached = balance_poller.get(user["sub"])
-    cache_age = time.monotonic() - cached.fetched_at
-
-    usdc_balance    = cached.wallet_usdc    if cached.wallet_usdc    is not None else 0.0
-    eth_balance     = cached.wallet_eth     if cached.wallet_eth     is not None else 0.0
     trading_balance = cached.trading_balance
-
-    # Only force-refresh if cache is cold (never fetched yet)
-    if cached.wallet_usdc is None and cached.wallet_eth is None:
-        asyncio.create_task(
-            balance_poller.refresh_user(user["sub"], wallet.wallet_address or "", wallet.proxy_address or "")
-        )
-
     positions_value, redeem_value = _get_positions_value(user["sub"])
-    thresholds = _funding_thresholds(usdc_balance, eth_balance, trading_balance, positions_value)
-    suggested_usdc = float(thresholds["suggested_usdc"])
-    suggested_eth = float(thresholds["suggested_eth"])
-    required_usdc = float(thresholds["required_usdc"])
-    required_eth = float(thresholds["required_eth"])
-    warn_usdc_threshold = float(thresholds["warn_usdc_threshold"])
-    warn_eth_threshold = float(thresholds["warn_eth_threshold"])
-    min_usdc = float(thresholds["min_usdc"])
-    min_eth = float(thresholds["min_eth"])
-    needs_usdc = bool(thresholds["needs_usdc"])
-    needs_eth = bool(thresholds["needs_eth"])
-    warn_usdc = bool(thresholds["warn_usdc"])
-    warn_eth = bool(thresholds["warn_eth"])
-    wallet_funded = bool(thresholds["wallet_funded"])
-    bridgeable_usdc = funding_service.compute_bridge_amount(usdc_balance, trading_balance, positions_value)
-    bridge_available = bridgeable_usdc >= settings.BRIDGE_MIN_USDC
 
-    message = ""
-    if wallet.funding_state == "failed" and not ((trading_balance or 0.0) > 0):
-        message = "Last bridge attempt failed. Use Fix funding to retry."
-    elif wallet.funding_state in ("preparing", "bridging", "processing") and not ((trading_balance or 0.0) > 0):
-        message = "Bridge in progress. Your trading balance should update automatically."
-    elif needs_usdc and needs_eth:
-        message = f"Funding required: add at least {required_usdc:.2f} USDC and {required_eth:.4f} ETH."
-    elif needs_usdc:
-        message = f"Funding required: add at least {required_usdc:.2f} USDC."
-    elif needs_eth:
-        message = f"Funding required: add at least {required_eth:.4f} ETH for gas."
-    elif wallet_funded and not bridge_available:
-        shortfall = max(0.0, settings.BRIDGE_MIN_USDC - bridgeable_usdc)
-        message = (
-            f"Bridge available from ${settings.BRIDGE_MIN_USDC:.2f}. "
-            f"Add ${shortfall:.2f} more USDC above your reserve to bridge."
-        )
-    elif warn_usdc and warn_eth:
-        message = f"Top-up suggested: keep at least {warn_usdc_threshold:.2f} USDC and {warn_eth_threshold:.4f} ETH."
-    elif warn_usdc:
-        message = f"Top-up suggested: keep at least {warn_usdc_threshold:.2f} USDC."
-    elif warn_eth:
-        message = f"Top-up suggested: keep at least {warn_eth_threshold:.4f} ETH."
-    else:
-        message = "Funding ready."  
-
-    # Normalize observed balance if wallet spent funds (prevents stale baseline)
-    last_obs = wallet.funding_last_usdc_observed or 0.0
-    if usdc_balance < last_obs:
-        wallet.funding_last_usdc_observed = usdc_balance
-        last_obs = usdc_balance
-        await db.commit()
-
-    # Capture incoming deposit tx hash when a new deposit is detected
-    if wallet_funded and (not wallet.funding_deposit_tx_hash or usdc_balance - last_obs >= required_usdc):
-        deposit_tx = await funding_service.get_latest_usdc_deposit_tx(wallet.wallet_address)
-        if deposit_tx and deposit_tx != wallet.funding_deposit_tx_hash:
-            wallet.funding_deposit_tx_hash = deposit_tx
-            await db.commit()
-
-    # If trading balance shows funds, mark onboarding complete and clear failed states.
+    # Lazy backfill onboarding_complete when trading balance observed
     if trading_balance is not None and trading_balance > 0:
         if not wallet.onboarding_complete:
             wallet.onboarding_complete = True
             wallet.onboarding_completed_at = datetime.now(timezone.utc)
-        if wallet.funding_state != "completed":
-            wallet.funding_state = "completed"
-        # Confirm any submitted FundingTransactions (covers restart + normal flow)
-        from sqlalchemy import update as _update
-        await db.execute(
-            _update(FundingTransaction)
-            .where(FundingTransaction.wallet_id == wallet.id)
-            .where(FundingTransaction.state == "submitted")
-            .values(state="confirmed", completed_at=datetime.now(timezone.utc))
-        )
-        await db.commit()
-        if needs_usdc or needs_eth:
-            if needs_usdc and needs_eth:
-                message = f"Trading balance ready. Top up wallet reserve to at least {required_usdc:.2f} USDC and {required_eth:.4f} ETH."
-            elif needs_usdc:
-                message = f"Trading balance ready. Top up wallet reserve to at least {required_usdc:.2f} USDC."
-            else:
-                message = f"Trading balance ready. Top up wallet reserve to at least {required_eth:.4f} ETH."
-        else:
-            if warn_usdc and warn_eth:
-                message = f"Top-up suggested: keep at least {warn_usdc_threshold:.2f} USDC and {warn_eth_threshold:.4f} ETH."
-            elif warn_usdc:
-                message = f"Top-up suggested: keep at least {warn_usdc_threshold:.2f} USDC."
-            elif warn_eth:
-                message = f"Top-up suggested: keep at least {warn_eth_threshold:.4f} ETH."
-            else:
-                message = "Trading balance ready."
-
-    # Timeout bridging if it takes too long (5 minutes)
-    if wallet.funding_state in ("preparing", "bridging") and wallet.funding_bridge_started_at and not wallet.onboarding_complete:
-        elapsed = datetime.now(timezone.utc) - wallet.funding_bridge_started_at
-        if elapsed.total_seconds() >= 300:
-            wallet.funding_state = "failed"
             await db.commit()
 
-    auto_bridge_allowed = wallet.funding_state in ("idle", "completed")
-    bridge_trigger_amount = required_usdc
-
-    if FUNDING_ENABLED and wallet_funded and auto_bridge_allowed:
-        last_obs = wallet.funding_last_usdc_observed or 0.0
-        observed_delta = usdc_balance - last_obs
-        # Only trigger on observed_delta if last_obs > 0 — avoids false trigger when
-        # last_obs=0 because balance was previously None (RPC failure) and is now restored
-        should_auto_bridge = (
-            (last_obs > 0 and observed_delta >= bridge_trigger_amount)
-            or bridge_available
-        )
-        log.info(
-            "[funding:auto] user=%s state=%s wallet_funded=%s bridge_available=%s "
-            "usdc=%.6f trading=%s last_obs=%.6f observed_delta=%.6f trigger=%.6f should_auto_bridge=%s",
-            user["sub"],
-            wallet.funding_state,
-            wallet_funded,
-            bridge_available,
-            usdc_balance,
-            f"{trading_balance:.6f}" if trading_balance is not None else "None",
-            last_obs,
-            observed_delta,
-            bridge_trigger_amount,
-            should_auto_bridge,
-        )
-        if should_auto_bridge:
-            locked_wallet = await _get_primary_wallet(user["sub"], db, for_update=True)
-            if locked_wallet and locked_wallet.funding_state in ("idle", "completed"):
-                # Re-fetch live balance after acquiring lock to avoid race condition
-                fresh_usdc, _ = await funding_service.get_balances(locked_wallet.wallet_address)
-                fresh_usdc = fresh_usdc if fresh_usdc is not None else 0.0
-                if fresh_usdc < required_usdc:
-                    # Balance dropped below threshold between cache read and lock — abort
-                    pass
-                else:
-                    wallet = locked_wallet
-                    ft: FundingTransaction | None = None
-                    try:
-                        deposit_address = await _ensure_cached_deposit_address(wallet, db)
-                        amount_to_bridge = funding_service.compute_bridge_amount(fresh_usdc, trading_balance, positions_value)
-                        log.info(
-                            "[funding:auto] user=%s fresh_usdc=%.6f amount_to_bridge=%.6f deposit=%s",
-                            user["sub"],
-                            fresh_usdc,
-                            amount_to_bridge,
-                            deposit_address,
-                        )
-                        if amount_to_bridge <= 0:
-                            # Nothing to bridge — reset state, no FundingTransaction created
-                            wallet.funding_state = "completed" if (trading_balance or 0.0) > 0 else "idle"
-                            await db.commit()
-                        else:
-                            wallet.funding_state = "preparing"
-                            wallet.funding_tx_hash = None
-                            wallet.funding_bridge_started_at = datetime.now(timezone.utc)
-                            ft = FundingTransaction(
-                                id=str(uuid.uuid4()),
-                                wallet_id=wallet.id,
-                                amount_usdc=amount_to_bridge,
-                                state="initiated",
-                                source="auto",
-                            )
-                            db.add(ft)
-                            await db.commit()
-                            tx_hash = await transfer_usdc(
-                                privy_wallet_id=wallet.privy_wallet_id,
-                                wallet_address=wallet.wallet_address,
-                                to_address=deposit_address,
-                                amount_usdc=amount_to_bridge,
-                            )
-                            wallet.funding_state = "bridging"
-                            wallet.funding_tx_hash = tx_hash
-                            wallet.funding_last_usdc_observed = fresh_usdc
-                            ft.state = "submitted"
-                            ft.tx_hash = tx_hash
-                            await db.commit()
-                            log.info(
-                                "[funding:auto] user=%s tx_submitted=%s amount=%.6f",
-                                user["sub"],
-                                tx_hash,
-                                amount_to_bridge,
-                            )
-                            message = "Bridge in progress. Your trading balance should update automatically."
-                    except (BridgeClientError, PrivyTxError) as e:
-                        wallet.funding_state = "failed"
-                        if ft is not None:
-                            ft.state = "failed"
-                            ft.error_detail = str(e)
-                        await db.commit()
-                        log.warning("[funding:auto] user=%s failed: %s", user["sub"], e)
-                        message = f"Funding failed: {e}"
+    is_funded = trading_balance is not None and trading_balance > 0
+    message = "Trading balance ready." if is_funded else "Deposit USDC to your Polymarket account to start trading."
 
     return FundingStatusOut(
         trading_balance=round((trading_balance or 0.0) + positions_value, 2) if trading_balance is not None else None,
-        usdc_balance=usdc_balance,
-        eth_balance=eth_balance,
-        usdc_token_address=settings.ARBITRUM_USDC_ADDRESS or None,
-        wallet_funded=wallet_funded,
+        usdc_balance=0.0,
+        eth_balance=0.0,
+        usdc_token_address=None,
+        wallet_funded=is_funded,
         onboarding_complete=wallet.onboarding_complete,
-        needs_usdc=needs_usdc,
-        needs_eth=needs_eth,
-        warn_usdc=warn_usdc,
-        warn_eth=warn_eth,
-        min_usdc=min_usdc,
-        min_eth=min_eth,
-        suggested_usdc=suggested_usdc,
-        suggested_eth=suggested_eth,
-        required_usdc=required_usdc,
-        required_eth=required_eth,
-        fee_wallet_usdc_min=settings.FEE_WALLET_USDC_MIN,
-        fee_wallet_eth_min=settings.FEE_WALLET_ETH_MIN,
-        fee_wallet_usdc_min_warn=warn_usdc_threshold,
-        fee_wallet_eth_min_warn=settings.FEE_WALLET_ETH_MIN_WARN,
-        fee_wallet_usdc_warn_threshold=warn_usdc_threshold,
-        fee_wallet_eth_warn_threshold=warn_eth_threshold,
-        bridge_min_usdc=settings.BRIDGE_MIN_USDC,
-        bridgeable_usdc=bridgeable_usdc,
-        bridge_available=bridge_available,
-        reserve_target=funding_service.compute_reserve_target(usdc_balance, trading_balance, positions_value),
-        fee_buffer_pct=settings.FEE_BUFFER_PCT,
-        fee_wallet_usdc_stop=settings.FEE_WALLET_USDC_STOP,
+        needs_usdc=False,
+        needs_eth=False,
+        warn_usdc=False,
+        warn_eth=False,
+        min_usdc=0.0,
+        min_eth=0.0,
+        suggested_usdc=0.0,
+        suggested_eth=0.0,
+        required_usdc=0.0,
+        required_eth=0.0,
+        fee_wallet_usdc_min=0.0,
+        fee_wallet_eth_min=0.0,
+        fee_wallet_usdc_min_warn=0.0,
+        fee_wallet_eth_min_warn=0.0,
+        fee_wallet_usdc_warn_threshold=0.0,
+        fee_wallet_eth_warn_threshold=0.0,
+        bridge_min_usdc=0.0,
+        bridgeable_usdc=0.0,
+        bridge_available=False,
+        reserve_target=0.0,
+        fee_buffer_pct=0.0,
+        fee_wallet_usdc_stop=0.0,
         funding_state=wallet.funding_state,
         funding_deposit_tx_hash=wallet.funding_deposit_tx_hash,
-        funding_tx_hash=wallet.funding_tx_hash,
-        funding_deposit_address_cached=wallet.funding_deposit_address_cached,
-        funding_bridge_started_at=wallet.funding_bridge_started_at.isoformat() if wallet.funding_bridge_started_at else None,
+        funding_tx_hash=None,
+        funding_deposit_address_cached=wallet.deposit_address_evm or wallet.funding_deposit_address_cached,
+        funding_bridge_started_at=None,
         message=message,
         positions_value=round(positions_value, 2),
         redeem_value=round(redeem_value, 2),
@@ -504,75 +475,7 @@ async def funding_status(user: CurrentUser, db: DbSession):
 
 @router.post("/funding-force", response_model=FundingStatusOut)
 async def funding_force(user: CurrentUser, db: DbSession):
-    wallet = await _get_primary_wallet(user["sub"], db, for_update=True)
-    if not wallet:
-        raise HTTPException(status_code=404, detail="Primary wallet not found")
-    if not wallet.wallet_address or not wallet.privy_wallet_id:
-        raise HTTPException(status_code=400, detail="Wallet not ready")
-
-    from app.services.balance_poller import balance_poller
-    await balance_poller.refresh_user(user["sub"], wallet.wallet_address or "", wallet.proxy_address or "")
-    cached = balance_poller.get(user["sub"])
-    usdc_balance    = cached.wallet_usdc    or 0.0
-    eth_balance     = cached.wallet_eth     or 0.0
-    trading_balance = cached.trading_balance
-    positions_value_force, redeem_value_force = _get_positions_value(user["sub"])
-    thresholds = _funding_thresholds(usdc_balance, eth_balance, trading_balance, positions_value_force)
-    required_usdc = float(thresholds["required_usdc"])
-    required_eth = float(thresholds["required_eth"])
-    if usdc_balance < required_usdc or eth_balance < required_eth:
-        raise HTTPException(status_code=400, detail="Wallet funding requirements not met")
-
-    if wallet.funding_state == "bridging" and wallet.funding_bridge_started_at:
-        elapsed = datetime.now(timezone.utc) - wallet.funding_bridge_started_at
-        if elapsed.total_seconds() < 300:
-            raise HTTPException(status_code=409, detail="Bridge already in progress")
-
-    ft = FundingTransaction(
-        id=str(uuid.uuid4()),
-        wallet_id=wallet.id,
-        amount_usdc=0.0,
-        state="initiated",
-        source="manual",
-    )
-    db.add(ft)
-
-    try:
-        deposit_address = await _ensure_cached_deposit_address(wallet, db)
-        wallet.funding_state = "preparing"
-        wallet.funding_tx_hash = None
-        wallet.funding_bridge_started_at = datetime.now(timezone.utc)
-        await db.commit()
-
-        amount_to_bridge = funding_service.compute_bridge_amount(usdc_balance, trading_balance, positions_value_force)
-        ft.amount_usdc = amount_to_bridge
-        if amount_to_bridge <= 0:
-            wallet.funding_state = "completed" if (trading_balance or 0.0) > 0 else "idle"
-            ft.state = "failed"
-            ft.error_detail = "Bridge amount too small after reserve"
-            await db.commit()
-            raise HTTPException(status_code=400, detail="Insufficient bridgeable USDC after keeping reserve")
-
-        tx_hash = await transfer_usdc(
-            privy_wallet_id=wallet.privy_wallet_id,
-            wallet_address=wallet.wallet_address,
-            to_address=deposit_address,
-            amount_usdc=amount_to_bridge,
-        )
-
-        wallet.funding_state = "bridging"
-        wallet.funding_tx_hash = tx_hash
-        wallet.funding_last_usdc_observed = usdc_balance
-        ft.state = "submitted"
-        ft.tx_hash = tx_hash
-        await db.commit()
-    except (BridgeClientError, PrivyTxError) as e:
-        wallet.funding_state = "failed"
-        ft.state = "failed"
-        ft.error_detail = str(e)
-        await db.commit()
-        raise HTTPException(status_code=502, detail=str(e))
-
+    """No-op — auto-bridge removed. Returns same response as funding-status."""
     return await funding_status(user, db)
 
 

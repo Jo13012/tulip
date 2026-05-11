@@ -13,7 +13,6 @@ import { Copy, Check } from 'lucide-react'
 
 import type { AppUser } from '../../types'
 import { api } from '../../utils/api'
-import { useAppStore } from '../../store'
 import { AddressField, GhostButton } from '../ui/Field'
 
 const TRUNCATE_LEN = 120
@@ -473,79 +472,41 @@ function Step2Username({
   )
 }
 
-export function Step3Funding({
-  walletAddress,
-  minUsdc,
-  minEth,
-  walletFunded,
-  depositTxHash,
-  usdcBalance,
-  ethBalance,
-  requiredUsdc,
-  requiredEth,
-  tradingBalance,
-  onboardingComplete,
-  fundingState,
-  canFixFunding,
-  onFixFunding,
-  bridgeTxHash,
-  bridgeStartedAt,
+const CHAIN_LABELS: Record<string, string> = {
+  '42161': 'Arbitrum',
+  '8453':  'Base',
+  'solana': 'Solana',
+}
+
+export function Step3Deposit({
+  depositConfig,
+  isFunded,
   onFinish,
   onSkip,
-  feeWalletUsdcMin,
-  feeWalletUsdcWarn,
-  feeWalletEthMin,
-  feeWalletEthWarn,
 }: {
-  walletAddress: string
-  minUsdc: number
-  minEth: number
-  walletFunded: boolean
-  depositTxHash: string
-  usdcBalance: number
-  ethBalance: number
-  requiredUsdc: number
-  requiredEth: number
-  tradingBalance: number
-  onboardingComplete: boolean
-  fundingState: string
-  canFixFunding: boolean
-  onFixFunding: () => void
-  bridgeTxHash: string
-  bridgeStartedAt: string
+  depositConfig: import('../../types').DepositConfigOut | null
+  isFunded: boolean
   onFinish: () => void
   onSkip?: () => void
-  feeWalletUsdcMin: number
-  feeWalletUsdcWarn: number
-  feeWalletEthMin: number
-  feeWalletEthWarn: number
 }) {
-  const tradingUpdated = onboardingComplete || tradingBalance > 0
-  const bridgeStarted = Boolean(
-    bridgeTxHash
-    || fundingState === 'bridging'
-    || fundingState === 'completed'
-    || Boolean(bridgeStartedAt)
-    || tradingUpdated
-  )
-  const bridgeElapsedSec = bridgeStartedAt
-    ? Math.max(0, (Date.now() - new Date(bridgeStartedAt).getTime()) / 1000)
-    : null
-  // Show retry button only if bridge has been running > 2 min or explicitly failed with no active bridge
-  const bridgeStuck = fundingState === 'failed' && !tradingUpdated && (
-    bridgeElapsedSec === null || bridgeElapsedSec >= 120
-  )
+  const [selectedChainId, setSelectedChainId] = useState<string>('42161')
+  const [copiedAddr, setCopiedAddr] = useState(false)
 
-  const bridgeLabelDone = tradingUpdated ? 'Sent to Polymarket' : 'Sending to Polymarket…'
+  const chain = depositConfig?.chains.find(c => c.chain_id === selectedChainId)
+    ?? depositConfig?.chains[0]
+  const depositAddr = chain?.address_type === 'svm'
+    ? (depositConfig?.deposit_addresses.svm ?? '')
+    : (depositConfig?.deposit_addresses.evm ?? '')
 
-  type CheckItem = { id: string; labelDone: string; labelActive: string; labelPending: string; done: boolean; active: boolean }
-  const checks: CheckItem[] = [
-    { id: 'deposit', labelDone: 'Deposit received',      labelActive: 'Waiting for deposit…',   labelPending: 'Deposit',  done: walletFunded,   active: !walletFunded },
-    { id: 'bridge',  labelDone: bridgeLabelDone,         labelActive: 'Bridging to Polymarket…', labelPending: 'Bridge',   done: bridgeStarted,  active: walletFunded && !bridgeStarted },
-    { id: 'trading', labelDone: 'Trading balance ready', labelActive: 'Waiting for bridge…',     labelPending: 'Trading',  done: tradingUpdated, active: bridgeStarted && !tradingUpdated },
-  ]
+  function copyAddr() {
+    if (!depositAddr) return
+    navigator.clipboard.writeText(depositAddr).then(() => {
+      setCopiedAddr(true)
+      setTimeout(() => setCopiedAddr(false), 2000)
+    })
+  }
 
-  const progressPct = tradingUpdated ? 100 : bridgeStarted ? 66 : walletFunded ? 33 : 0
+  const notReady = !depositConfig?.account_ready
 
   return (
     <div className="flex flex-col flex-1">
@@ -553,131 +514,102 @@ export function Step3Funding({
         <div className="text-[10px] text-white/20 uppercase tracking-widest font-semibold mb-1.5">
           Fund account
         </div>
-        <div className="text-[15px] font-semibold text-white">Fund your wallet</div>
+        <div className="text-[15px] font-semibold text-white">
+          {isFunded ? 'Account funded' : 'Deposit to Polymarket'}
+        </div>
         <div className="text-[11px] text-white/35 mt-1">
-          Send USDC + ETH on Arbitrum. We&apos;ll handle the rest.
+          {isFunded
+            ? 'Your Polymarket balance is ready.'
+            : 'Send USDC directly to your Polymarket deposit address.'}
         </div>
       </div>
 
       <div className="space-y-4 flex-1">
-        {/* Deposit address */}
-        <div className="rounded-xl border border-white/[0.07] bg-[#0d0e10] divide-y divide-white/[0.05] overflow-hidden">
-          <div className="flex items-center gap-4 px-4 py-3">
-            <span className="text-[11px] text-white/40 flex-shrink-0 w-24">Deposit to</span>
-            <div className="flex-1 min-w-0">
-              {walletAddress
-                ? <AddressField value={walletAddress} />
-                : <span className="text-[11px] text-white/20 font-mono">—</span>
-              }
+        {notReady ? (
+          <div className="text-[11px] text-white/35 py-4 text-center">
+            Complete account setup to get your deposit address.
+          </div>
+        ) : !depositConfig ? (
+          <div className="text-[11px] text-amber-400/60 py-4 text-center">
+            Deposit temporarily unavailable. Try again later.
+          </div>
+        ) : (
+          <>
+            {/* Chain selector */}
+            <div className="flex gap-2">
+              {depositConfig.chains.map(c => (
+                <button
+                  key={c.chain_id}
+                  type="button"
+                  onClick={() => setSelectedChainId(c.chain_id)}
+                  className={`flex-1 text-[10px] py-1.5 rounded-lg border transition-all ${
+                    selectedChainId === c.chain_id
+                      ? 'border-white/30 bg-white/10 text-white'
+                      : 'border-white/[0.07] bg-transparent text-white/30 hover:text-white/60'
+                  }`}
+                >
+                  {CHAIN_LABELS[c.chain_id] ?? c.chain_name}
+                </button>
+              ))}
             </div>
-          </div>
-          <div className="flex items-center justify-between gap-4 px-4 py-3">
-            <span className="text-[11px] text-white/40 flex-shrink-0 w-24">Balance</span>
-            <span className="text-[11px] font-mono text-white/55">${usdcBalance.toFixed(2)} USDC · {ethBalance.toFixed(4)} ETH</span>
-          </div>
-        </div>
 
-        {/* Warning */}
-        <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg border border-amber-400/20 bg-amber-500/5">
-          <span className="text-[10px] text-amber-400/50 mt-0.5 flex-shrink-0">⚠</span>
-          <p className="text-[10px] text-amber-300/60 leading-relaxed">
-            Minimum deposit: <strong>$20 USDC</strong>. <strong>5%</strong> of each deposit is reserved on your Arbitrum wallet to ensure smooth session execution. + 0.003 ETH for gas.          </p>
-        </div>
-
-        {/* Progress checks */}
-        <div>
-          {checks.map((check, index) => {
-            const isLast = index === checks.length - 1
-            return (
-              <div key={check.id}>
-                <div className="flex items-start gap-3">
-                  <div className="w-5 flex-shrink-0 flex flex-col items-center">
-                    <div className="w-5 h-5 flex items-center justify-center">
-                      {check.done ? (
-                        <span className="flex items-center justify-center w-5 h-5 rounded-full bg-emerald-500/15">
-                          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                            <path d="M2 5l2.5 2.5L8 3" stroke="#10b981" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                        </span>
-                      ) : check.active ? (
-                        <svg className="animate-spin" width="16" height="16" viewBox="0 0 16 16" fill="none">
-                          <circle cx="8" cy="8" r="6" stroke="#facc15" strokeWidth="2" strokeOpacity="0.2"/>
-                          <path d="M8 2a6 6 0 0 1 6 6" stroke="#facc15" strokeWidth="2" strokeLinecap="round"/>
-                        </svg>
-                      ) : (
-                        <div className="w-1.5 h-1.5 rounded-full bg-white/15" />
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex-1">
-                    <span className={`text-[12px] font-medium transition-colors ${check.done ? 'text-white/50' : check.active ? 'text-white' : 'text-white/20'}`}>
-                      {check.done ? check.labelDone : check.active ? check.labelActive : check.labelPending}
-                    </span>
-                    {check.id === 'bridge' && bridgeTxHash && (
-                      <div className="mt-1 flex items-center gap-2">
-                        <a
-                          href={`https://arbiscan.io/tx/${bridgeTxHash}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-[10px] text-white/40 hover:text-white/70 underline underline-offset-2 font-mono"
-                        >
-                          {bridgeTxHash.slice(0, 8)}…{bridgeTxHash.slice(-6)}
-                        </a>
-                        {bridgeElapsedSec !== null && (
-                          <span className="text-[10px] text-white/30 font-mono">{bridgeElapsedSec.toFixed(0)}s</span>
-                        )}
-                      </div>
-                    )}
-                    {check.id === 'bridge' && bridgeStuck && (
-                      <div className="mt-1.5">
-                        <GhostButton warn disabled={!canFixFunding} onClick={onFixFunding}>
-                          Bridge to Polymarket
-                        </GhostButton>
-                      </div>
-                    )}
-                  </div>
+            {/* Deposit address */}
+            <div className="rounded-xl border border-white/[0.07] bg-[#0d0e10] overflow-hidden">
+              <div className="flex items-center gap-3 px-4 py-3">
+                <span className="text-[11px] text-white/40 flex-shrink-0">Deposit to</span>
+                <div className="flex-1 min-w-0">
+                  {depositAddr
+                    ? <AddressField value={depositAddr} />
+                    : <span className="text-[11px] text-white/20 font-mono">—</span>
+                  }
                 </div>
-                {!isLast && (
-                  <div className="flex gap-3">
-                    <div className="w-5 flex-shrink-0 flex justify-center" style={{ marginTop: '2px', marginBottom: '2px' }}>
-                      <div className="w-px h-3" style={{
-                        backgroundImage: check.done
-                          ? 'repeating-linear-gradient(to bottom, rgba(99,179,237,0.35) 0px, rgba(99,179,237,0.35) 3px, transparent 3px, transparent 6px)'
-                          : 'repeating-linear-gradient(to bottom, rgba(255,255,255,0.07) 0px, rgba(255,255,255,0.07) 3px, transparent 3px, transparent 6px)'
-                      }} />
-                    </div>
-                  </div>
+                {depositAddr && (
+                  <button
+                    type="button"
+                    onClick={copyAddr}
+                    className="flex-shrink-0 text-white/25 hover:text-white/60 transition-colors ml-1"
+                  >
+                    {copiedAddr ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+                  </button>
                 )}
               </div>
-            )
-          })}
-        </div>
+              {chain && (
+                <div className="border-t border-white/[0.05] px-4 py-2.5">
+                  <div className="flex flex-wrap gap-x-3 gap-y-1">
+                    {chain.tokens.map(tok => (
+                      <span key={tok.symbol} className="text-[10px] text-white/30">
+                        {tok.symbol}
+                        {tok.min_checkout_usd != null && (
+                          <span className="text-white/20"> (min ${tok.min_checkout_usd})</span>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
 
-        <div className="h-px bg-white/[0.06] rounded overflow-hidden">
-          <div
-            className={`h-full transition-all duration-500 ${tradingUpdated ? 'bg-emerald-400/60' : 'bg-brand/60'}`}
-            style={{ width: `${progressPct}%` }}
-          />
-        </div>
+            {/* Balance */}
+            {depositConfig.trading_balance != null && (
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[10px] text-white/30">Polymarket balance</span>
+                <span className={`text-[11px] font-mono ${isFunded ? 'text-emerald-400' : 'text-white/40'}`}>
+                  ${(depositConfig.trading_balance + depositConfig.positions_value).toFixed(2)}
+                </span>
+              </div>
+            )}
+
+            <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg border border-white/[0.07] bg-white/[0.02]">
+              <p className="text-[10px] text-white/35 leading-relaxed">
+                Deposits are credited directly on Polymarket. No bridge required. Funds appear within a few minutes.
+              </p>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="mt-5 flex justify-between items-center">
-        <div className="text-[10px] text-white/20">
-          {tradingUpdated ? 'Ready' : bridgeStarted ? 'Bridging… (~60s)' : walletFunded ? 'Preparing bridge… (~60s)' : ''}
-          {!walletFunded && !bridgeStarted && onSkip && (
-            <button
-              type="button"
-              onClick={onSkip}
-              className="text-[10px] text-white/20 hover:text-white/45 transition-colors underline underline-offset-2"
-            >
-              Skip for now
-            </button>
-          )}
-        </div>
-        {tradingUpdated && (
-          <GhostButton onClick={onFinish}>Continue</GhostButton>
-        )}
-        {!tradingUpdated && onSkip && walletFunded && (
+        {!isFunded && onSkip ? (
           <button
             type="button"
             onClick={onSkip}
@@ -685,6 +617,9 @@ export function Step3Funding({
           >
             Skip for now
           </button>
+        ) : <span />}
+        {isFunded && (
+          <GhostButton onClick={onFinish}>Continue</GhostButton>
         )}
       </div>
 
@@ -715,16 +650,7 @@ export function FundingModal({
   onClose: () => void
   onDone?: () => void
 }) {
-  const fundingStatus = useAppStore(s => s.fundingStatus)
-  const setFundingStatus = useAppStore(s => s.setFundingStatus)
-  const addToast = useAppStore(s => s.addToast)
-  const [minUsdc, setMinUsdc] = useState(20)
-  const [minEth, setMinEth] = useState(0.002)
-  const [reserveUsdcMin, setReserveUsdcMin] = useState(2)
-  const [reserveUsdcWarn, setReserveUsdcWarn] = useState(2)
-  const [reserveEthMin, setReserveEthMin] = useState(0.001)
-  const [reserveEthWarn, setReserveEthWarn] = useState(0.0005)
-
+  const [depositConfig, setDepositConfig] = useState<import('../../types').DepositConfigOut | null>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -737,34 +663,14 @@ export function FundingModal({
     let mounted = true
     const load = async () => {
       try {
-        const status: any = await api.getFundingStatus()
-        if (!mounted) return
-        setFundingStatus(status)
-        if (typeof status?.required_usdc === 'number') setMinUsdc(status.required_usdc)
-        else if (typeof status?.min_usdc === 'number') setMinUsdc(status.min_usdc)
-        if (typeof status?.required_eth === 'number') setMinEth(status.required_eth)
-        else if (typeof status?.min_eth === 'number') setMinEth(status.min_eth)
-        if (typeof status?.fee_wallet_usdc_min === 'number') setReserveUsdcMin(status.fee_wallet_usdc_min)
-        if (typeof status?.fee_wallet_usdc_min_warn === 'number') setReserveUsdcWarn(status.fee_wallet_usdc_min_warn)
-        if (typeof status?.fee_wallet_eth_min === 'number') setReserveEthMin(status.fee_wallet_eth_min)
-        if (typeof status?.fee_wallet_eth_min_warn === 'number') setReserveEthWarn(status.fee_wallet_eth_min_warn)
+        const cfg = await api.getDepositConfig()
+        if (mounted) setDepositConfig(cfg)
       } catch {}
     }
     load()
-    const isBridging = fundingStatus?.funding_state === 'bridging' || fundingStatus?.funding_state === 'preparing'
-    const iv = setInterval(load, isBridging ? 3000 : 10000)
+    const iv = setInterval(load, 10000)
     return () => { mounted = false; clearInterval(iv) }
-  }, [fundingStatus?.funding_state])
-
-  async function handleFixFunding() {
-    try {
-      const status: any = await api.forceFunding()
-      setFundingStatus(status)
-      addToast({ type: 'success', message: 'Fixing funding…' })
-    } catch (e: any) {
-      addToast({ type: 'error', message: e?.message ?? 'Funding fix failed' })
-    }
-  }
+  }, [])
 
   function handleFinish() {
     try { localStorage.removeItem(getFundingSkipKey(user.user_id)) } catch {}
@@ -784,28 +690,10 @@ export function FundingModal({
           <button className="w-6 h-6 flex items-center justify-center rounded-lg text-white/20 hover:text-white/55 hover:bg-white/[0.06] transition-all" onClick={onClose}>✕</button>
         </div>
         <div className="flex-1 flex flex-col overflow-y-auto min-h-0">
-          <Step3Funding
-            walletAddress={user.wallet_address || ''}
-            minUsdc={minUsdc}
-            minEth={minEth}
-            walletFunded={Boolean(fundingStatus?.wallet_funded)}
-            depositTxHash={fundingStatus?.funding_deposit_tx_hash || ''}
-            usdcBalance={Number(fundingStatus?.usdc_balance || 0)}
-            ethBalance={Number(fundingStatus?.eth_balance || 0)}
-            requiredUsdc={Number(fundingStatus?.required_usdc || minUsdc)}
-            requiredEth={Number(fundingStatus?.required_eth || minEth)}
-            tradingBalance={Number(fundingStatus?.trading_balance || 0)}
-            onboardingComplete={Boolean(fundingStatus?.onboarding_complete)}
-            fundingState={fundingStatus?.funding_state || 'idle'}
-            canFixFunding={Boolean(fundingStatus?.wallet_funded)}
-            onFixFunding={handleFixFunding}
-            bridgeTxHash={fundingStatus?.funding_tx_hash || ''}
-            bridgeStartedAt={fundingStatus?.funding_bridge_started_at || ''}
+          <Step3Deposit
+            depositConfig={depositConfig}
+            isFunded={Boolean(depositConfig?.is_funded_now)}
             onFinish={handleFinish}
-            feeWalletUsdcMin={Number(fundingStatus?.fee_wallet_usdc_min || reserveUsdcMin)}
-            feeWalletUsdcWarn={Number(fundingStatus?.fee_wallet_usdc_min_warn || reserveUsdcWarn)}
-            feeWalletEthMin={Number(fundingStatus?.fee_wallet_eth_min || reserveEthMin)}
-            feeWalletEthWarn={Number(fundingStatus?.fee_wallet_eth_min_warn || reserveEthWarn)}
           />
         </div>
       </div>
@@ -833,68 +721,28 @@ export function OnboardingModal({ user, onDone, onUpdateUser, bootstrapping = fa
   const [draftReferrer, setDraftReferrer] = useState(initialDraftReferrer)
   const [visible, setVisible] = useState(true)
   const [serverError, setServerError] = useState('')
-  const [minUsdc, setMinUsdc] = useState(20)
-  const [minEth, setMinEth] = useState(0.002)
-  const [reserveUsdcMin, setReserveUsdcMin] = useState(2)
-  const [reserveUsdcWarn, setReserveUsdcWarn] = useState(2)
-  const [reserveEthMin, setReserveEthMin] = useState(0.001)
-  const [reserveEthWarn, setReserveEthWarn] = useState(0.0005)
-  const fundingStatus = useAppStore(s => s.fundingStatus)
-  const setFundingStatus = useAppStore(s => s.setFundingStatus)
-  const addToast = useAppStore(s => s.addToast)
+  const [depositConfig, setDepositConfig] = useState<import('../../types').DepositConfigOut | null>(null)
 
   useEffect(() => {
     if (serverError) setServerError('')
   }, [draftDisplayName, draftReferrer])
 
   useEffect(() => {
+    if (bootstrapping || step !== 4) return
     let mounted = true
-    const loadFunding = async () => {
-      if (bootstrapping) return
+    const load = async () => {
       try {
-        const status: any = await api.getFundingStatus()
-        if (!mounted) return
-        setFundingStatus(status)
-        if (typeof status?.required_usdc === 'number') setMinUsdc(status.required_usdc)
-        else if (typeof status?.min_usdc === 'number') setMinUsdc(status.min_usdc)
-        if (typeof status?.required_eth === 'number') setMinEth(status.required_eth)
-        else if (typeof status?.min_eth === 'number') setMinEth(status.min_eth)
-        if (typeof status?.fee_wallet_usdc_min === 'number') setReserveUsdcMin(status.fee_wallet_usdc_min)
-        if (typeof status?.fee_wallet_usdc_min_warn === 'number') setReserveUsdcWarn(status.fee_wallet_usdc_min_warn)
-        if (typeof status?.fee_wallet_eth_min === 'number') setReserveEthMin(status.fee_wallet_eth_min)
-        if (typeof status?.fee_wallet_eth_min_warn === 'number') setReserveEthWarn(status.fee_wallet_eth_min_warn)
+        const cfg = await api.getDepositConfig()
+        if (mounted) setDepositConfig(cfg)
       } catch {}
     }
-    if (!bootstrapping) {
-      loadFunding()
-    }
-    // Poll faster when bridge is active
-    const isBridging = fundingStatus?.funding_state === 'bridging' || fundingStatus?.funding_state === 'preparing'
-    const intervalMs = isBridging ? 3000 : 10000
-    const interval = setInterval(loadFunding, intervalMs)
-    return () => {
-      mounted = false
-      clearInterval(interval)
-    }
-  }, [bootstrapping, fundingStatus?.funding_state])
-
-  async function prefetchFunding() {
-    try {
-      const status: any = await api.getFundingStatus()
-      setFundingStatus(status)
-      if (typeof status?.suggested_usdc === 'number') setMinUsdc(status.suggested_usdc)
-      else if (typeof status?.min_usdc === 'number') setMinUsdc(status.min_usdc)
-      if (typeof status?.suggested_eth === 'number') setMinEth(status.suggested_eth)
-      else if (typeof status?.min_eth === 'number') setMinEth(status.min_eth)
-    } catch {}
-  }
+    load()
+    const iv = setInterval(load, 10000)
+    return () => { mounted = false; clearInterval(iv) }
+  }, [bootstrapping, step])
 
   async function handleWalletReady() {
     if (bootstrapping) return
-    await Promise.race([
-      prefetchFunding(),
-      new Promise((resolve) => setTimeout(resolve, 1200)),
-    ])
     if (user.referrer_username) {
       setStep(displayNameNeedsSetup ? 3 : 4)
       return
@@ -958,16 +806,6 @@ export function OnboardingModal({ user, onDone, onUpdateUser, bootstrapping = fa
     }
   }
 
-  async function handleFixFunding() {
-    try {
-      const status: any = await api.forceFunding()
-      setFundingStatus(status)
-      addToast({ type: 'success', message: 'Fixing funding…' })
-    } catch (e: any) {
-      addToast({ type: 'error', message: e?.message ?? 'Funding fix failed' })
-    }
-  }
-
   function handleFinishOnboarding() {
     onUpdateUser({ onboarding_complete: true })
     try { localStorage.removeItem(getFundingSkipKey(user.user_id)) } catch {}
@@ -980,7 +818,6 @@ export function OnboardingModal({ user, onDone, onUpdateUser, bootstrapping = fa
     setVisible(false)
     setTimeout(onDone, 0)
   }
-
 
   const displayNameNeedsSetup = !user.display_name || looksLikeAutoDisplayName(user.display_name)
 
@@ -1012,31 +849,13 @@ export function OnboardingModal({ user, onDone, onUpdateUser, bootstrapping = fa
             />
           )}
           {step === 4 && (
-            <Step3Funding
-              walletAddress={user.wallet_address || ''}
-              minUsdc={minUsdc}
-              minEth={minEth}
-              walletFunded={Boolean(fundingStatus?.wallet_funded)}
-              depositTxHash={fundingStatus?.funding_deposit_tx_hash || ''}
-              usdcBalance={Number(fundingStatus?.usdc_balance || 0)}
-              ethBalance={Number(fundingStatus?.eth_balance || 0)}
-            requiredUsdc={Number(fundingStatus?.required_usdc || minUsdc)}
-            requiredEth={Number(fundingStatus?.required_eth || minEth)}
-            tradingBalance={Number(fundingStatus?.trading_balance || 0)}
-            onboardingComplete={Boolean(fundingStatus?.onboarding_complete)}
-            fundingState={fundingStatus?.funding_state || 'idle'}
-            canFixFunding={Boolean(fundingStatus?.wallet_funded)}
-            onFixFunding={handleFixFunding}
-            bridgeTxHash={fundingStatus?.funding_tx_hash || ''}
-            bridgeStartedAt={fundingStatus?.funding_bridge_started_at || ''}
-            onFinish={handleFinishOnboarding}
-            onSkip={handleSkipFunding}
-            feeWalletUsdcMin={Number(fundingStatus?.fee_wallet_usdc_min || reserveUsdcMin)}
-            feeWalletUsdcWarn={Number(fundingStatus?.fee_wallet_usdc_min_warn || reserveUsdcWarn)}
-            feeWalletEthMin={Number(fundingStatus?.fee_wallet_eth_min || reserveEthMin)}
-            feeWalletEthWarn={Number(fundingStatus?.fee_wallet_eth_min_warn || reserveEthWarn)}
-          />
-        )}
+            <Step3Deposit
+              depositConfig={depositConfig}
+              isFunded={Boolean(depositConfig?.is_funded_now)}
+              onFinish={handleFinishOnboarding}
+              onSkip={handleSkipFunding}
+            />
+          )}
         </div>
 
         <StepDots current={step} />

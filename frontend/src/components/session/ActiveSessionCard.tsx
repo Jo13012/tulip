@@ -126,12 +126,12 @@ export function ActiveSessionCard({ session, onStopped }: Props) {
           <MetricCard
             label="Fees"
             value={fmtUsd(rt?.paid_fees ?? 0)}
-            tooltip="Platform fees charged on executed fills."
+            tooltip="App fees charged on fills (currently $0)."
           />
           <MetricCard
             label="Net PnL"
             value={<span className={pnlColor(netPnl)}>{fmtUsd(netPnl)}</span>}
-            tooltip="Gross PnL minus fees paid."
+            tooltip="Gross PnL."
             accent={netPnl >= 0 ? 'success' : 'danger'}
           />
           <MetricCard

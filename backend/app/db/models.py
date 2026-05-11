@@ -80,14 +80,19 @@ class Wallet(Base):
     onboarding_completed_at = Column(DateTime(timezone=True), nullable=True)
     v2_migration_done = Column(Boolean, nullable=False, default=False)
 
-    # Funding automation state (Arbitrum -> Polymarket)
+    # Funding automation state (legacy — kept for compat/history, no longer driven by app)
     funding_state = Column(String, nullable=False, default="idle")
     funding_deposit_tx_hash = Column(String, nullable=True)
     funding_tx_hash = Column(String, nullable=True)
-    funding_deposit_address_cached = Column(String, nullable=True)
+    funding_deposit_address_cached = Column(String, nullable=True)  # legacy EVM cache
     funding_deposit_cached_at = Column(DateTime(timezone=True), nullable=True)
     funding_last_usdc_observed = Column(Float, nullable=True)
     funding_bridge_started_at = Column(DateTime(timezone=True), nullable=True)
+
+    # New deposit addresses (multi-chain, direct user deposit to Polymarket)
+    deposit_address_evm = Column(String, nullable=True)   # Arbitrum + Base
+    deposit_address_svm = Column(String, nullable=True)   # Solana
+    deposit_addresses_cached_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at      = Column(DateTime(timezone=True), default=_now, nullable=False)
     updated_at      = Column(DateTime(timezone=True), default=_now, onupdate=_now, nullable=False)

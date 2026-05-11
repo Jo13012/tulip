@@ -99,7 +99,9 @@ export const api = {
 
   listWallets: () => request('/api/v1/user/wallets/'),
   getOnboardingStatus: () => request('/api/v1/user/wallets/onboarding-status'),
+  getDepositConfig: () => request<import('../types').DepositConfigOut>('/api/v1/user/wallets/deposit-config'),
   getFundingStatus: () => request('/api/v1/user/wallets/funding-status'),
+  /** @deprecated No-op — auto-bridge removed. Use deposit-config flow. */
   forceFunding: () => request('/api/v1/user/wallets/funding-force', { method: 'POST' }),
   getBridgeHistory: () => request<import('../components/user/BridgeHistoryModal').BridgeTx[]>('/api/v1/user/wallets/bridge-history'),
   getUserDailyVolume: (days = 60) => request(`/api/v1/user/analytics/daily-volume?days=${days}`),
@@ -152,7 +154,12 @@ export const api = {
       request(`/api/v1/admin/controls/audit?limit=200${entityType ? `&entity_type=${entityType}` : ''}${entityId ? `&entity_id=${entityId}` : ''}`),
 
     // ── Users ─────────────────────────────────────────────────────────────────
-    listUsers: (limit = 100) => request(`/api/v1/admin/users/?limit=${limit}`),
+    listUsers: (limit = 100, filters?: { account_ready?: boolean; funded?: boolean }) => {
+      const p = new URLSearchParams({ limit: String(limit) })
+      if (filters?.account_ready !== undefined) p.set('account_ready', String(filters.account_ready))
+      if (filters?.funded !== undefined) p.set('funded', String(filters.funded))
+      return request(`/api/v1/admin/users/?${p}`)
+    },
     // fee_override_bps: number to set override, -1 to clear override
     updateUser: (id: string, patch: { fee_override_bps?: number; display_name?: string; free_fee_days?: number }) =>
       request(`/api/v1/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),

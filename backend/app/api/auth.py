@@ -55,6 +55,7 @@ class UserProfile(BaseModel):
     wallet_id: str = ""
     wallet_address: str = ""
     onboarding_complete: bool = False
+    account_ready: bool = False
     fee_override_bps: int | None = None
     free_fee_active: bool = False
     free_fee_ends_at: str | None = None
@@ -103,6 +104,16 @@ def _free_fee_active(user: User | None) -> bool:
     if not user or user.free_fee_ends_at is None:
         return False
     return datetime.now(timezone.utc) < user.free_fee_ends_at
+
+
+def _account_ready(wallet: Wallet | None) -> bool:
+    if not wallet:
+        return False
+    return bool(
+        wallet.onboarding_state == "ready"
+        and wallet.proxy_address
+        and wallet.clob_api_key
+    )
 
 
 # ── Dev token (local dev only) ────────────────────────────────────────────────
@@ -448,6 +459,7 @@ async def sync_user(request: Request, body: SyncRequest):
         wallet_id=primary_wallet_id,
         wallet_address=primary_wallet_address,
         onboarding_complete=existing_wallet.onboarding_complete if existing_wallet else False,
+        account_ready=_account_ready(existing_wallet),
         fee_override_bps=user.fee_override_bps,
         free_fee_active=_free_fee_active(user),
         free_fee_ends_at=user.free_fee_ends_at.isoformat() if user and user.free_fee_ends_at else None,
@@ -482,6 +494,7 @@ async def get_me(user: CurrentUser):
         wallet_id=wallet.id if wallet else "",
         wallet_address=wallet.wallet_address if wallet else "",
         onboarding_complete=wallet.onboarding_complete if wallet else False,
+        account_ready=_account_ready(wallet),
         fee_override_bps=db_user.fee_override_bps if db_user else None,
         free_fee_active=_free_fee_active(db_user),
         free_fee_ends_at=db_user.free_fee_ends_at.isoformat() if db_user and db_user.free_fee_ends_at else None,
@@ -555,6 +568,7 @@ async def update_profile(body: UpdateDisplayNameRequest, user: CurrentUser):
         wallet_id=wallet.id if wallet else "",
         wallet_address=wallet.wallet_address if wallet else "",
         onboarding_complete=wallet.onboarding_complete if wallet else False,
+        account_ready=_account_ready(wallet),
         fee_override_bps=db_user.fee_override_bps if db_user else None,
         free_fee_active=_free_fee_active(db_user),
         free_fee_ends_at=db_user.free_fee_ends_at.isoformat() if db_user and db_user.free_fee_ends_at else None,

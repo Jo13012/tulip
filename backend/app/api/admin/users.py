@@ -173,7 +173,12 @@ class StopSessionRequest(BaseModel):
 
 
 @router.get("/")
-async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: int = 0):
+async def list_users(
+    db: DbSession, admin: AdminUser,
+    limit: int = 100, offset: int = 0,
+    account_ready: Optional[bool] = None,
+    funded: Optional[bool] = None,
+):
     # Wait for first cache population if cold (first boot only)
     if not balance_poller._ready.is_set():
         await balance_poller.wait_ready()
@@ -224,6 +229,12 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
 
         us = accurate.get(u.id, {"volume": 0.0, "pnl": 0.0})
         lb = leaderboard_by_user.get(u.id, {"volume": us["volume"], "pnl": us["pnl"]})
+        _acct_ready = bool(
+            wallet and wallet.onboarding_state == "ready"
+            and wallet.proxy_address and wallet.clob_api_key
+        )
+        _is_funded = bal.trading_balance is not None and bal.trading_balance > 0
+
         result.append({
             "id":                  u.id,
             "display_name":        u.display_name,
@@ -237,6 +248,8 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
             "wallet_id":           wallet.id if wallet else None,
             "proxy_address":       wallet.proxy_address if wallet else None,
             "onboarding_complete": wallet.onboarding_complete if wallet else False,
+            "account_ready":       _acct_ready,
+            "is_funded":           _is_funded,
             "onboarding_completed_at": wallet.onboarding_completed_at.isoformat() if wallet and wallet.onboarding_completed_at else None,
             "v2_migration_done":   wallet.v2_migration_done if wallet else False,
             "wallet_usdc":         bal.wallet_usdc,
@@ -251,6 +264,12 @@ async def list_users(db: DbSession, admin: AdminUser, limit: int = 100, offset: 
             "created_at":          u.created_at.isoformat(),
             "free_fee_ends_at":    u.free_fee_ends_at.isoformat() if u.free_fee_ends_at else None,
         })
+
+    if account_ready is not None:
+        result = [r for r in result if r["account_ready"] == account_ready]
+    if funded is not None:
+        result = [r for r in result if r["is_funded"] == funded]
+
     return result
 
 

@@ -587,10 +587,8 @@ function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (s
             ) : (
               <div className="border border-white/[0.08] rounded-xl overflow-hidden max-h-48 overflow-y-auto">
                 {users.map((u: any) => {
-                  const needsUsdc = (u.wallet_usdc ?? 0) < 2
-                  const needsEth  = (u.wallet_eth  ?? 0) < 0.0005
-                  const warn = needsUsdc || needsEth
                   const isSelected = selectedUser?.id === u.id
+                  const lowBal = (u.trading_balance ?? 0) < 5
                   return (
                     <button
                       key={u.id}
@@ -605,15 +603,8 @@ function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (s
                       }}
                     >
                       <span>{u.display_name ?? u.id.slice(0, 12)}</span>
-                      <span className="font-mono flex items-center gap-2">
-                        {warn && (
-                          <span className="text-red-400 text-[10px]">
-                            {needsUsdc && needsEth ? 'no USDC+ETH' : needsUsdc ? 'no USDC' : 'no ETH'}
-                          </span>
-                        )}
-                        <span className={warn ? 'text-red-400' : 'text-white/50'}>
-                          ${(u.trading_balance ?? 0).toFixed(2)}
-                        </span>
+                      <span className={`font-mono ${lowBal ? 'text-yellow-400' : 'text-white/50'}`}>
+                        ${(u.trading_balance ?? 0).toFixed(2)}
                       </span>
                     </button>
                   )

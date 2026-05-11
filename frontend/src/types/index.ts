@@ -11,6 +11,7 @@ export interface AppUser {
   wallet_id: string
   wallet_address: string
   onboarding_complete: boolean
+  account_ready: boolean
   trading_volume?: number
   bot_pnl?: number
   fee_bps?: number
@@ -67,27 +68,59 @@ export interface AdminUser {
   display_name:        string | null
   is_admin:            boolean
   is_active:           boolean
-  fee_override_bps:    number | null   // null = no override, uses XP fee
-  effective_fee_bps:   number          // XP-computed fee
+  fee_override_bps:    number | null
+  effective_fee_bps:   number
   trading_volume:      number
   bot_pnl:             number
   wallet_address:      string | null
   proxy_address:       string | null
   wallet_id:           string | null
   onboarding_complete: boolean
+  account_ready:       boolean
+  is_funded:           boolean
   onboarding_completed_at: string | null
   v2_migration_done:   boolean
-  wallet_usdc:         number | null   // live Arb USDC balance
-  wallet_eth:          number | null   // live Arb ETH balance
-  wallet_pol:          number | null   // live Polygon POL balance (gas)
-  trading_balance:     number | null   // live Polymarket total (avail + positions + redeem)
-  positions_value:     number          // open positions mark-to-market
-  redeem_value:        number          // redeemable positions value
+  wallet_usdc:         number | null
+  wallet_eth:          number | null
+  wallet_pol:          number | null
+  trading_balance:     number | null
+  positions_value:     number
+  redeem_value:        number
   active_session_id:   string | null
   session_status:      string | null
   session_live:        boolean
   created_at:          string
   free_fee_ends_at:    string | null
+}
+
+// ── Deposit ──────────────────────────────────────────────────────────────────
+
+export interface DepositToken {
+  symbol:           string
+  address:          string
+  decimals:         number
+  min_checkout_usd: number | null
+}
+
+export interface DepositChain {
+  chain_id:     string
+  chain_name:   string
+  address_type: 'evm' | 'svm'
+  tokens:       DepositToken[]
+}
+
+export interface DepositConfigOut {
+  polymarket_address:      string
+  deposit_addresses:       { evm: string; svm: string }
+  chains:                  DepositChain[]
+  trading_balance:         number | null
+  trading_cash_available:  number | null
+  positions_value:         number
+  redeem_value:            number
+  account_ready:           boolean
+  onboarding_state:        string
+  onboarding_complete:     boolean
+  is_funded_now:           boolean
 }
 
 // ── Strategy ─────────────────────────────────────────────────────────────────

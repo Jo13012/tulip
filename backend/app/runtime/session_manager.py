@@ -260,43 +260,21 @@ class SessionManager:
             if not viability.viable:
                 raise SessionLaunchError(f"Capital insufficient: {viability.reason}")
 
-            # Balance guards — read from poller cache (instant, no RPC)
+            # Trading balance guard — only Polymarket balance matters now
             from app.services.balance_poller import balance_poller
-            # Force refresh if cache is cold for this user
-            cached = balance_poller.get(user_id)
-            if cached.wallet_usdc is None and cached.wallet_eth is None and wallet.wallet_address:
-                await balance_poller.refresh_user(user_id, wallet.wallet_address or "", wallet.proxy_address or "")
-            usdc_bal, eth_bal = balance_poller.get_arb(user_id)
-            usdc_bal = usdc_bal or 0.0
-            eth_bal  = eth_bal  or 0.0
-            usdc_ok = not wallet.wallet_address or usdc_bal >= settings.FEE_WALLET_USDC_STOP
-            eth_ok  = not wallet.wallet_address or eth_bal  >= settings.FEE_WALLET_ETH_MIN
-            if not usdc_ok and not eth_ok:
-                raise SessionLaunchError(
-                    f"Insufficient gas funds on Arbitrum: "
-                    f"USDC {usdc_bal:.2f} < ${settings.FEE_WALLET_USDC_STOP:.2f} required and "
-                    f"ETH {eth_bal:.6f} < {settings.FEE_WALLET_ETH_MIN:.4f} required. "
-                    f"Send USDC and ETH to your Arbitrum wallet to cover gas fees."
-                )
-            if not usdc_ok:
-                raise SessionLaunchError(
-                    f"Insufficient USDC on Arbitrum for gas fees: "
-                    f"you have ${usdc_bal:.2f} but need at least ${settings.FEE_WALLET_USDC_STOP:.2f}. "
-                    f"Send USDC to your Arbitrum wallet."
-                )
-            if not eth_ok:
-                raise SessionLaunchError(
-                    f"Insufficient ETH on Arbitrum for gas: "
-                    f"you have {eth_bal:.6f} ETH but need at least {settings.FEE_WALLET_ETH_MIN:.4f} ETH. "
-                    f"Send ETH to your Arbitrum wallet to pay gas fees."
-                )
-
-            # Trading balance guard
             trading_bal = balance_poller.get_trading(user_id)
-            if not trading_bal or trading_bal <= 0:
+            positions_val = balance_poller.get(user_id).positions_value or 0.0
+            trading_cash = (trading_bal or 0.0)  # cash available (excludes positions)
+            if trading_cash <= 0:
                 raise SessionLaunchError(
                     "No Polymarket trading balance. "
-                    "Send USDC to your Arbitrum wallet and use 'Bridge to Polymarket' to fund your trading account."
+                    "Deposit USDC to your Polymarket account via Profile → Deposit."
+                )
+            if gross_capital > trading_cash + positions_val:
+                raise SessionLaunchError(
+                    f"Capital ${gross_capital:.2f} exceeds available Polymarket balance "
+                    f"${trading_cash + positions_val:.2f}. "
+                    "Deposit more USDC or reduce capital."
                 )
 
             # Capital split

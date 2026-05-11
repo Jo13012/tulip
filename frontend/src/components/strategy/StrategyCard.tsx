@@ -39,11 +39,11 @@ export function StrategyCard({ strategy }: Props) {
       )}
 
       <div className="flex items-center gap-2 text-sm text-white/50">
-        <span>{strategy.reserve_pct}% of capital held as fee reserve.</span>
+        <span>{strategy.reserve_pct}% capital buffer held in reserve.</span>
         <InfoTip content={
           <span>
-            The fee reserve covers platform fees on executed trades.
-            Separate from deployable capital, never used for orders.
+            The execution buffer keeps a portion of capital off-market
+            to maintain stable order sizing. Not used for orders.
           </span>
         } />
       </div>

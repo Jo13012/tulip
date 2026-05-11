@@ -56,6 +56,18 @@ async def ensure_wallet_funding_columns() -> None:
         "ALTER TABLE wallets ADD COLUMN IF NOT EXISTS funding_deposit_cached_at TIMESTAMPTZ",
         "ALTER TABLE wallets ADD COLUMN IF NOT EXISTS funding_last_usdc_observed FLOAT",
         "ALTER TABLE wallets ADD COLUMN IF NOT EXISTS funding_bridge_started_at TIMESTAMPTZ",
+        # New deposit address columns (multi-chain)
+        "ALTER TABLE wallets ADD COLUMN IF NOT EXISTS deposit_address_evm VARCHAR",
+        "ALTER TABLE wallets ADD COLUMN IF NOT EXISTS deposit_address_svm VARCHAR",
+        "ALTER TABLE wallets ADD COLUMN IF NOT EXISTS deposit_addresses_cached_at TIMESTAMPTZ",
+        # Backfill: copy legacy EVM address if new column is empty
+        """
+        UPDATE wallets
+        SET deposit_address_evm = funding_deposit_address_cached
+        WHERE deposit_address_evm IS NULL
+          AND funding_deposit_address_cached IS NOT NULL
+          AND funding_deposit_address_cached != ''
+        """,
     ]
 
     async with engine.begin() as conn:

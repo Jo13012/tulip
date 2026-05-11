@@ -1,12 +1,10 @@
 import { useEffect, useState } from 'react'
 import { usePrivy } from '@privy-io/react-auth'
-import type { AppUser, ProfileData } from '../../types'
-import { useAppStore } from '../../store'
+import { Copy, Check } from 'lucide-react'
+import type { AppUser, ProfileData, DepositConfigOut } from '../../types'
 import { api } from '../../utils/api'
-import { pnlColor, fmtStoredBps, fmtStoredBpsPct, fmtUsd } from '../../utils/format'
+import { pnlColor, fmtUsd } from '../../utils/format'
 import { XPModal } from './XPModal'
-import { BridgeHistoryModal } from './BridgeHistoryModal'
-import { FundingModal } from './OnboardingModal'
 import { Section, Row, AddressField, GhostButton } from '../ui/Field'
 
 interface Props { user: AppUser }
@@ -30,19 +28,139 @@ function writeCache(uid: string, data: ProfileData) {
   } catch {}
 }
 
+const CHAIN_LABELS: Record<string, string> = {
+  '42161': 'Arbitrum',
+  '8453':  'Base',
+  'solana': 'Solana',
+}
+
+function DepositSection({ depositConfig }: { depositConfig: DepositConfigOut | null }) {
+  const [selectedChainId, setSelectedChainId] = useState('42161')
+  const [copied, setCopied] = useState(false)
+
+  const chain = depositConfig?.chains.find(c => c.chain_id === selectedChainId)
+    ?? depositConfig?.chains[0]
+  const depositAddr = chain?.address_type === 'svm'
+    ? (depositConfig?.deposit_addresses.svm ?? '')
+    : (depositConfig?.deposit_addresses.evm ?? '')
+
+  function copyAddr() {
+    if (!depositAddr) return
+    navigator.clipboard.writeText(depositAddr).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
+  if (!depositConfig) {
+    return (
+      <div className="px-4 py-4 text-[11px] text-white/30">
+        Loading deposit info…
+      </div>
+    )
+  }
+
+  if (!depositConfig.account_ready) {
+    return (
+      <div className="px-4 py-4 text-[11px] text-white/30">
+        Complete account setup to get your deposit address.
+      </div>
+    )
+  }
+
+  if (!depositConfig.deposit_addresses.evm && !depositConfig.deposit_addresses.svm) {
+    return (
+      <div className="px-4 py-4 text-[11px] text-amber-400/60">
+        Deposit temporarily unavailable. Try again later.
+      </div>
+    )
+  }
+
+  const totalBal = (depositConfig.trading_balance ?? 0) + depositConfig.positions_value
+  const isFunded = depositConfig.is_funded_now
+
+  return (
+    <div className="space-y-1">
+      {/* Chain tabs */}
+      <div className="px-4 pt-3 flex gap-2">
+        {depositConfig.chains.map(c => (
+          <button
+            key={c.chain_id}
+            type="button"
+            onClick={() => setSelectedChainId(c.chain_id)}
+            className={`flex-1 text-[10px] py-1.5 rounded-lg border transition-all ${
+              selectedChainId === c.chain_id
+                ? 'border-white/30 bg-white/10 text-white'
+                : 'border-white/[0.07] bg-transparent text-white/30 hover:text-white/60'
+            }`}
+          >
+            {CHAIN_LABELS[c.chain_id] ?? c.chain_name}
+          </button>
+        ))}
+      </div>
+
+      {/* Address */}
+      <Row label="Deposit to">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <div className="flex-1 min-w-0">
+            {depositAddr
+              ? <AddressField value={depositAddr} />
+              : <span className="text-[11px] text-white/20 font-mono">—</span>}
+          </div>
+          {depositAddr && (
+            <button
+              type="button"
+              onClick={copyAddr}
+              className="flex-shrink-0 text-white/25 hover:text-white/60 transition-colors"
+            >
+              {copied ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+            </button>
+          )}
+        </div>
+      </Row>
+
+      {/* Accepted tokens */}
+      {chain && chain.tokens.length > 0 && (
+        <div className="px-4 pb-2 flex gap-3">
+          {chain.tokens.map(tok => (
+            <span key={tok.symbol} className="text-[10px] text-white/30">
+              {tok.symbol}
+              {tok.min_checkout_usd != null && (
+                <span className="text-white/20"> (min ${tok.min_checkout_usd})</span>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Trading balance */}
+      <Row label="Trading balance">
+        <span className={`text-[12px] font-mono font-semibold ${isFunded ? 'text-white/65' : 'text-white/25'}`}>
+          {depositConfig.trading_balance != null
+            ? `$${totalBal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            : '—'}
+        </span>
+      </Row>
+
+      {/* Info note */}
+      <div className="px-4 pb-3 pt-1">
+        <p className="text-[10px] text-white/25 leading-relaxed">
+          Deposited funds are credited directly on Polymarket. No bridge needed. Appears within a few minutes.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export function ProfileTab({ user }: Props) {
-  const addToast = useAppStore(s => s.addToast)
-  const fundingStatus = useAppStore(s => s.fundingStatus)
   usePrivy()
 
   const cached = readCache(user.user_id)
   const [profile, setProfile] = useState<ProfileData | null>(cached)
   const [loading, setLoading] = useState(!cached)
   const [xpOpen, setXpOpen] = useState(false)
-  const [bridgeHistoryOpen, setBridgeHistoryOpen] = useState(false)
-  const [fundingModalOpen, setFundingModalOpen] = useState(false)
-  const [forcingFunding, setForcingFunding] = useState(false)
   const [fundTab, setFundTab] = useState<'deposit' | 'withdraw'>('deposit')
+  const [depositConfig, setDepositConfig] = useState<DepositConfigOut | null>(null)
 
   useEffect(() => {
     api.getProfile().then((d: any) => {
@@ -51,18 +169,18 @@ export function ProfileTab({ user }: Props) {
     }).catch(() => {}).finally(() => setLoading(false))
   }, [user.user_id])
 
-  async function handleForceFunding() {
-    setForcingFunding(true)
-    try {
-      const status = await api.forceFunding() as any
-      useAppStore.getState().setFundingStatus(status)
-      addToast({ type: 'success', message: 'Fixing funding...' })
-    } catch (e: any) {
-      addToast({ type: 'error', message: e?.message ?? 'Funding fix failed' })
-    } finally {
-      setForcingFunding(false)
+  useEffect(() => {
+    let mounted = true
+    const load = async () => {
+      try {
+        const cfg = await api.getDepositConfig()
+        if (mounted) setDepositConfig(cfg)
+      } catch {}
     }
-  }
+    load()
+    const iv = setInterval(load, 15000)
+    return () => { mounted = false; clearInterval(iv) }
+  }, [])
 
   const pnl = profile ? Math.max(profile.bot_pnl, profile.wallet_pnl) : 0
   const vol = profile?.trading_volume ?? 0
@@ -72,22 +190,6 @@ export function ProfileTab({ user }: Props) {
   const dots = <span className="text-white/20 font-mono">...</span>
 
   const addr = user.wallet_address || ''
-  const tradingBal = fundingStatus?.trading_balance ?? null
-  const walletUsdc = fundingStatus?.usdc_balance ?? null
-  const walletEth = fundingStatus?.eth_balance ?? null
-  const bridgeAvailable = Boolean(fundingStatus?.bridge_available)
-  const bridgeableUsdc = Number(fundingStatus?.bridgeable_usdc || 0)
-  const reserveUsdcRequired = Number(fundingStatus?.required_usdc || fundingStatus?.fee_wallet_usdc_min || 2)
-  const needsAction = Boolean(fundingStatus?.needs_usdc || fundingStatus?.needs_eth || fundingStatus?.funding_state === 'failed')
-  const isSuggested = Boolean((fundingStatus?.warn_usdc || fundingStatus?.warn_eth) && !needsAction)
-  const isReady = !needsAction && !isSuggested && fundingStatus != null
-
-  const statusLabel = needsAction ? 'Action needed' : isSuggested ? 'Top up suggested' : isReady ? 'Ready' : 'Checking...'
-  const statusColor = needsAction
-    ? 'text-amber-300/80 bg-amber-500/10 border-amber-400/20'
-    : isReady
-      ? 'text-emerald-300/80 bg-emerald-500/10 border-emerald-400/20'
-      : 'text-white/30 bg-white/[0.04] border-white/10'
 
   return (
     <div className="p-6 space-y-5">
@@ -122,11 +224,6 @@ export function ProfileTab({ user }: Props) {
                 disabled={sh}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.09] text-white/40 hover:text-white/70 transition-all text-[10px] font-semibold disabled:opacity-30"
               >
-                <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-                  <rect x="1" y="1.5" width="10" height="1.5" rx=".75" fill="currentColor" opacity=".5"/>
-                  <rect x="1" y="5.25" width="7" height="1.5" rx=".75" fill="currentColor" opacity=".7"/>
-                  <rect x="1" y="9" width="4.5" height="1.5" rx=".75" fill="currentColor"/>
-                </svg>
                 View tier
               </button>
               {feeIsOverridden && (
@@ -139,17 +236,6 @@ export function ProfileTab({ user }: Props) {
                 {sh ? dots : fmtUsd(profile?.wallet_volume ?? 0, 0)}
               </span>
             </Row>
-
-            {feeIsOverridden && (
-              <Row label="Fee rate">
-                <span className="text-[12px] font-mono font-semibold text-amber-300/80">
-                  {fmtStoredBps(feeBps)} ({fmtStoredBpsPct(feeBps)})
-                </span>
-                <span className="text-[9px] text-amber-400/50 border border-amber-400/20 bg-amber-500/5 px-1.5 py-0.5 rounded-full">
-                  custom
-                </span>
-              </Row>
-            )}
           </Section>
         </div>
 
@@ -169,117 +255,9 @@ export function ProfileTab({ user }: Props) {
               ))}
             </div>
           )}
-          action={fundTab === 'deposit' && fundingStatus ? (
-            <span className={`text-[10px] font-semibold px-2.5 py-0.5 rounded-full border ${statusColor}`}>
-              {statusLabel}
-            </span>
-          ) : undefined}
         >
           {fundTab === 'deposit' ? (
-            <>
-              <div className="px-4 py-3 space-y-3">
-                {[
-                  <>
-                    Deposit <span className="text-white/65 font-semibold">USDC</span> to your wallet on{" "}
-                    <span className="text-white/65 font-semibold">Arbitrum</span>.
-                  </>,
-                  <>
-                    Keep a small amount of <span className="text-white/65 font-semibold">ETH</span> for gas fees{" "}
-                    <span className="text-white/30">(around 0.0015 ETH)</span>.
-                  </>,
-                  <>
-                    Your funds are automatically allocated to your trading balance for execution.
-                  </>,
-                  <>
-                    A small safety buffer is maintained on your Arbitrum wallet: the greater of{" "}
-                    <span className="text-white/65 font-semibold">${reserveUsdcRequired.toFixed(2)} USDC</span> or{" "}
-                    <span className="text-white/65 font-semibold">
-                      {Math.round((fundingStatus?.fee_buffer_pct ?? 0.05) * 100)}%
-                    </span>{" "}
-                    of your total capital.
-                  </>,
-                  <>
-                    Any balance above{" "}
-                    <span className="text-white/65 font-semibold">
-                      ${(fundingStatus?.bridge_min_usdc ?? 5).toFixed(0)}+
-                    </span>{" "}
-                    is automatically bridged when available.
-                  </>,
-                ].map((text, i) => (
-                  <div key={i} className="flex gap-3 items-start">
-                    <span className="text-[10px] text-white/20 font-mono mt-0.5 w-3 flex-shrink-0">
-                      {i + 1}
-                    </span>
-                    <p className="text-[11px] text-white/45 leading-relaxed">{text}</p>
-                  </div>
-                ))}
-              </div>
-
-              {addr && (
-                <Row label="Deposit to">
-                  <AddressField value={addr} />
-                </Row>
-              )}
-
-              {(tradingBal != null || walletUsdc != null || walletEth != null) && (
-                <>
-                  {tradingBal != null && (
-                    <Row label="Trading balance">
-                      <span className="text-[12px] font-mono font-semibold text-white/65">
-                        ${tradingBal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        {(fundingStatus?.positions_value ?? 0) > 0 && (
-                          <span className="ml-1.5 text-[11px] font-normal text-white/35">
-                            avail ${(tradingBal - (fundingStatus?.positions_value ?? 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </span>
-                        )}
-                      </span>
-                    </Row>
-                  )}
-                  {(walletUsdc != null || walletEth != null) && (
-                    <Row label="Wallet balances">
-                      <span className="text-[12px] font-mono font-semibold text-white/65">
-                        {walletUsdc != null
-                          ? `$${walletUsdc.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`
-                          : '-'}
-                        {' · '}
-                        {walletEth != null ? `${walletEth.toFixed(5)} ETH` : '-'}
-                      </span>
-                    </Row>
-                  )}
-                  {fundingStatus != null && (
-                    <Row label="Bridge ready">
-                      <span className="text-[12px] font-mono font-semibold text-white/65">
-                        ${bridgeableUsdc.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} available
-                      </span>
-                    </Row>
-                  )}
-                </>
-              )}
-
-              <div className="px-4 py-3 space-y-2.5">
-                {fundingStatus?.message && (
-                  <p className={`text-[11px] ${needsAction ? 'text-amber-200/70' : 'text-white/30'}`}>
-                    {fundingStatus.message}
-                  </p>
-                )}
-                <div className="flex flex-wrap gap-2">
-                  <GhostButton onClick={() => setFundingModalOpen(true)}>
-                    Bridge
-                  </GhostButton>
-                  {fundingStatus && !isReady && !(fundingStatus?.needs_usdc || fundingStatus?.needs_eth) && (
-                    <GhostButton
-                      disabled={forcingFunding || !bridgeAvailable || fundingStatus?.funding_state === 'bridging' || fundingStatus?.funding_state === 'preparing'}
-                      onClick={handleForceFunding}
-                    >
-                      {(forcingFunding || fundingStatus?.funding_state === 'bridging' || fundingStatus?.funding_state === 'preparing') ? 'Bridging...' : 'Bridge to Polymarket'}
-                    </GhostButton>
-                  )}
-                  <GhostButton onClick={() => setBridgeHistoryOpen(true)}>
-                    History
-                  </GhostButton>
-                </div>
-              </div>
-            </>
+            <DepositSection depositConfig={depositConfig} />
           ) : (
             <div className="px-4 py-4 space-y-4">
               <div className="space-y-3">
@@ -308,7 +286,7 @@ export function ProfileTab({ user }: Props) {
               <div className="flex items-start gap-2.5 px-3.5 py-3 rounded-xl border border-amber-400/15 bg-amber-500/[0.04]">
                 <span className="text-[11px] text-amber-400/50 mt-0.5 flex-shrink-0">!</span>
                 <p className="text-[10px] text-amber-300/55 leading-relaxed">
-                  We do not store your private key and have no access to your funds at any time. You are the sole person with access to your wallet and remain responsible for its safekeeping.
+                  We do not store your private key and have no access to your funds at any time.
                 </p>
               </div>
             </div>
@@ -322,15 +300,6 @@ export function ProfileTab({ user }: Props) {
           fee_bps={feeBps}
           fee_is_overridden={feeIsOverridden}
           onClose={() => setXpOpen(false)}
-        />
-      )}
-      {bridgeHistoryOpen && (
-        <BridgeHistoryModal onClose={() => setBridgeHistoryOpen(false)} />
-      )}
-      {fundingModalOpen && (
-        <FundingModal
-          user={user}
-          onClose={() => setFundingModalOpen(false)}
         />
       )}
     </div>

@@ -71,7 +71,7 @@ export function SessionLaunchForm({ strategy, walletId, onLaunched }: Props) {
         <div>
           <label className="label flex items-center gap-1 mb-1.5">
             Total Capital (USDC)
-            <InfoTip content="The total USDC you want to deploy for this session, including fee reserve." />
+            <InfoTip content="The total USDC you want to deploy for this session, including execution buffer." />
           </label>
           <input className="input" type="number" min="0" placeholder="e.g. 1000"
             value={grossCapital} onChange={(e) => setGrossCapital(e.target.value)} />
@@ -82,7 +82,7 @@ export function SessionLaunchForm({ strategy, walletId, onLaunched }: Props) {
             <div className="bg-white/5 rounded-xl px-3 py-2">
               <div className="flex items-center gap-1 label mb-1">
                 Deployable
-                <InfoTip content="Capital actively used for orders. Gross minus fee reserve." />
+                <InfoTip content="Capital actively used for orders. Gross minus execution buffer." />
               </div>
               <div className="font-semibold">{fmtUsd(deployable)}</div>
             </div>

@@ -319,7 +319,7 @@ class SessionEngine:
                 await self._check_free_fee_expiry()
                 await self._check_session_sl()
                 await self._check_stop_mode()
-                await self._check_arbitrum_fee_buffer()
+                # _check_arbitrum_fee_buffer removed — no Arbitrum fee wallet requirement
                 await self._check_soft_stop_complete()
                 await self._broadcast()
             except Exception as e:
@@ -519,19 +519,7 @@ class SessionEngine:
     # ── Slot callbacks ────────────────────────────────────────────────────────
 
     async def _on_lot_opened(self, session_slot_id: str, lot: RuntimeLot):
-        if self._strategy and self._privy_wallet_id and self._fee_wallet_address:
-            await fee_service.process_lot_opened(
-                self,
-                lot.size,
-                self._strategy,
-                slot_id=session_slot_id,
-                user_fee_bps=self._user_fee_bps,
-                privy_wallet_id=self._privy_wallet_id,
-                wallet_address=self._fee_wallet_address,
-                referrer_user_id=self._referrer_user_id,
-                referrer_wallet_address=self._referrer_wallet_address,
-                db_factory=self._db_factory,
-            )
+        # fee_service.process_lot_opened removed — no app fees in new model
         # Increment lifetime trading_volume (buy-side notional)
         await self._increment_user_volume(lot.size, pnl=None)
         await self._increment_slot_volume(session_slot_id, lot.size, pnl=None)
@@ -539,19 +527,7 @@ class SessionEngine:
             await self._on_lot_event("opened", lot, None)
 
     async def _on_lot_closed(self, session_slot_id: str, lot: RuntimeLot, pnl: float):
-        if self._strategy and self._privy_wallet_id and self._fee_wallet_address:
-            await fee_service.process_lot_closed(
-                self,
-                lot.size,
-                self._strategy,
-                slot_id=session_slot_id,
-                user_fee_bps=self._user_fee_bps,
-                privy_wallet_id=self._privy_wallet_id,
-                wallet_address=self._fee_wallet_address,
-                referrer_user_id=self._referrer_user_id,
-                referrer_wallet_address=self._referrer_wallet_address,
-                db_factory=self._db_factory,
-            )
+        # fee_service.process_lot_closed removed — no app fees in new model
         # Increment lifetime trading_volume (sell-side notional) + bot_pnl
         await self._increment_user_volume(lot.size, pnl=pnl)
         await self._increment_slot_volume(session_slot_id, lot.size, pnl=pnl)

@@ -98,14 +98,13 @@ async def lifespan(app: FastAPI):
     # Start live wallet balance poller (30s TTL cache for admin/users)
     balance_poller.start()
 
-    # Start fee flush (DB-persisted queue, 10s poll, 10s debounce)
-    from app.db.session import async_session_factory
-    fee_service.start(async_session_factory)
+    # fee_service.start() intentionally not called — no app fees in new model
+    # Existing fee_queue rows are preserved for audit but no new payments are made.
 
     yield
 
     # Shutdown
-    await fee_service.stop()
+    # fee_service not started — no stop needed
     await balance_poller.stop()
     await market_data_service.close()
     await market_resolver.close()
