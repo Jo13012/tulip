@@ -111,11 +111,11 @@ def _encode_binary_redeem(condition_id: str, collateral: str) -> str:
 
 def _encode_neg_risk_redeem(condition_id: str, amount: int, outcome: str = "") -> str:
     cid = bytes.fromhex(condition_id.lstrip("0x").zfill(64))
-    # NegRiskAdapter indexSet: index 0 = NO, index 1 = YES
+    # NegRiskAdapter: outcomeIndex 0 = YES, outcomeIndex 1 = NO (matches Polymarket API outcomeIndex)
     if outcome.upper() in ("YES", "Y"):
-        amounts = [0, amount]
-    else:
         amounts = [amount, 0]
+    else:
+        amounts = [0, amount]
     encoded = abi_encode(["bytes32", "uint256[]"], [cid, amounts])
     return "0x" + _NEG_RISK_REDEEM_SEL.hex() + encoded.hex()
 
