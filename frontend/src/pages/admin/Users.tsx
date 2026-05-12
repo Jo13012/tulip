@@ -780,7 +780,7 @@ export default function AdminUsers() {
   const [nuclearUser, setNuclearUser] = useState<AdminUser | null>(null)
   const [redeemUser, setRedeemUser]   = useState<AdminUser | null>(null)
   const [filterAccountReady, setFilterAccountReady] = useState(false)
-  const [filterFunded, setFilterFunded] = useState(false)
+  const [filterFunded, setFilterFunded] = useState(true)
   const [forcingReplaceAll, setForcingReplaceAll] = useState(false)
   const addToast = useAppStore(s => s.addToast)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)

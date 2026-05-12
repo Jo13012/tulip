@@ -101,9 +101,6 @@ export const api = {
   getOnboardingStatus: () => request('/api/v1/user/wallets/onboarding-status'),
   getDepositConfig: () => request<import('../types').DepositConfigOut>('/api/v1/user/wallets/deposit-config'),
   getFundingStatus: () => request('/api/v1/user/wallets/funding-status'),
-  /** @deprecated No-op — auto-bridge removed. Use deposit-config flow. */
-  forceFunding: () => request('/api/v1/user/wallets/funding-force', { method: 'POST' }),
-  getBridgeHistory: () => request<import('../components/user/BridgeHistoryModal').BridgeTx[]>('/api/v1/user/wallets/bridge-history'),
   getUserDailyVolume: (days = 60) => request(`/api/v1/user/analytics/daily-volume?days=${days}`),
   getUserDailyCpm: (days = 60) => request(`/api/v1/user/analytics/daily-cpm?days=${days}`),
   getUserDailyMultiple: (days = 60) => request(`/api/v1/user/analytics/daily-multiple?days=${days}`),

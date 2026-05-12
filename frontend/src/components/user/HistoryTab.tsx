@@ -143,7 +143,7 @@ export function HistoryTab() {
         </div>
 
         {visible.map(s => {
-          const netPnl = s.realized_pnl - s.paid_fees
+          const netPnl = s.realized_pnl - Math.floor(s.total_volume * 12 / 100_000 * 100) / 100
           const cpm = s.total_volume > 0 ? (netPnl / s.total_volume) * 1_000_000 : null
           const cpmSign = cpm != null && cpm > 0 ? '+' : ''
           const isError = s.status === 'error'
@@ -173,7 +173,7 @@ export function HistoryTab() {
                 <span className={`text-[11px] font-mono font-semibold tabular-nums ${pnlColor(s.realized_pnl)}`}>{fmtUsd(s.realized_pnl)}</span>
               </div>
               <div className="flex items-center">
-                <span className="text-[10px] font-mono text-white/25 tabular-nums">{fmtUsd(s.paid_fees)}</span>
+                <span className="text-[10px] font-mono text-white/25 tabular-nums">{fmtUsd(Math.floor(s.total_volume * 12 / 100_000 * 100) / 100)}</span>
               </div>
               <div className="flex items-center">
                 <span className={`text-[11px] font-mono font-semibold tabular-nums ${pnlColor(netPnl)}`}>{fmtUsd(netPnl)}</span>
@@ -191,7 +191,7 @@ export function HistoryTab() {
       {/* ── Mobile cards (xs only) ── */}
       <div className="sm:hidden">
         {visible.map(s => {
-          const netPnl = s.realized_pnl - s.paid_fees
+          const netPnl = s.realized_pnl - Math.floor(s.total_volume * 12 / 100_000 * 100) / 100
           const cpm = s.total_volume > 0 ? (netPnl / s.total_volume) * 1_000_000 : null
           const cpmSign = cpm != null && cpm > 0 ? '+' : ''
           const isError = s.status === 'error'
@@ -223,7 +223,7 @@ export function HistoryTab() {
                 </div>
                 <div>
                   <div className="text-[8px] text-white/20 uppercase tracking-widest mb-0.5">Fees</div>
-                  <div className="text-[11px] font-mono text-white/25 tabular-nums">{fmtUsd(s.paid_fees)}</div>
+                  <div className="text-[11px] font-mono text-white/25 tabular-nums">{fmtUsd(Math.floor(s.total_volume * 12 / 100_000 * 100) / 100)}</div>
                 </div>
                 <div>
                   <div className="text-[8px] text-white/20 uppercase tracking-widest mb-0.5">Net</div>

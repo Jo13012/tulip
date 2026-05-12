@@ -19,6 +19,7 @@ import { SettingsTab } from '../components/user/SettingsTab'
 import { ProfileTab } from '../components/user/ProfileTab'
 import { ReferralTab } from '../components/user/ReferralTab'
 import { FaqTab } from '../components/user/FaqTab'
+import { ChangelogBanner } from '../components/user/ChangelogBanner'
 
 type Tab = 'run' | 'history' | 'performance' | 'profile' | 'referral' | 'settings' | 'faq'
 
@@ -94,7 +95,6 @@ function UserMenu({ user, usdcBalance, positionsValue, onSignOut }: {
 
 export default function UserDashboard({ user, onSignOut }: Props) {
   const { strategy, setStrategy, activeSession, setActiveSession, setFundingStatus } = useAppStore()
-  const fundingStatus = useAppStore(s => s.fundingStatus)
   const [tab, setTab] = useState<Tab>('run')
   const [loading, setLoading] = useState(true)
   const [usdcBalance, setUsdcBalance] = useState<number | null>(null)
@@ -259,6 +259,7 @@ export default function UserDashboard({ user, onSignOut }: Props) {
         </div>
       </div>
 
+      <ChangelogBanner userId={user.user_id} />
       {showLowBalance && (
         <div className="px-5">
           <div className="mt-3 mb-2 border border-white/[0.08] bg-[#15161a] rounded-xl px-4 py-3 flex items-center justify-between gap-4 animate-[fadeIn_200ms_ease-out]">

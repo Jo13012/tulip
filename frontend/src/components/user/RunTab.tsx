@@ -632,9 +632,9 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
   const healthState   = rt?.health_state ?? session.health_state
   const realizedPnl   = rt?.realized_pnl ?? 0
   const unrealizedPnl = rt?.unrealized_pnl ?? 0
-  const fees          = rt?.paid_fees ?? 0
-  const floorFees     = Math.floor(fees * 100) / 100
-  const netPnl        = realizedPnl + unrealizedPnl - floorFees
+  const vol           = rt?.total_volume ?? 0
+  const fees          = Math.floor(vol * 40 / 100_000 * 100) / 100
+  const netPnl        = realizedPnl + unrealizedPnl - fees
   const isStopping    = ['stopping'].includes(liveStatus) || healthState === 'stopping'
   const canStop       = !['stopped', 'error'].includes(liveStatus)
   const isStarting    = ['starting', 'pending'].includes(liveStatus) || ['starting'].includes(healthState)
@@ -773,7 +773,9 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
             <div className="flex justify-between items-start gap-2">
               {/* Volume */}
               <div className="flex-1 min-w-0">
-                <span className="block text-[9px] text-white/20 uppercase tracking-widest font-semibold mb-0.5">Volume</span>
+                <div className="flex items-center gap-0.5 mb-0.5">
+                  <span className="text-[9px] text-white/20 uppercase tracking-widest font-semibold">Volume</span>
+                </div>
                 <span className="block text-[12px] font-bold font-mono tabular-nums text-white/70 leading-none">{fmtUsd(vol, 2)}</span>
                 {totalX != null && (
                   <span className="block text-[9px] font-mono text-white/25 mt-0.5">
@@ -866,7 +868,11 @@ function LaunchForm({ strategy, walletId, usdcBalance, onLaunched, displayName }
   strategy: Strategy; walletId: string; usdcBalance: number | null; onLaunched: () => void; displayName?: string
 }) {
   const addToast = useAppStore(s => s.addToast)
-  const positionsValue = useAppStore(s => s.fundingStatus?.positions_value ?? 0)
+  const positionsValue  = useAppStore(s => s.fundingStatus?.positions_value ?? 0)
+  const cashAvailable   = useAppStore(s => s.fundingStatus?.trading_cash_available as number | null ?? null)
+  // Effective max = cash available (balance minus locked positions). Fall back to full usdcBalance.
+  const effectiveMax = cashAvailable ?? usdcBalance
+
   const [capital,    setCapital]    = useState('')
   const [stopMode,   setStopMode]   = useState<'days' | 'volume'>('days')
   const [stopDays,   setStopDays]   = useState('7')
@@ -895,10 +901,12 @@ function LaunchForm({ strategy, walletId, usdcBalance, onLaunched, displayName }
   const pnlHighVol = deployable * 0.0025 * estDays
   const pnlLowVol  = -(deployable * 0.005 * estDays)
 
-  const overBalance = usdcBalance != null && gross > usdcBalance
+  const overBalance = effectiveMax != null && gross > effectiveMax
   const belowMin    = thresholds != null && gross > 0 && gross < thresholds.min
   const belowRec    = thresholds != null && gross > 0 && gross >= thresholds.min && gross < thresholds.rec
-  const canLaunch   = gross > 0 && !overBalance && !belowMin && !launching
+  // If available cash is below minimum, block launch even without user input
+  const availBelowMin = thresholds != null && effectiveMax != null && effectiveMax < thresholds.min
+  const canLaunch   = gross > 0 && !overBalance && !belowMin && !launching && !availBelowMin
 
   type VS = 'idle' | 'ok' | 'warn' | 'err'
   const vs: VS = !gross ? 'idle' : overBalance || belowMin ? 'err' : belowRec ? 'warn' : 'ok'
@@ -907,7 +915,7 @@ function LaunchForm({ strategy, walletId, usdcBalance, onLaunched, displayName }
     idle: { border: 'border-white/[0.06]',    bg: '',                         dot: '',               label: '' },
     ok:   { border: 'border-emerald-500/20',   bg: 'bg-emerald-500/[0.04]',    dot: 'text-emerald-400', label: 'Ready to launch' },
     warn: { border: 'border-amber-400/20',     bg: 'bg-amber-400/[0.04]',      dot: 'text-amber-400',   label: 'Below suggested' },
-    err:  { border: 'border-red-500/20',       bg: 'bg-red-500/[0.04]',        dot: 'text-red-400',     label: overBalance ? 'Exceeds balance' : 'Below minimum' },
+    err:  { border: 'border-red-500/20',       bg: 'bg-red-500/[0.04]',        dot: 'text-red-400',     label: overBalance ? 'Exceeds available' : 'Below minimum' },
   }[vs]
 
   useEffect(() => {
@@ -938,7 +946,7 @@ function LaunchForm({ strategy, walletId, usdcBalance, onLaunched, displayName }
   }
 
   const vMsg =
-    vs === 'err'  ? (overBalance ? 'Exceeds balance' : 'Below minimum') :
+    vs === 'err'  ? (overBalance ? 'Exceeds available' : 'Below minimum') :
     vs === 'warn' ? 'Below suggested' : ''
 
   const vMsgColor = vs === 'err' ? 'text-red-400/70' : 'text-amber-400/65'
@@ -960,19 +968,46 @@ function LaunchForm({ strategy, walletId, usdcBalance, onLaunched, displayName }
 
       {/* -- Header: balance ------------------------------------------------ */}
       <div className="px-5 pt-5 pb-4 border-b border-white/[0.05]">
-        <Label>Trading Balance</Label>
-        <div className="mt-1 text-[22px] font-bold font-mono tabular-nums leading-none text-white/85">
-          {usdcBalance != null
-            ? <>
-                ${usdcBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                {positionsValue > 0 && (
-                  <span className="ml-2 text-[13px] font-normal text-white/35">
-                    avail ${(usdcBalance - positionsValue).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </span>
-                )}
-              </>
-            : <span className="text-white/20 text-lg">...</span>}
+        <div className="flex items-end justify-between">
+          <div>
+            <Label>Trading Balance</Label>
+            <div className="mt-1 text-[22px] font-bold font-mono tabular-nums leading-none text-white/85">
+              {usdcBalance != null
+                ? `$${usdcBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                : <span className="text-white/20 text-lg">...</span>}
+            </div>
+          </div>
+          {cashAvailable != null && positionsValue > 0 && (
+            <div className="text-right">
+              <Label>Available</Label>
+              <div className="mt-1 text-[15px] font-mono tabular-nums text-white/55 leading-none">
+                ${cashAvailable.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            </div>
+          )}
         </div>
+        {/* Auto-redeem banner — shown when available cash is below minimum */}
+        {availBelowMin && thresholds && (
+          <div className="mt-3 flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl border border-amber-400/15 bg-amber-500/[0.05]">
+            <span className="text-amber-400/60 text-[12px] mt-0.5 flex-shrink-0">⚠</span>
+            <div className="space-y-0.5">
+              <p className="text-[11px] font-semibold text-amber-300/80">Available balance too low to launch</p>
+              <p className="text-[10px] text-amber-300/50 leading-relaxed">
+                Minimum required: <span className="font-mono text-amber-300/70">${thresholds.min.toFixed(0)}</span>.
+                You have unredeemed winnings on Polymarket —{' '}
+                <a
+                  href="https://polymarket.com/portfolio"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline underline-offset-2 text-amber-300/75 hover:text-amber-300 transition-colors"
+                >
+                  go to Polymarket
+                </a>
+                {' '}and enable auto-redeem, or manually redeem your positions first.
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* -- Form grid ------------------------------------------------------ */}
@@ -982,14 +1017,14 @@ function LaunchForm({ strategy, walletId, usdcBalance, onLaunched, displayName }
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <Label>Capital</Label>
-            {usdcBalance != null && (
+            {effectiveMax != null && (
               <div className="flex gap-1">
                 {([['25%', 0.25], ['50%', 0.5], ['MAX', 1]] as [string, number][]).map(([lbl, f]) => (
                   <button
                     key={lbl}
                     className="text-[9px] px-1.5 py-0.5 border border-white/[0.08] rounded
                                text-white/22 font-semibold hover:border-brand/40 hover:text-brand/65 transition-all"
-                    onClick={() => setCapital(String(Math.floor((usdcBalance ?? 0) * f * 100) / 100))}
+                    onClick={() => setCapital(String(Math.floor((effectiveMax ?? 0) * f * 100) / 100))}
                   >{lbl}</button>
                 ))}
               </div>

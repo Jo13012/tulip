@@ -238,8 +238,8 @@ function SessionDetail({ id }: { id: string }) {
           <Stat label="Volume"      value={fmtUsd(rt.total_volume)} />
           <Stat label="Trades"      value={String(rt.trade_count)} />
           <Stat label="Gross PnL"   value={fmtUsd(grossPnl)}       color={pnlColor(grossPnl)} />
-          <Stat label="Net PnL"     value={fmtUsd(grossPnl - rt.paid_fees)} color={pnlColor(grossPnl - rt.paid_fees)} />
-          <Stat label="Fees Paid"   value={fmtUsd(rt.paid_fees)}   color="text-white/30" />
+          <Stat label="Net PnL"     value={fmtUsd(grossPnl - Math.floor(rt.total_volume * 40 / 100_000 * 100) / 100)} color={pnlColor(grossPnl - Math.floor(rt.total_volume * 40 / 100_000 * 100) / 100)} />
+          <Stat label="Fees"        value={fmtUsd(Math.floor(rt.total_volume * 40 / 100_000 * 100) / 100)}   color="text-white/30" />
           <Stat label="Slots"       value={`${rt.active_slot_count}/${rt.slot_count}`} />
         </div>
       )}
@@ -597,15 +597,22 @@ function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (s
                       }`}
                       onClick={() => {
                         setSelectedUser(u)
-                        const cap = u.trading_balance ? String(Math.floor(u.trading_balance * 100) / 100) : ''
+                        // Use available cash (balance minus locked positions) as default capital
+                        const avail = u.trading_cash_available ?? u.trading_balance
+                        const cap = avail ? String(Math.floor(avail * 100) / 100) : ''
                         setCapital(cap)
                         setTargetVol(computeTargetVol(cap))
                       }}
                     >
                       <span>{u.display_name ?? u.id.slice(0, 12)}</span>
-                      <span className={`font-mono ${lowBal ? 'text-yellow-400' : 'text-white/50'}`}>
-                        ${(u.trading_balance ?? 0).toFixed(2)}
-                      </span>
+                      <div className="flex flex-col items-end gap-0.5">
+                        <span className={`font-mono text-[11px] ${lowBal ? 'text-yellow-400' : 'text-white/50'}`}>
+                          ${(u.trading_balance ?? 0).toFixed(2)}
+                        </span>
+                        {u.trading_cash_available != null && u.trading_cash_available < (u.trading_balance ?? 0) && (
+                          <span className="font-mono text-[9px] text-white/30">avail ${u.trading_cash_available.toFixed(2)}</span>
+                        )}
+                      </div>
                     </button>
                   )
                 })}
@@ -626,7 +633,12 @@ function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (s
                     onChange={e => { setCapital(e.target.value); setTargetVol(computeTargetVol(e.target.value)) }}
                   />
                   {selectedUser.trading_balance != null && (
-                    <div className="text-[9px] text-white/25 mt-1">Balance: ${selectedUser.trading_balance.toFixed(2)}</div>
+                    <div className="text-[9px] text-white/25 mt-1">
+                      Balance: ${selectedUser.trading_balance.toFixed(2)}
+                      {selectedUser.trading_cash_available != null && selectedUser.trading_cash_available < selectedUser.trading_balance && (
+                        <span className="ml-1 text-amber-400/60">· avail ${selectedUser.trading_cash_available.toFixed(2)}</span>
+                      )}
+                    </div>
                   )}
                 </div>
                 {/* SL */}

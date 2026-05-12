@@ -9,11 +9,12 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { usePrivy } from '@privy-io/react-auth'
-import { Copy, Check } from 'lucide-react'
+import { Copy, Check, ChevronDown } from 'lucide-react'
 
 import type { AppUser } from '../../types'
 import { api } from '../../utils/api'
 import { AddressField, GhostButton } from '../ui/Field'
+import { CHAIN_ICON_META, TOKEN_ICON_MAP, TOKEN_MIN_FALLBACK, STATIC_DEPOSIT_CHAINS } from '../ui/ChainIcons'
 
 const TRUNCATE_LEN = 120
 
@@ -472,11 +473,8 @@ function Step2Username({
   )
 }
 
-const CHAIN_LABELS: Record<string, string> = {
-  '42161': 'Arbitrum',
-  '8453':  'Base',
-  'solana': 'Solana',
-}
+const OB_CHAIN_META = CHAIN_ICON_META
+const OB_TOKEN_ICONS = TOKEN_ICON_MAP
 
 export function Step3Deposit({
   depositConfig,
@@ -490,10 +488,21 @@ export function Step3Deposit({
   onSkip?: () => void
 }) {
   const [selectedChainId, setSelectedChainId] = useState<string>('42161')
+  const [dropOpen, setDropOpen] = useState(false)
   const [copiedAddr, setCopiedAddr] = useState(false)
+  const dropRef = useRef<HTMLDivElement>(null)
 
-  const chain = depositConfig?.chains.find(c => c.chain_id === selectedChainId)
-    ?? depositConfig?.chains[0]
+  useEffect(() => {
+    if (!dropOpen) return
+    function h(e: MouseEvent) {
+      if (dropRef.current && !dropRef.current.contains(e.target as Node)) setDropOpen(false)
+    }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [dropOpen])
+
+  const chains = (depositConfig?.chains?.length ? depositConfig.chains : STATIC_DEPOSIT_CHAINS)
+  const chain = chains.find(c => c.chain_id === selectedChainId) ?? chains[0]
   const depositAddr = chain?.address_type === 'svm'
     ? (depositConfig?.deposit_addresses.svm ?? '')
     : (depositConfig?.deposit_addresses.evm ?? '')
@@ -506,121 +515,151 @@ export function Step3Deposit({
     })
   }
 
+  const chainMeta = OB_CHAIN_META[selectedChainId] ?? OB_CHAIN_META['42161']
   const notReady = !depositConfig?.account_ready
+  const totalBal = depositConfig ? (depositConfig.trading_balance ?? 0) + depositConfig.positions_value : 0
 
   return (
     <div className="flex flex-col flex-1">
-      <div className="mb-6">
-        <div className="text-[10px] text-white/20 uppercase tracking-widest font-semibold mb-1.5">
-          Fund account
-        </div>
+      <div className="mb-4">
+        <div className="text-[10px] text-white/20 uppercase tracking-widest font-semibold mb-1.5">Fund account</div>
         <div className="text-[15px] font-semibold text-white">
           {isFunded ? 'Account funded' : 'Deposit to Polymarket'}
         </div>
         <div className="text-[11px] text-white/35 mt-1">
-          {isFunded
-            ? 'Your Polymarket balance is ready.'
-            : 'Send USDC directly to your Polymarket deposit address.'}
+          {isFunded ? 'Your Polymarket balance is ready.' : 'Send USDC directly to your deposit address.'}
         </div>
       </div>
 
-      <div className="space-y-4 flex-1">
+      <div className="flex-1 space-y-3">
         {notReady ? (
-          <div className="text-[11px] text-white/35 py-4 text-center">
+          <div className="py-8 text-center text-[11px] text-white/25">
             Complete account setup to get your deposit address.
           </div>
         ) : !depositConfig ? (
-          <div className="text-[11px] text-amber-400/60 py-4 text-center">
-            Deposit temporarily unavailable. Try again later.
+          <div className="py-8 text-center text-[11px] text-amber-400/60">
+            Deposit temporarily unavailable.
           </div>
         ) : (
           <>
-            {/* Chain selector */}
-            <div className="flex gap-2">
-              {depositConfig.chains.map(c => (
-                <button
-                  key={c.chain_id}
-                  type="button"
-                  onClick={() => setSelectedChainId(c.chain_id)}
-                  className={`flex-1 text-[10px] py-1.5 rounded-lg border transition-all ${
-                    selectedChainId === c.chain_id
-                      ? 'border-white/30 bg-white/10 text-white'
-                      : 'border-white/[0.07] bg-transparent text-white/30 hover:text-white/60'
-                  }`}
-                >
-                  {CHAIN_LABELS[c.chain_id] ?? c.chain_name}
-                </button>
-              ))}
+            {/* Balance row */}
+            <div className="flex items-center justify-between rounded-xl bg-white/[0.03] border border-white/[0.05] px-3.5 py-2.5">
+              <div>
+                <p className="text-[9px] font-semibold uppercase tracking-widest text-white/20 mb-0.5">Polymarket balance</p>
+                <p className={`text-[15px] font-mono font-bold tabular-nums leading-none ${isFunded ? 'text-emerald-400' : 'text-white/25'}`}>
+                  ${totalBal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
+              </div>
+              {isFunded && (
+                <span className="flex items-center gap-1 text-[9px] font-semibold text-emerald-400 bg-emerald-400/10 border border-emerald-400/20 px-2 py-1 rounded-full">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
+                  Funded
+                </span>
+              )}
             </div>
 
-            {/* Deposit address */}
-            <div className="rounded-xl border border-white/[0.07] bg-[#0d0e10] overflow-hidden">
-              <div className="flex items-center gap-3 px-4 py-3">
-                <span className="text-[11px] text-white/40 flex-shrink-0">Deposit to</span>
-                <div className="flex-1 min-w-0">
-                  {depositAddr
-                    ? <AddressField value={depositAddr} />
-                    : <span className="text-[11px] text-white/20 font-mono">—</span>
-                  }
+            {/* Chain dropdown */}
+            <div className="relative" ref={dropRef}>
+              <button
+                type="button"
+                onClick={() => setDropOpen(v => !v)}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl border border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06] transition-all w-full"
+              >
+                <chainMeta.Icon size={18} />
+                <span className="flex-1 text-left text-[12px] font-semibold text-white/80">{chainMeta.label}</span>
+                <ChevronDown size={12} className={`text-white/30 transition-transform ${dropOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {dropOpen && (
+                <div className="absolute top-full left-0 right-0 mt-1 rounded-xl border border-white/[0.08] bg-[#0f1012] shadow-2xl z-20 overflow-hidden">
+                  {chains.map(c => {
+                    const m = OB_CHAIN_META[c.chain_id] ?? OB_CHAIN_META['42161']
+                    const active = c.chain_id === selectedChainId
+                    return (
+                      <button
+                        key={c.chain_id}
+                        type="button"
+                        onClick={() => { setSelectedChainId(c.chain_id); setDropOpen(false) }}
+                        className={`flex items-center gap-2.5 w-full px-3.5 py-2.5 transition-colors text-left ${active ? 'bg-white/[0.06]' : 'hover:bg-white/[0.04]'}`}
+                      >
+                        <m.Icon size={16} />
+                        <span className={`text-[12px] font-semibold ${active ? 'text-white/90' : 'text-white/50'}`}>{m.label}</span>
+                        {active && <span className="ml-auto w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Address card */}
+            <div className="rounded-xl border overflow-hidden" style={{ borderColor: chainMeta.borderColor }}>
+              <div className="flex items-center justify-between px-3.5 py-2.5" style={{ background: `${chainMeta.color}08` }}>
+                <div className="flex items-center gap-2">
+                  <chainMeta.Icon size={13} />
+                  <span className="text-[9px] font-semibold uppercase tracking-wider" style={{ color: `${chainMeta.color}99` }}>
+                    {chainMeta.label} · deposit address
+                  </span>
                 </div>
                 {depositAddr && (
                   <button
                     type="button"
                     onClick={copyAddr}
-                    className="flex-shrink-0 text-white/25 hover:text-white/60 transition-colors ml-1"
+                    className={`flex items-center gap-1.5 px-2 py-0.5 rounded-lg text-[9px] font-semibold transition-all ${
+                      copiedAddr
+                        ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20'
+                        : 'bg-white/[0.05] text-white/35 hover:text-white/65 border border-white/[0.07]'
+                    }`}
                   >
-                    {copiedAddr ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+                    {copiedAddr ? <><Check size={9} strokeWidth={2.5} />Copied</> : <><Copy size={9} />Copy</>}
                   </button>
                 )}
               </div>
-              {chain && (
-                <div className="border-t border-white/[0.05] px-4 py-2.5">
-                  <div className="flex flex-wrap gap-x-3 gap-y-1">
-                    {chain.tokens.map(tok => (
-                      <span key={tok.symbol} className="text-[10px] text-white/30">
-                        {tok.symbol}
-                        {tok.min_checkout_usd != null && (
-                          <span className="text-white/20"> (min ${tok.min_checkout_usd})</span>
-                        )}
-                      </span>
-                    ))}
+              <div className="px-3.5 py-2.5 bg-[#070809]">
+                <p className="font-mono text-[10px] text-white/55 break-all leading-relaxed select-all cursor-text">
+                  {depositAddr || '—'}
+                </p>
+              </div>
+              {chain && chain.tokens.length > 0 && (
+                <div className="border-t border-white/[0.05] divide-y divide-white/[0.03]">
+                  <div className="grid grid-cols-[1fr_auto] gap-2 px-3.5 py-1.5">
+                    <span className="text-[8px] uppercase tracking-widest text-white/20 font-semibold">Token</span>
+                    <span className="text-[8px] uppercase tracking-widest text-white/20 font-semibold text-right">Min</span>
                   </div>
+                  {chain.tokens.map(tok => {
+                    const TokIcon = OB_TOKEN_ICONS[tok.symbol]
+                    return (
+                      <div key={tok.symbol} className="grid grid-cols-[1fr_auto] gap-2 items-center px-3.5 py-2 hover:bg-white/[0.02] transition-colors">
+                        <div className="flex items-center gap-2">
+                          {TokIcon
+                            ? <TokIcon size={15} />
+                            : <span className="w-[15px] h-[15px] rounded-full bg-white/10 flex items-center justify-center text-[7px] text-white/40 font-bold">{tok.symbol[0]}</span>
+                          }
+                          <span className="text-[11px] font-semibold text-white/75">{tok.symbol}</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-white/35 text-right">
+                          {tok.min_checkout_usd != null ? `$${tok.min_checkout_usd}` : (TOKEN_MIN_FALLBACK[tok.symbol] ?? '—')}
+                        </span>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>
 
-            {/* Balance */}
-            {depositConfig.trading_balance != null && (
-              <div className="flex items-center justify-between px-1">
-                <span className="text-[10px] text-white/30">Polymarket balance</span>
-                <span className={`text-[11px] font-mono ${isFunded ? 'text-emerald-400' : 'text-white/40'}`}>
-                  ${(depositConfig.trading_balance + depositConfig.positions_value).toFixed(2)}
-                </span>
-              </div>
-            )}
-
-            <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg border border-white/[0.07] bg-white/[0.02]">
-              <p className="text-[10px] text-white/35 leading-relaxed">
-                Deposits are credited directly on Polymarket. No bridge required. Funds appear within a few minutes.
-              </p>
-            </div>
+            <p className="text-[10px] text-white/20 text-center">
+              No bridge · Credited on Polymarket · ~2 min
+            </p>
           </>
         )}
       </div>
 
       <div className="mt-5 flex justify-between items-center">
         {!isFunded && onSkip ? (
-          <button
-            type="button"
-            onClick={onSkip}
-            className="text-[10px] text-white/20 hover:text-white/45 transition-colors"
-          >
+          <button type="button" onClick={onSkip} className="text-[10px] text-white/20 hover:text-white/45 transition-colors">
             Skip for now
           </button>
         ) : <span />}
-        {isFunded && (
-          <GhostButton onClick={onFinish}>Continue</GhostButton>
-        )}
+        {isFunded && <GhostButton onClick={onFinish}>Continue</GhostButton>}
       </div>
 
       <div className="mt-4 flex items-center gap-2">
@@ -628,12 +667,8 @@ export function Step3Deposit({
           <path d="M20.317 4.492c-1.53-.69-3.17-1.2-4.885-1.49a.075.075 0 0 0-.079.036c-.21.369-.444.85-.608 1.23a18.566 18.566 0 0 0-5.487 0 12.36 12.36 0 0 0-.617-1.23A.077.077 0 0 0 8.562 3c-1.714.29-3.354.8-4.885 1.491a.07.07 0 0 0-.032.027C.533 9.093-.32 13.555.099 17.961a.08.08 0 0 0 .031.055 20.03 20.03 0 0 0 5.993 2.98.078.078 0 0 0 .084-.026c.462-.62.874-1.275 1.226-1.963a.075.075 0 0 0-.041-.104 13.201 13.201 0 0 1-1.872-.878.075.075 0 0 1-.008-.125c.126-.093.252-.19.372-.287a.075.075 0 0 1 .078-.01c3.927 1.764 8.18 1.764 12.061 0a.075.075 0 0 1 .079.009c.12.098.245.195.372.288a.075.075 0 0 1-.006.125c-.598.344-1.22.635-1.873.877a.075.075 0 0 0-.041.105c.36.687.772 1.341 1.225 1.962a.077.077 0 0 0 .084.028 19.963 19.963 0 0 0 6.002-2.981.076.076 0 0 0 .032-.054c.5-5.094-.838-9.52-3.549-13.442a.06.06 0 0 0-.031-.028zM8.02 15.278c-1.182 0-2.157-1.069-2.157-2.38 0-1.312.956-2.38 2.157-2.38 1.21 0 2.176 1.077 2.157 2.38 0 1.312-.956 2.38-2.157 2.38zm7.975 0c-1.183 0-2.157-1.069-2.157-2.38 0-1.312.955-2.38 2.157-2.38 1.21 0 2.176 1.077 2.157 2.38 0 1.312-.946 2.38-2.157 2.38z"/>
         </svg>
         <span className="text-[10px] text-white/25">Need support?</span>
-        <a
-          href="https://discord.gg/y2B8kmAA3n"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[10px] font-semibold text-[#c4254a]/60 hover:text-[#c4254a]/90 transition-colors"
-        >
+        <a href="https://discord.gg/y2B8kmAA3n" target="_blank" rel="noopener noreferrer"
+          className="text-[10px] font-semibold text-[#c4254a]/60 hover:text-[#c4254a]/90 transition-colors">
           Join our Discord →
         </a>
       </div>

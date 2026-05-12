@@ -51,7 +51,7 @@ class AnalyticsService:
                 total_deployed += sm.total_deployed
                 total_volume   += sm.total_volume
                 total_pnl      += sm.total_pnl
-                total_fees     += sm.paid_fees
+                total_fees     += (sm.total_volume or 0.0) * 40 / 10_000
 
         # Sum ALL users' trading balances from in-memory cache (balance_poller, zero I/O)
         from app.services.balance_poller import balance_poller
@@ -137,9 +137,10 @@ class AnalyticsService:
         # Live sessions: engine is authoritative
         for sid in live_session_ids:
             sm = live_engines[sid].summary
-            total_volume += sm.total_volume or 0.0
+            live_vol = sm.total_volume or 0.0
+            total_volume += live_vol
             total_pnl    += sm.realized_pnl or 0.0
-            total_fees   += sm.paid_fees or 0.0
+            total_fees   += live_vol * 40 / 10_000
 
         return {
             "strategy_id":     strategy_id,
@@ -289,9 +290,10 @@ class AnalyticsService:
             # Live engines are authoritative for running sessions
             for sid in live_sids:
                 sm = live_engines[sid].summary
-                total_volume += sm.total_volume or 0.0
+                live_vol = sm.total_volume or 0.0
+                total_volume += live_vol
                 total_pnl    += sm.realized_pnl or 0.0
-                total_fees   += sm.paid_fees or 0.0
+                total_fees   += live_vol * 40 / 10_000
 
             results.append({
                 "version_id":    v.id,
@@ -403,36 +405,31 @@ class AnalyticsService:
                 str(row.day), float(row.vol or 0), float(row.fees or 0)
             ))
 
-        vol_map:  dict[str, float] = {}
-        fees_map: dict[str, float] = {}
+        vol_map: dict[str, float] = {}
 
         for session_id, day_rows in session_days.items():
             day_rows.sort(key=lambda x: x[0])
-            prev_vol, prev_fees = 0.0, 0.0
-            for day_str, cum_vol, cum_fees in day_rows:
-                inc_vol  = max(0.0, cum_vol  - prev_vol)
-                inc_fees = max(0.0, cum_fees - prev_fees)
-                prev_vol, prev_fees = cum_vol, cum_fees
-                vol_map[day_str]  = vol_map.get(day_str, 0.0)  + inc_vol
-                fees_map[day_str] = fees_map.get(day_str, 0.0) + inc_fees
+            prev_vol = 0.0
+            for day_str, cum_vol, _cum_fees in day_rows:
+                inc_vol = max(0.0, cum_vol - prev_vol)
+                prev_vol = cum_vol
+                vol_map[day_str] = vol_map.get(day_str, 0.0) + inc_vol
 
         # Live engines: add only what's above the last persisted snapshot (restart-safe)
         for engine in engines:
             sm = engine.summary
             snap_rows = session_days.get(engine.session_id, [])
-            last_snap_vol  = max((v for _, v, _ in snap_rows), default=0.0)
-            last_snap_fees = max((f for _, _, f in snap_rows), default=0.0)
-            today_vol  = max(0.0, (sm.total_volume or 0.0) - last_snap_vol)
-            today_fees = max(0.0, (sm.paid_fees    or 0.0) - last_snap_fees)
-            vol_map[today_str]  = vol_map.get(today_str, 0.0)  + today_vol
-            fees_map[today_str] = fees_map.get(today_str, 0.0) + today_fees
+            last_snap_vol = max((v for _, v, _ in snap_rows), default=0.0)
+            today_vol = max(0.0, (sm.total_volume or 0.0) - last_snap_vol)
+            vol_map[today_str] = vol_map.get(today_str, 0.0) + today_vol
 
         out = []
-        for day_str in sorted(set(vol_map) | set(fees_map)):
+        for day_str in sorted(vol_map):
+            vol = round(vol_map[day_str], 2)
             out.append({
                 "date":   day_str,
-                "volume": round(vol_map.get(day_str, 0.0), 2),
-                "fees":   round(fees_map.get(day_str, 0.0), 2),
+                "volume": vol,
+                "fees":   round(vol * 40 / 10_000, 2),
             })
         return out
 
@@ -484,55 +481,46 @@ class AnalyticsService:
         day_data: dict[str, dict] = {}
         for session_id, day_rows in session_days_cpm.items():
             day_rows.sort(key=lambda x: x[0])
-            prev_vol, prev_pnl, prev_fees = 0.0, 0.0, 0.0
-            for day_str, cum_vol, cum_pnl, cum_fees in day_rows:
-                inc_vol  = max(0.0, cum_vol  - prev_vol)
-                inc_pnl  = cum_pnl  - prev_pnl
-                inc_fees = max(0.0, cum_fees - prev_fees)
-                prev_vol, prev_pnl, prev_fees = cum_vol, cum_pnl, cum_fees
+            prev_vol, prev_pnl = 0.0, 0.0
+            for day_str, cum_vol, cum_pnl, _cum_fees in day_rows:
+                inc_vol = max(0.0, cum_vol - prev_vol)
+                inc_pnl = cum_pnl - prev_pnl
+                prev_vol, prev_pnl = cum_vol, cum_pnl
                 if inc_vol < 0.5:
                     continue
-                d = day_data.setdefault(day_str, {"vol": 0.0, "pnl": 0.0, "fees": 0.0})
-                d["vol"]  += inc_vol
-                d["pnl"]  += inc_pnl
-                d["fees"] += inc_fees
+                d = day_data.setdefault(day_str, {"vol": 0.0, "pnl": 0.0})
+                d["vol"] += inc_vol
+                d["pnl"] += inc_pnl
 
         for engine in engines:
             sm = engine.summary
             live_vol_total = sm.total_volume or 0.0
             live_pnl_total = sm.realized_pnl or 0.0
-            live_fees_total = sm.paid_fees or 0.0
             if live_vol_total < 0.5:
                 continue
-            # Subtract what snapshots already cover up to yesterday
             snap_rows = session_days_cpm.get(engine.session_id, [])
-            last_vol  = max((v for _, v, _, _ in snap_rows), default=0.0)
-            last_pnl  = max((p for _, _, p, _ in snap_rows), default=0.0) if snap_rows else 0.0
-            last_fees = max((f for _, _, _, f in snap_rows), default=0.0) if snap_rows else 0.0
-            today_vol  = max(0.0, live_vol_total  - last_vol)
-            today_pnl  = live_pnl_total  - last_pnl
-            today_fees = max(0.0, live_fees_total - last_fees)
+            last_vol = max((v for _, v, _, _ in snap_rows), default=0.0)
+            last_pnl = max((p for _, _, p, _ in snap_rows), default=0.0) if snap_rows else 0.0
+            today_vol = max(0.0, live_vol_total - last_vol)
+            today_pnl = live_pnl_total - last_pnl
             if today_vol < 0.5:
                 continue
-            # Extrapolate to 24h based on time elapsed today
             uptime_s = sm.uptime_s or 0.0
-            # Time elapsed since midnight UTC for today's portion
             from datetime import datetime as _dt
             now_utc = _dt.now(timezone.utc)
             secs_since_midnight = (now_utc.hour * 3600 + now_utc.minute * 60 + now_utc.second)
-            # Use the smaller of uptime and time-since-midnight as the elapsed window
             elapsed_today = max(min(uptime_s, secs_since_midnight), 1.0)
             scale = 86400.0 / elapsed_today
-            d = day_data.setdefault(today_str, {"vol": 0.0, "pnl": 0.0, "fees": 0.0})
-            d["vol"]  += today_vol  * scale
-            d["pnl"]  += today_pnl  * scale
-            d["fees"] += today_fees * scale
+            d = day_data.setdefault(today_str, {"vol": 0.0, "pnl": 0.0})
+            d["vol"] += today_vol * scale
+            d["pnl"] += today_pnl * scale
 
         out = []
         for day_str, d in sorted(day_data.items()):
             vol = d["vol"]
+            fees = vol * 40 / 10_000
             gross_cpm = round(d["pnl"] / vol * 1_000_000, 1) if vol > 0 else None
-            net_cpm   = round((d["pnl"] - d["fees"]) / vol * 1_000_000, 1) if vol > 0 else None
+            net_cpm   = round((d["pnl"] - fees) / vol * 1_000_000, 1) if vol > 0 else None
             out.append({
                 "date":      day_str,
                 "volume":    round(vol, 2),

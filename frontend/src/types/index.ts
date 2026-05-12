@@ -83,10 +83,11 @@ export interface AdminUser {
   wallet_usdc:         number | null
   wallet_eth:          number | null
   wallet_pol:          number | null
-  trading_balance:     number | null
-  positions_value:     number
-  redeem_value:        number
-  active_session_id:   string | null
+  trading_balance:       number | null
+  trading_cash_available: number | null
+  positions_value:       number
+  redeem_value:          number
+  active_session_id:     string | null
   session_status:      string | null
   session_live:        boolean
   created_at:          string
