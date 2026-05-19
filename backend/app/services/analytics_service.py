@@ -51,7 +51,36 @@ class AnalyticsService:
                 total_deployed += sm.total_deployed
                 total_volume   += sm.total_volume
                 total_pnl      += sm.total_pnl
-                total_fees     += (sm.total_volume or 0.0) * 40 / 10_000
+                total_fees     += (sm.total_volume or 0.0) * 20 / 10_000
+
+        # Today's volume/pnl: live total minus last snapshot before today (UTC)
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        today_volume = 0.0
+        today_pnl    = 0.0
+        today_fees   = 0.0
+        for s in active:
+            engine = live_by_session.get(s.id)
+            if not engine:
+                continue
+            sm = engine.summary
+            live_vol = sm.total_volume or 0.0
+            live_pnl = sm.total_pnl    or 0.0
+            # Last snapshot before today
+            snap_q = await db.execute(
+                select(func.max(SessionSnapshot.total_volume), func.max(SessionSnapshot.realized_pnl))
+                .where(
+                    SessionSnapshot.session_id == s.id,
+                    SessionSnapshot.snapshot_at < today_start,
+                )
+            )
+            row = snap_q.first()
+            snap_vol = float(row[0] or 0.0) if row else 0.0
+            snap_pnl = float(row[1] or 0.0) if row else 0.0
+            inc_vol = max(0.0, live_vol - snap_vol)
+            inc_pnl = live_pnl - snap_pnl
+            today_volume += inc_vol
+            today_pnl    += inc_pnl
+            today_fees   += inc_vol * 20 / 10_000
 
         # Sum ALL users' trading balances from in-memory cache (balance_poller, zero I/O)
         from app.services.balance_poller import balance_poller
@@ -74,6 +103,9 @@ class AnalyticsService:
             "live_total_volume":        round(total_volume, 2),
             "live_total_pnl":           round(total_pnl, 2),
             "live_total_fees":          round(total_fees, 2),
+            "today_volume":             round(today_volume, 2),
+            "today_pnl":                round(today_pnl, 2),
+            "today_fees":               round(today_fees, 2),
         }
 
     # ── Strategy analytics ────────────────────────────────────────────────────

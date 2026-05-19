@@ -913,6 +913,86 @@ function ActionsDropdown({ user, onStop, stopping, onNuclear, onRedeem }: {
   )
 }
 
+function BulkActionBar({ selectedIds, users, onClear, onLaunch, onDone }: {
+  selectedIds: Set<string>
+  users: AdminUser[]
+  onClear: () => void
+  onLaunch: () => void
+  onDone: () => void
+}) {
+  const [busy, setBusy] = useState<string | null>(null)
+  const addToast = useAppStore(s => s.addToast)
+  const selected = users.filter(u => selectedIds.has(u.id))
+
+  const run = async (key: string, fn: () => Promise<void>) => {
+    setBusy(key)
+    try { await fn() } catch (e: any) { addToast({ type: 'error', message: e.message }) }
+    finally { setBusy(null); onDone() }
+  }
+
+  const bulkStop = (mode: 'soft' | 'hard') => run(mode, async () => {
+    const withSession = selected.filter(u => u.active_session_id)
+    await Promise.all(withSession.map(u => api.admin.stopUserSession(u.id, mode)))
+    addToast({ type: 'info', message: `${mode} stop sent to ${withSession.length} session${withSession.length !== 1 ? 's' : ''}` })
+  })
+
+  const bulkNuclear = () => run('nuclear', async () => {
+    await Promise.all(selected.map(async u => {
+      try {
+        const state: any = await api.admin.getUserPolyState(u.id)
+        await api.admin.nuclearClose(u.id, {
+          cancel_orders: false,
+          cancel_order_ids: (state.open_orders || []).map((o: any) => o.order_id),
+          sell_token_ids: (state.positions || []).map((p: any) => p.token_id),
+        })
+      } catch {}
+    }))
+    addToast({ type: 'warning', message: `Nuclear close sent to ${selected.length} user${selected.length !== 1 ? 's' : ''}` })
+  })
+
+  const bulkRedeem = () => run('redeem', async () => {
+    await Promise.all(selected.map(async u => {
+      try {
+        const state: any = await api.admin.getUserPolyState(u.id)
+        const resolved = (state.positions || []).filter((p: any) => p.resolved)
+        if (!resolved.length) return
+        await api.admin.nuclearClose(u.id, {
+          cancel_orders: false,
+          cancel_order_ids: [],
+          sell_token_ids: resolved.map((p: any) => p.token_id),
+        })
+      } catch {}
+    }))
+    addToast({ type: 'success', message: `Redeem sent to ${selected.length} user${selected.length !== 1 ? 's' : ''}` })
+  })
+
+  const btn = (label: string, color: string, onClick: () => void) => (
+    <button
+      key={label}
+      disabled={busy !== null}
+      onClick={onClick}
+      className={`text-[11px] px-3 py-1 rounded-lg border transition-colors disabled:opacity-30 ${color}`}
+    >
+      {busy === label.toLowerCase() ? '…' : label}
+    </button>
+  )
+
+  const withSession = selected.filter(u => u.active_session_id).length
+  const noSession   = selected.filter(u => !u.active_session_id).length
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap px-3 py-2 bg-brand/10 border border-brand/20 rounded-xl">
+      <span className="text-[11px] text-brand/80 font-semibold shrink-0">{selectedIds.size} selected</span>
+      {noSession > 0 && btn('Launch sessions', 'bg-emerald-500/15 border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/25', onLaunch)}
+      {withSession > 0 && btn('Soft stop', 'bg-white/[0.05] border-white/10 text-white/50 hover:text-white/80', () => bulkStop('soft'))}
+      {withSession > 0 && btn('Hard stop', 'bg-red-500/10 border-red-500/20 text-red-400/70 hover:bg-red-500/20', () => bulkStop('hard'))}
+      {btn('Nuclear', 'bg-red-500/10 border-red-500/25 text-red-400 hover:bg-red-500/20', bulkNuclear)}
+      {btn('Redeem', 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400/70 hover:bg-emerald-500/15', bulkRedeem)}
+      <button className="text-[10px] text-white/25 hover:text-white/50 ml-auto" onClick={onClear}>clear</button>
+    </div>
+  )
+}
+
 const BALANCE_POLL_MS = 30_000
 
 export default function AdminUsers() {
@@ -1026,16 +1106,13 @@ export default function AdminUsers() {
       </div>
 
       {selectedIds.size > 0 && (
-        <div className="flex items-center gap-3 px-3 py-2 mb-2 bg-brand/10 border border-brand/20 rounded-xl">
-          <span className="text-[11px] text-brand/80 font-semibold">{selectedIds.size} selected</span>
-          <button
-            className="text-[11px] px-3 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/25 transition-colors"
-            onClick={() => setBulkLaunchModal(true)}
-          >
-            Launch sessions
-          </button>
-          <button className="text-[10px] text-white/25 hover:text-white/50 ml-auto" onClick={() => setSelectedIds(new Set())}>clear</button>
-        </div>
+        <BulkActionBar
+          selectedIds={selectedIds}
+          users={users}
+          onClear={() => setSelectedIds(new Set())}
+          onLaunch={() => setBulkLaunchModal(true)}
+          onDone={() => fetchUsers({ silent: true })}
+        />
       )}
 
       <div className="panel overflow-x-auto">

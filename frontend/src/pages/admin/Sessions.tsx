@@ -507,6 +507,7 @@ export function AdminLaunchModal({ onClose, onDone, preselectedUsers }: { onClos
   const [users, setUsers]               = useState<any[]>([])
   const [loadingUsers, setLoadingUsers] = useState(true)
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set())
+  const [capitalOverrides, setCapitalOverrides] = useState<Record<string, string>>({})
   const [stopMode, setStopMode]         = useState<'days' | 'volume'>('days')
   const [stopDays, setStopDays]         = useState('7')
   const [targetVolOverride, setTargetVolOverride] = useState('')
@@ -520,9 +521,15 @@ export function AdminLaunchModal({ onClose, onDone, preselectedUsers }: { onClos
     return Math.max(5000, Math.floor(raw / 5000) * 5000)
   }
 
-  function capitalFor(u: any): number {
+  function maxCapitalFor(u: any): number {
     const avail = u.trading_cash_available ?? u.trading_balance ?? 0
     return Math.max(0, Math.round((avail - 0.01) * 100) / 100)
+  }
+
+  function capitalFor(u: any): number {
+    const override = capitalOverrides[u.id]
+    if (override !== undefined) return Math.max(0, parseFloat(override) || 0)
+    return maxCapitalFor(u)
   }
 
   useEffect(() => {
@@ -625,27 +632,37 @@ export function AdminLaunchModal({ onClose, onDone, preselectedUsers }: { onClos
                 ) : users.length === 0 ? (
                   <div className="text-[11px] text-white/30 px-3 py-2.5 border border-white/[0.07] rounded-xl">No eligible users</div>
                 ) : (
-                  <div className="border border-white/[0.08] rounded-xl overflow-hidden max-h-48 overflow-y-auto">
+                  <div className="border border-white/[0.08] rounded-xl overflow-hidden max-h-56 overflow-y-auto">
                     {users.map((u: any) => {
                       const checked = selectedIds.has(u.id)
-                      const cap = capitalFor(u)
+                      const maxCap = maxCapitalFor(u)
+                      const capVal = capitalOverrides[u.id] ?? String(maxCap)
                       return (
-                        <button
+                        <div
                           key={u.id}
-                          className={`w-full text-left px-3 py-2 text-[11px] flex items-center gap-2.5 transition-colors ${checked ? 'bg-brand/10 text-white' : 'hover:bg-white/[0.04] text-white/60'}`}
-                          onClick={() => toggleUser(u.id)}
+                          className={`w-full px-3 py-2 text-[11px] flex items-center gap-2.5 transition-colors ${checked ? 'bg-brand/10' : 'hover:bg-white/[0.04]'}`}
                         >
-                          <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${checked ? 'bg-brand/70 border-brand/50' : 'border-white/20'}`}>
+                          <button
+                            className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${checked ? 'bg-brand/70 border-brand/50' : 'border-white/20'}`}
+                            onClick={() => toggleUser(u.id)}
+                          >
                             {checked && <span className="text-[8px] text-white font-bold">✓</span>}
-                          </div>
-                          <span className="flex-1 truncate">{u.display_name ?? u.id.slice(0, 12)}</span>
-                          <span className="font-mono text-[10px] text-white/35 shrink-0">${cap.toFixed(2)}</span>
-                        </button>
+                          </button>
+                          <span className={`flex-1 truncate ${checked ? 'text-white' : 'text-white/60'}`}>{u.display_name ?? u.id.slice(0, 12)}</span>
+                          <input
+                            type="number" min="0" step="1"
+                            value={capVal}
+                            onClick={e => e.stopPropagation()}
+                            onChange={e => setCapitalOverrides(prev => ({ ...prev, [u.id]: e.target.value }))}
+                            className="w-20 text-[10px] font-mono bg-white/[0.04] border border-white/10 rounded px-1.5 py-0.5 text-white/70 focus:outline-none focus:border-brand/40 shrink-0"
+                          />
+                          <span className="text-[9px] text-white/20 shrink-0">/ ${maxCap.toFixed(0)}</span>
+                        </div>
                       )
                     })}
                   </div>
                 )}
-                {selectedIds.size > 0 && <div className="text-[9px] text-white/20 mt-1">{selectedIds.size} user{selectedIds.size > 1 ? 's' : ''} · capital = balance − $0.01 each</div>}
+                {selectedIds.size > 0 && <div className="text-[9px] text-white/20 mt-1">{selectedIds.size} user{selectedIds.size > 1 ? 's' : ''} selected · max = balance − $0.01</div>}
               </div>
 
               <div className="grid grid-cols-2 gap-3">

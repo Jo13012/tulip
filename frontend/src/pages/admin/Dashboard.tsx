@@ -18,6 +18,9 @@ interface Metrics {
   live_total_volume:        number
   live_total_pnl:           number
   live_total_fees:          number
+  today_volume:             number
+  today_pnl:                number
+  today_fees:               number
 }
 
 interface VersionPerf {
@@ -761,6 +764,17 @@ function OverviewTab({ m, strat }: { m: Metrics; strat: StrategyData | null }) {
           <Stat label="Trading Balances"  value={fmtUsd(m.total_trading_balance, 0)}   sub="all Polymarket wallets" />
         </div>
       </Section>
+
+      {(m.today_volume > 0 || m.active_sessions > 0) && (
+        <Section title="Today (UTC)">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <Stat label="Volume"    value={fmtUsd(m.today_volume, 0)}                          accent="text-white/65" />
+            <Stat label="Gross PnL" value={fmtUsd(m.today_pnl)}                               accent={pnlColor(m.today_pnl)} />
+            <Stat label="Fees"      value={fmtUsd(m.today_fees)}                               accent="text-white/35" />
+            <Stat label="Net PnL"   value={fmtUsd(m.today_pnl - m.today_fees)}                accent={pnlColor(m.today_pnl - m.today_fees)} />
+          </div>
+        </Section>
+      )}
 
       {strat && allTimeNetPnl !== null && (
         <Section title="All-Time">
