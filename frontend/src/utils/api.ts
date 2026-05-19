@@ -173,8 +173,6 @@ export const api = {
       request(`/api/v1/admin/users/${userId}/nuclear-close`, { method: 'POST', body: JSON.stringify(body) }),
     bridgePol: (userId: string) =>
       request(`/api/v1/admin/users/${userId}/bridge-pol`, { method: 'POST' }),
-    migrateV2: (userId: string) =>
-      request(`/api/v1/admin/users/${userId}/migrate-v2`, { method: 'POST' }),
     fixClob2: (userId: string) =>
       request(`/api/v1/admin/users/${userId}/fix-clob2`, { method: 'POST' }),
   },
