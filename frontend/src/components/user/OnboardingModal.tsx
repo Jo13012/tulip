@@ -582,7 +582,7 @@ export function Step3Deposit({
                         className={`flex items-center gap-2.5 w-full px-3.5 py-2.5 transition-colors text-left ${active ? 'bg-white/[0.06]' : 'hover:bg-white/[0.04]'}`}
                       >
                         <m.Icon size={16} />
-                        <span className={`text-[12px] font-semibold ${active ? 'text-white/90' : 'text-white/50'}`}>{m.label}</span>
+                        <span className={` text-[12px] font-semibold ${active ? 'text-white/90' : 'text-white/50'}`}>{m.label}</span>
                         {active && <span className="ml-auto w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />}
                       </button>
                     )
