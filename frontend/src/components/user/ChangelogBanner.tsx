@@ -9,6 +9,13 @@ interface PatchEntry {
 // Add new patches at the top. Banner shows for the latest version until dismissed.
 export const CHANGELOG: PatchEntry[] = [
   {
+    version: '1.3.1',
+    date: 'May 20, 2025',
+    notes: [
+      'Builder fees reduced from 0.40% to 0.20% per trade — your net PnL is now higher on every session.',
+    ],
+  },
+  {
     version: '1.3.0',
     date: 'May 11, 2025',
     notes: [
