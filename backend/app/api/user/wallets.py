@@ -17,7 +17,7 @@ from app.integrations.polymarket.bridge_client import bridge_client, BridgeClien
 
 router = APIRouter(prefix="/wallets", tags=["user:wallets"])
 FUNDING_ENABLED = False  # auto-bridge disabled — users deposit directly to Polymarket
-BUILDER_FEE_BPS = 40     # informational only — not charged by app
+BUILDER_FEE_BPS = 20     # informational only — not charged by app
 log = logging.getLogger("uvicorn.error")
 
 

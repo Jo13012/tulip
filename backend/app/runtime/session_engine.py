@@ -486,7 +486,7 @@ class SessionEngine:
 
     async def _on_lot_opened(self, session_slot_id: str, lot: RuntimeLot):
         if self._builder_code_enabled:
-            self._builder_fees_usdc = round(self._builder_fees_usdc + lot.size * 0.004, 6)
+            self._builder_fees_usdc = round(self._builder_fees_usdc + lot.size * 0.002, 6)
         await self._increment_user_volume(lot.size, pnl=None)
         await self._increment_slot_volume(session_slot_id, lot.size, pnl=None)
         if self._on_lot_event:
@@ -494,7 +494,7 @@ class SessionEngine:
 
     async def _on_lot_closed(self, session_slot_id: str, lot: RuntimeLot, pnl: float):
         if self._builder_code_enabled:
-            self._builder_fees_usdc = round(self._builder_fees_usdc + lot.size * 0.004, 6)
+            self._builder_fees_usdc = round(self._builder_fees_usdc + lot.size * 0.002, 6)
         await self._increment_user_volume(lot.size, pnl=pnl)
         await self._increment_slot_volume(session_slot_id, lot.size, pnl=pnl)
         if self._on_lot_event:

@@ -7,6 +7,7 @@ import { api } from '../../utils/api'
 import { fmtUsd, pnlColor } from '../../utils/format'
 import { useAppStore } from '../../store'
 import { AddressField } from '../../components/ui/Field'
+import { AdminLaunchModal } from './Sessions'
 
 // ── Nuclear Close Modal ───────────────────────────────────────────────────────
 
@@ -918,6 +919,8 @@ export default function AdminUsers() {
   const [filterAccountReady, setFilterAccountReady] = useState(false)
   const [filterFunded, setFilterFunded] = useState(true)
   const [forcingReplaceAll, setForcingReplaceAll] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkLaunchModal, setBulkLaunchModal] = useState(false)
   const addToast = useAppStore(s => s.addToast)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -1015,10 +1018,35 @@ export default function AdminUsers() {
         </div>
       </div>
 
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 px-3 py-2 mb-2 bg-brand/10 border border-brand/20 rounded-xl">
+          <span className="text-[11px] text-brand/80 font-semibold">{selectedIds.size} selected</span>
+          <button
+            className="text-[11px] px-3 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/25 transition-colors"
+            onClick={() => setBulkLaunchModal(true)}
+          >
+            Launch sessions
+          </button>
+          <button className="text-[10px] text-white/25 hover:text-white/50 ml-auto" onClick={() => setSelectedIds(new Set())}>clear</button>
+        </div>
+      )}
+
       <div className="panel overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-white/[0.06]">
+              <th className="px-3 py-2">
+                <button
+                  className="w-3.5 h-3.5 rounded border border-white/20 flex items-center justify-center"
+                  onClick={() => {
+                    const visible = users.filter(u => (!filterAccountReady || u.account_ready) && (!filterFunded || u.is_funded))
+                    const allIds = new Set(visible.map(u => u.id))
+                    setSelectedIds(prev => prev.size === allIds.size ? new Set() : allIds)
+                  }}
+                >
+                  {selectedIds.size > 0 && <span className="text-[8px] text-brand font-bold">✓</span>}
+                </button>
+              </th>
               {['', 'Name', 'Wallet', 'USDC', 'ETH', 'POL', 'Trading Bal', 'Builder Code', 'Trading Vol', 'Bot PnL', 'Session', '⋯'].map((h, i) => (
                 <th key={i} className="text-left px-3 py-2 text-[10px] text-white/25 font-semibold uppercase tracking-wider">
                   {h}
@@ -1036,6 +1064,12 @@ export default function AdminUsers() {
                 className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors cursor-pointer"
                 onClick={() => setHistoryUser(u)}
               >
+                {/* Checkbox */}
+                <td className="px-3 py-2.5" onClick={e => { e.stopPropagation(); setSelectedIds(prev => { const n = new Set(prev); n.has(u.id) ? n.delete(u.id) : n.add(u.id); return n }) }}>
+                  <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center ${selectedIds.has(u.id) ? 'bg-brand/70 border-brand/50' : 'border-white/20'}`}>
+                    {selectedIds.has(u.id) && <span className="text-[8px] text-white font-bold">✓</span>}
+                  </div>
+                </td>
                 {/* Status dot */}
                 <td className="px-3 py-2.5">
                   <StatusDot live={u.session_live} status={u.session_status} />
@@ -1158,6 +1192,13 @@ export default function AdminUsers() {
       )}
       {redeemUser && (
         <RedeemModal user={redeemUser} onClose={() => setRedeemUser(null)} />
+      )}
+      {bulkLaunchModal && (
+        <AdminLaunchModal
+          preselectedUsers={users.filter(u => selectedIds.has(u.id))}
+          onClose={() => { setBulkLaunchModal(false); setSelectedIds(new Set()) }}
+          onDone={() => fetchUsers({ silent: true })}
+        />
       )}
     </div>
   )

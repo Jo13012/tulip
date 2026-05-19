@@ -500,29 +500,30 @@ function SessionDetail({ id }: { id: string }) {
 // Admin Launch Session Modal
 // ─────────────────────────────────────────────────────────────────────────────
 
-function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (sessionId: string) => void }) {
+export function AdminLaunchModal({ onClose, onDone, preselectedUsers }: { onClose: () => void; onDone: (sessionId: string) => void; preselectedUsers?: any[] }) {
   const addToast = useAppStore(s => s.addToast)
   const overlayRef = useRef<HTMLDivElement>(null)
 
-  const [users, setUsers]         = useState<any[]>([])
+  const [users, setUsers]               = useState<any[]>([])
   const [loadingUsers, setLoadingUsers] = useState(true)
-  const [selectedUser, setSelectedUser] = useState<any | null>(null)
-  const [capital, setCapital]     = useState('')
-  const [stopMode, setStopMode]   = useState<'days' | 'volume'>('days')
-  const [stopDays, setStopDays]   = useState('7')
-  const [targetVol, setTargetVol] = useState('')
+  const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set())
+  const [stopMode, setStopMode]         = useState<'days' | 'volume'>('days')
+  const [stopDays, setStopDays]         = useState('7')
+  const [targetVolOverride, setTargetVolOverride] = useState('')
+  const [slPct, setSlPct]               = useState('20')
+  const [launching, setLaunching]       = useState(false)
+  const [results, setResults]           = useState<{ name: string; ok: boolean; msg: string }[]>([])
+  const [error, setError]               = useState('')
 
-  function computeTargetVol(cap: string) {
-    const g = parseFloat(cap)
-    if (!isNaN(g) && g > 0) {
-      const raw = g * 30
-      return String(Math.max(5000, Math.floor(raw / 5000) * 5000))
-    }
-    return ''
+  function computeTargetVol(cap: number) {
+    const raw = cap * 30
+    return Math.max(5000, Math.floor(raw / 5000) * 5000)
   }
-  const [slPct, setSlPct]         = useState('20')
-  const [launching, setLaunching] = useState(false)
-  const [error, setError]         = useState('')
+
+  function capitalFor(u: any): number {
+    const avail = u.trading_cash_available ?? u.trading_balance ?? 0
+    return Math.max(0, Math.round((avail - 0.01) * 100) / 100)
+  }
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -531,38 +532,58 @@ function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (s
   }, [onClose])
 
   useEffect(() => {
+    if (preselectedUsers) {
+      setUsers(preselectedUsers)
+      setSelectedIds(new Set(preselectedUsers.map((u: any) => u.id)))
+      setLoadingUsers(false)
+      return
+    }
     api.admin.listUsers(200).then((d: any) => {
-      // Only users without active session and trading_balance >= 10
       const eligible = d.filter((u: any) => !u.active_session_id && u.wallet_id && (u.trading_balance ?? 0) >= 5)
       setUsers(eligible)
     }).catch(() => {}).finally(() => setLoadingUsers(false))
   }, [])
 
-  async function launch() {
-    if (!selectedUser || !capital) return
-    const gross = parseFloat(capital)
-    if (isNaN(gross) || gross <= 0) { setError('Invalid capital'); return }
-    setLaunching(true)
-    setError('')
-    try {
-      const res: any = await api.admin.launchForUser({
-        user_id:       selectedUser.id,
-        wallet_id:     selectedUser.wallet_id,
-        gross_capital: gross,
-        stop_mode:     stopMode,
-        stop_days:     stopMode === 'days' ? parseInt(stopDays) : null,
-        target_volume: stopMode === 'volume' ? parseFloat(targetVol) : null,
-        session_sl_pct: parseFloat(slPct) || 20,
-      })
-      addToast({ type: 'success', message: `Session launched for ${selectedUser.display_name ?? selectedUser.id.slice(0, 8)}` })
-      onDone(res.session_id)
-    } catch (e: any) {
-      setError(e.message ?? 'Launch failed')
-      setLaunching(false)
-    }
+  function toggleUser(id: string) {
+    setSelectedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  function toggleAll() {
+    setSelectedIds(prev => prev.size === users.length ? new Set() : new Set(users.map((u: any) => u.id)))
   }
 
-  const canLaunch = selectedUser && capital && parseFloat(capital) > 0 && !launching
+  async function launch() {
+    if (selectedIds.size === 0) return
+    setLaunching(true)
+    setError('')
+    const sl = parseFloat(slPct) || 20
+    const res: { name: string; ok: boolean; msg: string }[] = []
+    for (const u of users.filter((u: any) => selectedIds.has(u.id))) {
+      const gross = capitalFor(u)
+      if (gross <= 0) { res.push({ name: u.display_name ?? u.id.slice(0, 8), ok: false, msg: 'No capital' }); continue }
+      const tVol = targetVolOverride ? parseFloat(targetVolOverride) : computeTargetVol(gross)
+      try {
+        const r: any = await api.admin.launchForUser({
+          user_id:        u.id,
+          wallet_id:      u.wallet_id,
+          gross_capital:  gross,
+          stop_mode:      stopMode,
+          stop_days:      stopMode === 'days' ? parseInt(stopDays) : null,
+          target_volume:  stopMode === 'volume' ? tVol : null,
+          session_sl_pct: sl,
+        })
+        res.push({ name: u.display_name ?? u.id.slice(0, 8), ok: true, msg: r.session_id?.slice(0, 8) ?? 'ok' })
+        onDone(r.session_id)
+      } catch (e: any) {
+        res.push({ name: u.display_name ?? u.id.slice(0, 8), ok: false, msg: e.message ?? 'failed' })
+      }
+    }
+    setResults(res)
+    setLaunching(false)
+    const ok = res.filter(r => r.ok).length
+    addToast({ type: ok > 0 ? 'success' : 'error', message: `${ok}/${res.length} sessions launched` })
+  }
+
+  const canLaunch = selectedIds.size > 0 && !launching && results.length === 0
 
   return (
     <div
@@ -576,71 +597,58 @@ function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (s
           <button className="w-6 h-6 flex items-center justify-center rounded-lg text-white/20 hover:text-white/55 hover:bg-white/[0.06] transition-all" onClick={onClose}>✕</button>
         </div>
 
-        <div className="p-5 space-y-4">
-          {/* User picker */}
-          <div>
-            <div className="text-[9px] font-semibold uppercase tracking-widest text-white/20 mb-1.5">User (no active session)</div>
-            {loadingUsers ? (
-              <div className="h-10 bg-white/[0.03] rounded-xl animate-pulse" />
-            ) : users.length === 0 ? (
-              <div className="text-[11px] text-white/30 px-3 py-2.5 border border-white/[0.07] rounded-xl">No eligible users (need ≥$5 trading balance, no active session)</div>
-            ) : (
-              <div className="border border-white/[0.08] rounded-xl overflow-hidden max-h-48 overflow-y-auto">
-                {users.map((u: any) => {
-                  const isSelected = selectedUser?.id === u.id
-                  const lowBal = (u.trading_balance ?? 0) < 5
-                  return (
-                    <button
-                      key={u.id}
-                      className={`w-full text-left px-3.5 py-2 text-[11px] flex items-center justify-between transition-colors ${
-                        isSelected ? 'bg-brand/20 text-white' : 'hover:bg-white/[0.04] text-white/70'
-                      }`}
-                      onClick={() => {
-                        setSelectedUser(u)
-                        // Use available cash (balance minus locked positions) as default capital
-                        const avail = u.trading_cash_available ?? u.trading_balance
-                        const cap = avail ? String(Math.floor(avail * 100) / 100) : ''
-                        setCapital(cap)
-                        setTargetVol(computeTargetVol(cap))
-                      }}
-                    >
-                      <span>{u.display_name ?? u.id.slice(0, 12)}</span>
-                      <div className="flex flex-col items-end gap-0.5">
-                        <span className={`font-mono text-[11px] ${lowBal ? 'text-yellow-400' : 'text-white/50'}`}>
-                          ${(u.trading_balance ?? 0).toFixed(2)}
-                        </span>
-                        {u.trading_cash_available != null && u.trading_cash_available < (u.trading_balance ?? 0) && (
-                          <span className="font-mono text-[9px] text-white/30">avail ${u.trading_cash_available.toFixed(2)}</span>
-                        )}
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-
-          {selectedUser && (
+        <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+          {/* Results after launch */}
+          {results.length > 0 ? (
+            <div className="space-y-1.5">
+              {results.map((r, i) => (
+                <div key={i} className={`flex items-center justify-between px-3 py-2 rounded-xl border text-[11px] ${r.ok ? 'bg-emerald-500/5 border-emerald-500/15 text-emerald-400' : 'bg-red-500/5 border-red-500/15 text-red-400/70'}`}>
+                  <span>{r.name}</span>
+                  <span className="font-mono text-[10px]">{r.ok ? '✓ ' : '✗ '}{r.msg}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
             <>
-              <div className="grid grid-cols-2 gap-3">
-                {/* Capital */}
-                <div>
-                  <div className="text-[9px] font-semibold uppercase tracking-widest text-white/20 mb-1.5">Capital (USDC)</div>
-                  <input
-                    className="w-full bg-transparent border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white font-mono text-sm placeholder:text-white/15 focus:outline-none focus:border-brand/50 transition-all"
-                    type="number" min="0" step="1" placeholder="100"
-                    value={capital}
-                    onChange={e => { setCapital(e.target.value); setTargetVol(computeTargetVol(e.target.value)) }}
-                  />
-                  {selectedUser.trading_balance != null && (
-                    <div className="text-[9px] text-white/25 mt-1">
-                      Balance: ${selectedUser.trading_balance.toFixed(2)}
-                      {selectedUser.trading_cash_available != null && selectedUser.trading_cash_available < selectedUser.trading_balance && (
-                        <span className="ml-1 text-amber-400/60">· avail ${selectedUser.trading_cash_available.toFixed(2)}</span>
-                      )}
-                    </div>
+              {/* User multi-select */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="text-[9px] font-semibold uppercase tracking-widest text-white/20">Users (no active session)</div>
+                  {users.length > 0 && (
+                    <button className="text-[9px] text-white/25 hover:text-white/50" onClick={toggleAll}>
+                      {selectedIds.size === users.length ? 'Deselect all' : 'Select all'}
+                    </button>
                   )}
                 </div>
+                {loadingUsers ? (
+                  <div className="h-10 bg-white/[0.03] rounded-xl animate-pulse" />
+                ) : users.length === 0 ? (
+                  <div className="text-[11px] text-white/30 px-3 py-2.5 border border-white/[0.07] rounded-xl">No eligible users</div>
+                ) : (
+                  <div className="border border-white/[0.08] rounded-xl overflow-hidden max-h-48 overflow-y-auto">
+                    {users.map((u: any) => {
+                      const checked = selectedIds.has(u.id)
+                      const cap = capitalFor(u)
+                      return (
+                        <button
+                          key={u.id}
+                          className={`w-full text-left px-3 py-2 text-[11px] flex items-center gap-2.5 transition-colors ${checked ? 'bg-brand/10 text-white' : 'hover:bg-white/[0.04] text-white/60'}`}
+                          onClick={() => toggleUser(u.id)}
+                        >
+                          <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${checked ? 'bg-brand/70 border-brand/50' : 'border-white/20'}`}>
+                            {checked && <span className="text-[8px] text-white font-bold">✓</span>}
+                          </div>
+                          <span className="flex-1 truncate">{u.display_name ?? u.id.slice(0, 12)}</span>
+                          <span className="font-mono text-[10px] text-white/35 shrink-0">${cap.toFixed(2)}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                {selectedIds.size > 0 && <div className="text-[9px] text-white/20 mt-1">{selectedIds.size} user{selectedIds.size > 1 ? 's' : ''} · capital = balance − $0.01 each</div>}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
                 {/* SL */}
                 <div>
                   <div className="text-[9px] font-semibold uppercase tracking-widest text-white/20 mb-1.5">Session SL %</div>
@@ -651,6 +659,18 @@ function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (s
                     onChange={e => setSlPct(e.target.value)}
                   />
                 </div>
+                {/* Target vol override (volume mode only) */}
+                {stopMode === 'volume' && (
+                  <div>
+                    <div className="text-[9px] font-semibold uppercase tracking-widest text-white/20 mb-1.5">Target Vol override</div>
+                    <input
+                      className="w-full bg-transparent border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white font-mono text-sm placeholder:text-white/15 focus:outline-none focus:border-brand/50 transition-all"
+                      type="number" min="0" step="100" placeholder="auto"
+                      value={targetVolOverride}
+                      onChange={e => setTargetVolOverride(e.target.value)}
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Stop mode */}
@@ -684,15 +704,7 @@ function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (s
                   />
                 </div>
               ) : (
-                <div>
-                  <div className="text-[9px] font-semibold uppercase tracking-widest text-white/20 mb-1.5">Target Volume (USDC)</div>
-                  <input
-                    className="w-full bg-transparent border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white font-mono text-sm placeholder:text-white/15 focus:outline-none focus:border-brand/50 transition-all"
-                    type="number" min="0" step="100" placeholder="10000"
-                    value={targetVol}
-                    onChange={e => setTargetVol(e.target.value)}
-                  />
-                </div>
+                <div className="text-[9px] text-white/20 px-1">Target vol = capital × 30 (rounded to 5k) per user, unless overridden above</div>
               )}
             </>
           )}
@@ -705,15 +717,17 @@ function AdminLaunchModal({ onClose, onDone }: { onClose: () => void; onDone: (s
             className="px-4 py-2 rounded-lg text-[11px] text-white/25 hover:text-white/50 transition-colors"
             onClick={onClose}
           >
-            Cancel
+            {results.length > 0 ? 'Close' : 'Cancel'}
           </button>
+          {results.length === 0 && (
           <button
             disabled={!canLaunch}
             onClick={launch}
             className="px-4 py-2 border border-emerald-500/25 rounded-lg text-[11px] text-emerald-400/70 hover:border-emerald-500/50 hover:text-emerald-400 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {launching ? 'Launching…' : 'Launch Session'}
+            {launching ? `Launching ${selectedIds.size}…` : `Launch ${selectedIds.size} Session${selectedIds.size > 1 ? 's' : ''}`}
           </button>
+          )}
         </div>
       </div>
     </div>
