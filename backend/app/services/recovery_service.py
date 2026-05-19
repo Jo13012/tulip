@@ -227,7 +227,7 @@ class RecoveryService:
             await db.execute(
                 update(DBSession)
                 .where(DBSession.id == session_id)
-                .values(health_state="running", status="running")
+                .values(health_state="running", status="running", stop_reason=None)
             )
             db.add(AuditLog(
                 actor_id="system", actor_role="system",
@@ -538,6 +538,10 @@ class RecoveryService:
         # ── F. DB lots not injected → reconcile fate ──────────────────────────
         final_injected_ids = {l.lot_id for l in lots_to_inject if l.lot_id}
 
+        # Track offline fills to add on top of DB snapshot stats
+        offline_pnl: float = 0.0
+        offline_volume: float = 0.0
+
         for db_lot in db_lots:
             if db_lot.lot_id in final_injected_ids:
                 continue
@@ -557,6 +561,8 @@ class RecoveryService:
                 if matched >= db_lot.tokens * 0.99 or status_raw in ("MATCHED", "FILLED"):
                     sell_price = float(order_info.get("price") or db_lot.target_sell_price)
                     pnl = round((sell_price - db_lot.entry_price) * db_lot.tokens, 6)
+                    offline_pnl    += pnl
+                    offline_volume += round(sell_price * db_lot.tokens, 6)
                     log.info("[recovery] slot=%s DB lot=%s → TP FILLED while down pnl=%.4f", sid, db_lot.lot_id[:8], pnl)
                     async with async_session_factory() as db:
                         await db.execute(update(DBLot).where(DBLot.lot_id == db_lot.lot_id).values(
@@ -568,7 +574,10 @@ class RecoveryService:
                 elif matched > 0.001:
                     # Partial TP — matched portion is sold, remaining tokens were orphaned in D
                     partial_pnl = round((float(order_info.get("price") or db_lot.target_sell_price) - db_lot.entry_price) * matched, 6)
+                    partial_sell_price = float(order_info.get("price") or db_lot.target_sell_price)
                     new_tokens  = round(max(0.0, db_lot.tokens - matched), 6)
+                    offline_pnl    += partial_pnl
+                    offline_volume += round(partial_sell_price * matched, 6)
                     log.info("[recovery] slot=%s DB lot=%s → PARTIAL TP %.4f tok filled, %.4f remain", sid, db_lot.lot_id[:8], matched, new_tokens)
                     async with async_session_factory() as db:
                         await db.execute(update(DBLot).where(DBLot.lot_id == db_lot.lot_id).values(
@@ -606,9 +615,9 @@ class RecoveryService:
             for rt_lot in lots_to_inject:
                 slot_runtime._lots.append(rt_lot)
 
-        # Restore stats from DB
-        slot_runtime._volume       = float(db_slot.volume or 0.0)
-        slot_runtime._realized_pnl = float(db_slot.realized_pnl or 0.0)
+        # Restore stats from DB, then add fills that happened while engine was down
+        slot_runtime._volume       = float(db_slot.volume or 0.0) + offline_volume
+        slot_runtime._realized_pnl = float(db_slot.realized_pnl or 0.0) + offline_pnl
         slot_runtime._unrealized_pnl = float(db_slot.unrealized_pnl or 0.0)
         slot_runtime._paid_fees    = float(db_slot.paid_fees or 0.0)
         slot_runtime._order_count = len(slot_runtime._buy_orders) + len(slot_runtime._sell_orders)
