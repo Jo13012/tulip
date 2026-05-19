@@ -386,27 +386,26 @@ class SessionManager:
             if not wallet.privy_wallet_id:
                 raise SessionLaunchError("No Privy wallet linked to this account. Please log out and log in again.")
 
-            # Load per-user fee config
+            # Load per-user builder code config
             async with async_session_factory() as db:
                 user = await db.get(User, session.user_id)
                 if user:
-                    # Override takes priority; NULL means use XP-computed fee
-                    fee_is_overridden = user.fee_override_bps is not None
-                    user_fee_bps = (
-                        user.fee_override_bps
-                        if fee_is_overridden
-                        else user.effective_fee_bps
-                    )
-                    user_trading_volume = user.trading_volume
+                    # fee_override_bps=0 → builder code OFF; NULL/other → ON
+                    builder_code_enabled = (user.fee_override_bps != 0)
+                    if not builder_code_enabled and user.free_fee_ends_at:
+                        if datetime.now(timezone.utc) < user.free_fee_ends_at:
+                            builder_code_expires_at = user.free_fee_ends_at
+                        else:
+                            # Already expired — rebascule ON immediately
+                            builder_code_enabled = True
+                            builder_code_expires_at = None
+                    else:
+                        builder_code_expires_at = None
                     referrer_user_id = user.referrer_user_id or ""
-                    _ffa = user.free_fee_ends_at
-                    free_fee_ends_at = _ffa if (fee_is_overridden and _ffa and datetime.now(timezone.utc) < _ffa) else None
                 else:
-                    fee_is_overridden = False
-                    user_fee_bps = 120
-                    user_trading_volume = 0.0
+                    builder_code_enabled = True
+                    builder_code_expires_at = None
                     referrer_user_id = ""
-                    free_fee_ends_at = None
 
                 referrer_wallet_address = ""
                 if referrer_user_id:
@@ -423,8 +422,14 @@ class SessionManager:
                 wallet_address=wallet.wallet_address,
                 proxy_address=wallet.proxy_address or "",
                 display_name=user.display_name if user else "",
+                builder_code_enabled=builder_code_enabled,
             )
             await client.initialize()
+            try:
+                await client.update_collateral_allowance()
+            except Exception as _e:
+                import logging as _log
+                _log.getLogger("session_manager").warning("collateral allowance update failed (non-fatal): %s", _e)
 
             # Create engine
             engine = SessionEngine(
@@ -444,10 +449,8 @@ class SessionManager:
                 fee_wallet_address=wallet.wallet_address,
                 referrer_user_id=referrer_user_id,
                 referrer_wallet_address=referrer_wallet_address,
-                user_fee_bps=user_fee_bps,
-                fee_is_overridden=fee_is_overridden,
-                user_trading_volume=user_trading_volume,
-                free_fee_ends_at=free_fee_ends_at,
+                builder_code_enabled=builder_code_enabled,
+                builder_code_expires_at=builder_code_expires_at,
                 db_factory=async_session_factory,
             )
 

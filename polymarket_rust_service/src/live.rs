@@ -127,6 +127,15 @@ impl LiveClientHandle {
         Ok(())
     }
 
+    pub async fn update_collateral_allowance(&self) -> Result<()> {
+        use polymarket_client_sdk_v2::clob::types::request::UpdateBalanceAllowanceRequest;
+        let req = UpdateBalanceAllowanceRequest::builder()
+            .asset_type(AssetType::Collateral)
+            .build();
+        self.client.update_balance_allowance(req).await.context("update_collateral_allowance(pUSD)")?;
+        Ok(())
+    }
+
     pub async fn place_limit_order(
         &self,
         token_id: &str,

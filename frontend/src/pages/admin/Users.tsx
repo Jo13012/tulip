@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AdminUser } from '../../types'
 import { api } from '../../utils/api'
-import { fmtStoredBps, fmtStoredBpsPct, fmtUsd } from '../../utils/format'
+import { fmtUsd, pnlColor } from '../../utils/format'
 import { useAppStore } from '../../store'
 import { AddressField } from '../../components/ui/Field'
 
@@ -481,167 +481,309 @@ function StatusDot({ live, status }: { live: boolean; status: string | null }) {
   return <span className={`w-1.5 h-1.5 rounded-full inline-block ${color}`} />
 }
 
-/**
- * Inline cell for fee_override_bps.
- * Shows the override value if set (highlighted), or "—" if no override (using XP fee).
- * Click to edit: enter bps value to set override, or clear input to remove override.
- */
-function FeeOverrideCell({ user, onUpdated }: {
-  user: AdminUser
-  onUpdated: (id: string, override: number | null) => void
-}) {
-  // UI works in real bps (e.g. 4 = 4 bps = 0.04%). DB stores bps×10 (40).
-  const displayVal = user.fee_override_bps != null
-    ? String((user.fee_override_bps / 10).toFixed(1).replace(/\.0$/, ''))
-    : ''
-  const [editing, setEditing] = useState(false)
-  const [val, setVal]         = useState(displayVal)
-  const [saving, setSaving]   = useState(false)
-  const addToast = useAppStore(s => s.addToast)
-
-  async function save() {
-    const trimmed = val.trim()
-    // Empty = clear override
-    if (trimmed === '') {
-      setSaving(true)
-      try {
-        await api.admin.updateUser(user.id, { fee_override_bps: -1 })
-        onUpdated(user.id, null)
-        addToast({ type: 'success', message: 'Override cleared — using XP fee' })
-      } catch (e: any) {
-        addToast({ type: 'error', message: e.message })
-        setVal(displayVal)
-      } finally {
-        setSaving(false)
-        setEditing(false)
-      }
-      return
-    }
-    const realBps = parseFloat(trimmed)
-    if (isNaN(realBps) || realBps < 0 || realBps > 1000) {
-      setVal(displayVal)
-      setEditing(false)
-      return
-    }
-    // Convert real bps → bps×10 for DB
-    const storedBps = Math.round(realBps * 10)
-    setSaving(true)
-    try {
-      await api.admin.updateUser(user.id, { fee_override_bps: storedBps })
-      onUpdated(user.id, storedBps)
-      addToast({ type: 'success', message: `Fee override → ${fmtStoredBps(storedBps)} (${fmtStoredBpsPct(storedBps)})` })
-    } catch (e: any) {
-      addToast({ type: 'error', message: e.message })
-      setVal(displayVal)
-    } finally {
-      setSaving(false)
-      setEditing(false)
-    }
-  }
-
-  if (editing) {
-    return (
-      <input
-        className="w-16 bg-white/10 border border-white/20 rounded px-1.5 py-0.5 text-xs font-mono text-white focus:outline-none focus:border-brand"
-        value={val}
-        autoFocus
-        placeholder="bps"
-        onChange={e => setVal(e.target.value)}
-        onBlur={save}
-        onKeyDown={e => {
-          if (e.key === 'Enter') save()
-          if (e.key === 'Escape') { setVal(displayVal); setEditing(false) }
-        }}
-        disabled={saving}
-      />
-    )
-  }
-
-  const hasOverride = user.fee_override_bps != null
-  const freeDaysLeft = (() => {
-    if (!user.free_fee_ends_at) return 0
-    const ms = new Date(user.free_fee_ends_at).getTime() - Date.now()
-    return ms > 0 ? Math.ceil(ms / 86_400_000) : 0
-  })()
-  const isFreeFee = user.fee_override_bps === 0 && freeDaysLeft > 0
-
-  return (
-    <div className="flex items-center gap-1">
-      <button
-        className={`text-xs font-mono transition-colors cursor-pointer ${hasOverride ? (isFreeFee ? 'text-emerald-400 hover:text-emerald-300' : 'text-amber-400 hover:text-amber-300') : 'text-white/25 hover:text-white/50'}`}
-        onClick={() => { setVal(hasOverride ? displayVal : ''); setEditing(true) }}
-        title={hasOverride ? 'Override active — click to edit or clear' : 'Click to set override'}
-      >
-        {hasOverride ? fmtStoredBps(user.fee_override_bps as number) : '—'}
-      </button>
-      {isFreeFee && (
-        <span className="text-[9px] text-emerald-400/60 font-mono">{freeDaysLeft}d</span>
-      )}
-    </div>
-  )
-}
-
-function GrantFreeFeeCell({ user, onUpdated }: {
+function BuilderCodeCell({ user, onUpdated }: {
   user: AdminUser
   onUpdated: (id: string, patch: Partial<AdminUser>) => void
 }) {
-  const [editing, setEditing] = useState(false)
-  const [days, setDays] = useState('7')
+  const [showMenu, setShowMenu] = useState(false)
+  const [daysInput, setDaysInput] = useState('7')
   const [saving, setSaving] = useState(false)
+  const addToast = useAppStore(s => s.addToast)
 
   const freeDaysLeft = (() => {
     if (!user.free_fee_ends_at) return 0
     const ms = new Date(user.free_fee_ends_at).getTime() - Date.now()
     return ms > 0 ? Math.ceil(ms / 86_400_000) : 0
   })()
-  const isActive = user.fee_override_bps === 0 && freeDaysLeft > 0
 
-  const grant = async () => {
-    const n = parseInt(days)
+  const isOff = user.fee_override_bps === 0
+  const isTimed = isOff && freeDaysLeft > 0
+
+  const turnOn = async () => {
+    setSaving(true)
+    try {
+      await api.admin.updateUser(user.id, { fee_override_bps: -1 })
+      onUpdated(user.id, { fee_override_bps: null, free_fee_ends_at: null, builder_code_enabled: true })
+      addToast({ type: 'success', message: 'Builder code ON' })
+    } catch (e: any) { addToast({ type: 'error', message: e.message }) }
+    finally { setSaving(false); setShowMenu(false) }
+  }
+
+  const turnOffPermanent = async () => {
+    setSaving(true)
+    try {
+      await api.admin.updateUser(user.id, { fee_override_bps: 0 })
+      onUpdated(user.id, { fee_override_bps: 0, free_fee_ends_at: null, builder_code_enabled: false })
+      addToast({ type: 'success', message: 'Builder code OFF (permanent)' })
+    } catch (e: any) { addToast({ type: 'error', message: e.message }) }
+    finally { setSaving(false); setShowMenu(false) }
+  }
+
+  const turnOffTimed = async () => {
+    const n = parseInt(daysInput)
     if (!n || n < 1) return
     setSaving(true)
     try {
       await api.admin.updateUser(user.id, { free_fee_days: n })
       const ends = new Date(Date.now() + n * 86_400_000).toISOString()
-      onUpdated(user.id, { fee_override_bps: 0, free_fee_ends_at: ends })
-      setEditing(false)
-    } finally { setSaving(false) }
+      onUpdated(user.id, { fee_override_bps: 0, free_fee_ends_at: ends, builder_code_enabled: false })
+      addToast({ type: 'success', message: `Builder code OFF for ${n}d` })
+    } catch (e: any) { addToast({ type: 'error', message: e.message }) }
+    finally { setSaving(false); setShowMenu(false) }
   }
 
-  const cancel = async () => {
-    setSaving(true)
-    try {
-      await api.admin.updateUser(user.id, { free_fee_days: -1 })
-      onUpdated(user.id, { fee_override_bps: null, free_fee_ends_at: null })
-    } finally { setSaving(false) }
-  }
-
-  if (editing) return (
-    <div className="flex items-center gap-1">
-      <input
-        className="w-10 text-xs font-mono bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/80"
-        value={days} onChange={e => setDays(e.target.value)} type="number" min={1} max={365}
-        autoFocus onKeyDown={e => { if (e.key === 'Enter') grant(); if (e.key === 'Escape') setEditing(false) }}
-      />
-      <span className="text-[9px] text-white/30">d</span>
-      <button className="text-[9px] text-emerald-400 hover:text-emerald-300" onClick={grant} disabled={saving}>✓</button>
-      <button className="text-[9px] text-white/30 hover:text-white/60" onClick={() => setEditing(false)}>✕</button>
-    </div>
-  )
-
-  if (isActive) return (
-    <div className="flex items-center gap-1">
-      <span className="text-[10px] text-emerald-400/80 font-mono">{freeDaysLeft}d left</span>
-      <button className="text-[9px] text-white/20 hover:text-red-400" onClick={cancel} disabled={saving} title="Cancel free fee">✕</button>
-    </div>
-  )
+  const badge = isTimed
+    ? <span className="text-[10px] font-mono text-orange-400">OFF·{freeDaysLeft}d</span>
+    : isOff
+    ? <span className="text-[10px] font-mono text-red-400">OFF</span>
+    : <span className="text-[10px] font-mono text-emerald-400">ON</span>
 
   return (
-    <button
-      className="text-[9px] text-white/20 hover:text-emerald-400 transition-colors"
-      onClick={() => setEditing(true)}
-      title="Grant free fee period"
-    >+ free</button>
+    <div className="relative">
+      <button
+        onClick={() => setShowMenu(m => !m)}
+        disabled={saving}
+        className="flex items-center gap-1 cursor-pointer"
+      >
+        {badge}
+        <span className="text-white/20 text-[9px]">▾</span>
+      </button>
+      {showMenu && (
+        <div className="absolute z-50 top-full left-0 mt-1 bg-[#1a1a2e] border border-white/10 rounded-lg shadow-xl p-2 flex flex-col gap-1 min-w-[140px]">
+          {isOff ? (
+            <button onClick={turnOn} disabled={saving} className="text-[10px] text-emerald-400 hover:text-emerald-300 text-left px-2 py-1 rounded hover:bg-white/5">
+              → Turn ON
+            </button>
+          ) : (
+            <button onClick={turnOffPermanent} disabled={saving} className="text-[10px] text-red-400 hover:text-red-300 text-left px-2 py-1 rounded hover:bg-white/5">
+              → Turn OFF (permanent)
+            </button>
+          )}
+          <div className="flex items-center gap-1 px-2 py-1">
+            <span className="text-[9px] text-white/30">OFF for</span>
+            <input
+              type="number" min={1} max={365}
+              value={daysInput} onChange={e => setDaysInput(e.target.value)}
+              className="w-10 text-[10px] font-mono bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/80"
+            />
+            <span className="text-[9px] text-white/30">d</span>
+            <button onClick={turnOffTimed} disabled={saving} className="text-[9px] text-orange-400 hover:text-orange-300">✓</button>
+          </div>
+          <button onClick={() => setShowMenu(false)} className="text-[9px] text-white/20 hover:text-white/40 text-left px-2 py-0.5">cancel</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── User Session History Overlay ─────────────────────────────────────────────
+
+interface AdminHistorySession {
+  session_id:       string
+  status:           string
+  gross_capital:    number
+  stop_mode:        string
+  stop_days:        number | null
+  target_volume:    number | null
+  started_at:       string | null
+  stopped_at:       string | null
+  stop_reason:      string | null
+  total_volume:     number
+  realized_pnl:     number
+  unrealized_pnl:   number
+  builder_fees_usdc: number
+  paid_fees:        number
+  trade_count:      number
+  order_count:      number
+}
+
+function fmtShortDate(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function fmtDurShort(s: number): string {
+  const d = Math.floor(s / 86400)
+  const h = Math.floor((s % 86400) / 3600)
+  if (d > 0) return `${d}d ${h}h`
+  const m = Math.floor((s % 3600) / 60)
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
+}
+
+function SessionDetailPanel({ s, onBack }: { s: AdminHistorySession; onBack: () => void }) {
+  const newFeeModel = s.stopped_at != null ? s.stopped_at >= '2026-05-13' : true
+  const fees = newFeeModel ? s.builder_fees_usdc : s.paid_fees
+  const netPnl = s.realized_pnl - fees
+  const cpm = s.total_volume > 0 ? (netPnl / s.total_volume) * 1_000_000 : null
+  const isRunning = s.status === 'running' || s.status === 'starting'
+
+  const startMs = s.started_at ? new Date(s.started_at).getTime() : null
+  const endMs = s.stopped_at ? new Date(s.stopped_at).getTime() : Date.now()
+  const uptimeS = startMs ? (endMs - startMs) / 1000 : 0
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-white/[0.06]">
+        <button onClick={onBack} className="text-white/30 hover:text-white/60 text-sm">←</button>
+        <div className="flex-1 min-w-0">
+          <span className={`text-[10px] font-mono font-semibold ${
+            s.status === 'running' ? 'text-emerald-400' :
+            s.status === 'error' ? 'text-red-400' : 'text-white/40'
+          }`}>{s.status}</span>
+          <span className="ml-2 text-[10px] text-white/25">{fmtShortDate(s.started_at)}</span>
+        </div>
+        <span className="text-[11px] font-mono font-semibold text-white/60">{fmtUsd(s.gross_capital, 0)}</span>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {/* Stats grid */}
+        <div className="grid grid-cols-2 gap-2">
+          {[
+            { label: 'Volume', value: fmtUsd(s.total_volume, 0), color: 'text-white/60' },
+            { label: 'Uptime', value: uptimeS > 0 ? fmtDurShort(uptimeS) : '—', color: 'text-white/40' },
+            { label: 'Gross PnL', value: fmtUsd(s.realized_pnl), color: pnlColor(s.realized_pnl) },
+            { label: isRunning ? 'Builder Fees' : 'Fees', value: fmtUsd(fees), color: 'text-white/30' },
+            { label: 'Net PnL', value: fmtUsd(netPnl), color: pnlColor(netPnl) },
+            { label: 'CPM', value: cpm != null ? `${cpm > 0 ? '+' : ''}${fmtUsd(cpm, 0)}` : '—', color: cpm != null ? pnlColor(cpm) : 'text-white/20' },
+            { label: 'Trades', value: String(s.trade_count), color: 'text-white/40' },
+            { label: 'Orders', value: String(s.order_count), color: 'text-white/25' },
+          ].map(({ label, value, color }) => (
+            <div key={label} className="px-3 py-2 rounded-xl bg-white/[0.03] border border-white/[0.05]">
+              <div className="text-[9px] text-white/25 uppercase tracking-widest mb-0.5">{label}</div>
+              <div className={`text-[13px] font-mono font-semibold tabular-nums ${color}`}>{value}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Progress */}
+        {s.stop_mode === 'days' && s.stop_days && (
+          <div className="px-3 py-2 rounded-xl bg-white/[0.03] border border-white/[0.05]">
+            <div className="text-[9px] text-white/25 uppercase tracking-widest mb-1">Duration</div>
+            <div className="text-[11px] font-mono text-white/40">
+              {fmtDurShort(uptimeS)} / {s.stop_days}d
+              <span className="ml-2 text-white/20">
+                ({Math.min(100, (uptimeS / (s.stop_days * 86400)) * 100).toFixed(0)}%)
+              </span>
+            </div>
+          </div>
+        )}
+        {s.stop_mode === 'volume' && s.target_volume && (
+          <div className="px-3 py-2 rounded-xl bg-white/[0.03] border border-white/[0.05]">
+            <div className="text-[9px] text-white/25 uppercase tracking-widest mb-1">Volume target</div>
+            <div className="text-[11px] font-mono text-white/40">
+              {fmtUsd(s.total_volume, 0)} / {fmtUsd(s.target_volume, 0)}
+              <span className="ml-2 text-white/20">
+                ({Math.min(100, (s.total_volume / s.target_volume) * 100).toFixed(0)}%)
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Stop reason */}
+        {s.stop_reason && (
+          <div className="px-3 py-2 rounded-xl bg-red-500/5 border border-red-500/15">
+            <div className="text-[9px] text-red-400/60 uppercase tracking-widest mb-0.5">Stop reason</div>
+            <div className="text-[10px] font-mono text-red-400/70">{s.stop_reason}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function UserHistoryOverlay({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+  const [sessions, setSessions]     = useState<AdminHistorySession[]>([])
+  const [loading, setLoading]       = useState(true)
+  const [selected, setSelected]     = useState<AdminHistorySession | null>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    api.admin.getUserSessionHistory(user.id)
+      .then((d: any) => setSessions(d as AdminHistorySession[]))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [user.id])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') { if (selected) setSelected(null); else onClose() } }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose, selected])
+
+  return (
+    <div
+      ref={overlayRef}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4"
+      onClick={e => { if (e.target === overlayRef.current) onClose() }}
+    >
+      <div className="bg-[#0d0e10] border border-white/[0.08] rounded-2xl w-full max-w-md shadow-2xl flex flex-col"
+        style={{ maxHeight: '80vh' }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] shrink-0">
+          <div>
+            <span className="text-sm font-semibold text-white/80">{user.display_name || user.id.slice(0, 12)}</span>
+            <span className="ml-2 text-[10px] text-white/25 font-mono">{user.wallet_address?.slice(0, 8)}…</span>
+          </div>
+          <button className="w-6 h-6 flex items-center justify-center text-white/20 hover:text-white/55" onClick={onClose}>✕</button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-hidden">
+          {selected ? (
+            <SessionDetailPanel s={selected} onBack={() => setSelected(null)} />
+          ) : loading ? (
+            <div className="p-6 space-y-px">
+              {[1,2,3].map(i => <div key={i} className="h-10 bg-white/[0.025] animate-pulse rounded-lg" />)}
+            </div>
+          ) : sessions.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 gap-2">
+              <div className="text-white/20 text-xs font-mono uppercase tracking-widest">No activity</div>
+              <div className="text-white/10 text-[10px]">No sessions found for this user</div>
+            </div>
+          ) : (
+            <div className="overflow-y-auto" style={{ maxHeight: 'calc(80vh - 56px)' }}>
+              {sessions.map(s => {
+                const newFeeModel = s.stopped_at != null ? s.stopped_at >= '2026-05-13' : true
+                const fees = newFeeModel ? s.builder_fees_usdc : s.paid_fees
+                const netPnl = s.realized_pnl - fees
+                const isRunning = s.status === 'running' || s.status === 'starting'
+                return (
+                  <div
+                    key={s.session_id}
+                    className="flex items-center gap-3 px-4 py-3 border-b border-white/[0.04] last:border-0 hover:bg-white/[0.025] cursor-pointer transition-colors"
+                    onClick={() => setSelected(s)}
+                  >
+                    <div className="flex flex-col items-center gap-0.5 shrink-0">
+                      <span className={`w-2 h-2 rounded-full ${
+                        isRunning ? 'bg-emerald-400 animate-pulse' :
+                        s.status === 'error' ? 'bg-red-400' : 'bg-white/15'
+                      }`} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-mono text-white/35">{fmtShortDate(s.stopped_at || s.started_at)}</span>
+                        <span className="text-[9px] font-mono text-white/20">{fmtUsd(s.gross_capital, 0)}</span>
+                      </div>
+                      <div className="text-[10px] font-mono text-white/25 mt-0.5">
+                        vol {fmtUsd(s.total_volume, 0)} · {s.trade_count} trades
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className={`text-[11px] font-mono font-semibold tabular-nums ${pnlColor(netPnl)}`}>{fmtUsd(netPnl)}</div>
+                      <div className="text-[9px] font-mono text-white/20">{fmtUsd(fees)} fees</div>
+                    </div>
+                    <span className="text-white/15 text-xs shrink-0">›</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -677,6 +819,12 @@ function ActionsMenu({ user, onClose, onStop, onNuclear, onRedeem }: {
     const r: any = await api.admin.reregisterClob(user.id)
     if (r?.ok) addToast({ type: 'success', message: `CLOB re-registered: ${r.clob_api_key?.slice(0, 8)}…` })
     else addToast({ type: 'error', message: r?.detail || 'Re-register failed' })
+  })
+
+  const fixClob2 = () => run('clob2', async () => {
+    const r: any = await api.admin.fixClob2(user.id)
+    if (r?.ok) addToast({ type: 'success', message: `CLOB V2 fixed: ${r.steps?.join(', ')}` })
+    else addToast({ type: 'error', message: r?.detail || 'Fix CLOB V2 failed' })
   })
 
   const migrateV2 = () => run('v2', async () => {
@@ -723,7 +871,8 @@ function ActionsMenu({ user, onClose, onStop, onNuclear, onRedeem }: {
           {item('Nuclear close', 'Cancel orders + sell / redeem all positions', 'text-red-400/70', () => { onClose(); onNuclear() })}
           {sep}
           {item('Bridge POL', 'Send $0.50 USDC (Arb) → POL on Polygon for gas', 'text-yellow-400/70', bridgePol)}
-          {item('Re-register CLOB', "Fix 'maker address not allowed': delete + recreate API key", 'text-blue-400/70', reregisterClob)}
+          {item('Fix CLOB V2', "Recreate API key + index Safe pUSD with CLOB V2", 'text-cyan-400/80', fixClob2)}
+          {item('Re-register CLOB', "Delete + recreate API key only (no allowance update)", 'text-blue-400/70', reregisterClob)}
           {item('Migrate V2', 'Re-run pUSD + CTF × 3 approval txs on Safe', 'text-purple-400/60', migrateV2)}
         </div>
 
@@ -777,8 +926,9 @@ export default function AdminUsers() {
   const [loading, setLoading]     = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [stopping, setStopping]       = useState<string | null>(null)
-  const [nuclearUser, setNuclearUser] = useState<AdminUser | null>(null)
-  const [redeemUser, setRedeemUser]   = useState<AdminUser | null>(null)
+  const [nuclearUser, setNuclearUser]   = useState<AdminUser | null>(null)
+  const [redeemUser, setRedeemUser]     = useState<AdminUser | null>(null)
+  const [historyUser, setHistoryUser]   = useState<AdminUser | null>(null)
   const [filterAccountReady, setFilterAccountReady] = useState(false)
   const [filterFunded, setFilterFunded] = useState(true)
   const [forcingReplaceAll, setForcingReplaceAll] = useState(false)
@@ -815,9 +965,6 @@ export default function AdminUsers() {
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [])
 
-  function handleFeeUpdated(id: string, override: number | null) {
-    setUsers(prev => prev.map(u => u.id === id ? { ...u, fee_override_bps: override } : u))
-  }
   function handleUserPatched(id: string, patch: Partial<AdminUser>) {
     setUsers(prev => prev.map(u => u.id === id ? { ...u, ...patch } : u))
   }
@@ -886,7 +1033,7 @@ export default function AdminUsers() {
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-white/[0.06]">
-              {['', 'Name', 'Wallet', 'USDC', 'ETH', 'POL', 'Trading Bal', 'Override fee', 'Free fee', 'XP fee', 'Trading Vol', 'Bot PnL', 'Session', '⋯'].map((h, i) => (
+              {['', 'Name', 'Wallet', 'USDC', 'ETH', 'POL', 'Trading Bal', 'Builder Code', 'Trading Vol', 'Bot PnL', 'Session', '⋯'].map((h, i) => (
                 <th key={i} className="text-left px-3 py-2 text-[10px] text-white/25 font-semibold uppercase tracking-wider">
                   {h}
                 </th>
@@ -898,7 +1045,11 @@ export default function AdminUsers() {
               (!filterAccountReady || u.account_ready) &&
               (!filterFunded || u.is_funded)
             ).map(u => (
-              <tr key={u.id} className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
+              <tr
+                key={u.id}
+                className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors cursor-pointer"
+                onClick={() => setHistoryUser(u)}
+              >
                 {/* Status dot */}
                 <td className="px-3 py-2.5">
                   <StatusDot live={u.session_live} status={u.session_status} />
@@ -969,19 +1120,9 @@ export default function AdminUsers() {
                   })()}
                 </td>
 
-                {/* Fee override (editable) */}
-                <td className="px-3 py-2.5">
-                  <FeeOverrideCell user={u} onUpdated={handleFeeUpdated} />
-                </td>
-
-                {/* Free fee period */}
-                <td className="px-3 py-2.5">
-                  <GrantFreeFeeCell user={u} onUpdated={handleUserPatched} />
-                </td>
-
-                {/* XP-computed fee */}
-                <td className="px-3 py-2.5 font-mono text-white/40">
-                  {fmtStoredBps(u.effective_fee_bps)}
+                {/* Builder code toggle */}
+                <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
+                  <BuilderCodeCell user={u} onUpdated={handleUserPatched} />
                 </td>
 
                 {/* Trading volume */}
@@ -1004,7 +1145,7 @@ export default function AdminUsers() {
                 </td>
 
                 {/* Actions */}
-                <td className="px-3 py-2.5">
+                <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
                   <ActionsDropdown
                     user={u}
                     onStop={(mode) => handleStop(u.id, mode)}
@@ -1023,6 +1164,9 @@ export default function AdminUsers() {
         )}
       </div>
 
+      {historyUser && (
+        <UserHistoryOverlay user={historyUser} onClose={() => setHistoryUser(null)} />
+      )}
       {nuclearUser && (
         <NuclearModal user={nuclearUser} onClose={() => setNuclearUser(null)} />
       )}

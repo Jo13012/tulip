@@ -174,7 +174,6 @@ class RuntimeSlotState(BaseModel):
     volume:             float = 0.0
     realized_pnl:       float = 0.0
     unrealized_pnl:     float = 0.0
-    paid_fees:          float = 0.0
 
     class Config:
         use_enum_values = True
@@ -189,14 +188,13 @@ class SessionRuntimeSummary(BaseModel):
     status:              str
     gross_capital:       float
     deployable_capital:  float
-    fee_reserve_used:    float
-    fee_reserve_remaining: float
     total_deployed:      float
     total_volume:        float
     realized_pnl:        float
     unrealized_pnl:      float
     total_pnl:           float
-    paid_fees:           float
+    builder_code_enabled: bool = True
+    builder_fees_usdc:   float = 0.0
     slot_count:          int
     active_slot_count:   int
     trade_count:         int = 0

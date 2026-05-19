@@ -101,6 +101,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/client/usdc-balance", post(client_usdc_balance))
         .route("/api/v1/client/token-balance", post(client_token_balance))
         .route("/api/v1/client/ensure-sell-allowance", post(client_ensure_sell_allowance))
+        .route("/api/v1/client/update-collateral-allowance", post(client_update_collateral_allowance))
         .route("/api/v1/client/place-limit-order", post(client_place_limit_order))
         .route("/api/v1/client/open-orders", post(client_open_orders))
         .route("/api/v1/client/order-status", post(client_order_status))
@@ -339,6 +340,13 @@ async fn client_ensure_sell_allowance(State(state): State<AppState>, Json(body):
     get_client(&state, &body.client_id)?
         .update_balance_allowance(&body.token_id).await
         .map_err(|e| AppError::Internal(format!("allowance update failed: {e}")))?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn client_update_collateral_allowance(State(state): State<AppState>, Json(body): Json<ClientIdRequest>) -> AppResult<Json<Value>> {
+    get_client(&state, &body.client_id)?
+        .update_collateral_allowance().await
+        .map_err(|e| AppError::Internal(format!("collateral allowance update failed: {e}")))?;
     Ok(Json(json!({ "ok": true })))
 }
 

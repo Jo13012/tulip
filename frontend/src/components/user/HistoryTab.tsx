@@ -16,7 +16,9 @@ interface HistorySession {
   total_volume:   number
   realized_pnl:   number
   unrealized_pnl: number
-  paid_fees:      number
+  paid_fees:           number
+  builder_fees_usdc:   number
+  builder_code_enabled: boolean
   trade_count:    number
   order_count:    number
 }
@@ -143,7 +145,9 @@ export function HistoryTab() {
         </div>
 
         {visible.map(s => {
-          const netPnl = s.realized_pnl - Math.floor(s.total_volume * 12 / 100_000 * 100) / 100
+          const newFeeModel = s.stopped_at != null && s.stopped_at >= '2026-05-13'
+          const fees = newFeeModel ? s.builder_fees_usdc : s.paid_fees
+          const netPnl = s.realized_pnl - fees
           const cpm = s.total_volume > 0 ? (netPnl / s.total_volume) * 1_000_000 : null
           const cpmSign = cpm != null && cpm > 0 ? '+' : ''
           const isError = s.status === 'error'
@@ -173,7 +177,7 @@ export function HistoryTab() {
                 <span className={`text-[11px] font-mono font-semibold tabular-nums ${pnlColor(s.realized_pnl)}`}>{fmtUsd(s.realized_pnl)}</span>
               </div>
               <div className="flex items-center">
-                <span className="text-[10px] font-mono text-white/25 tabular-nums">{fmtUsd(Math.floor(s.total_volume * 12 / 100_000 * 100) / 100)}</span>
+                <span className="text-[10px] font-mono text-white/25 tabular-nums">{fmtUsd(fees)}</span>
               </div>
               <div className="flex items-center">
                 <span className={`text-[11px] font-mono font-semibold tabular-nums ${pnlColor(netPnl)}`}>{fmtUsd(netPnl)}</span>
@@ -191,7 +195,9 @@ export function HistoryTab() {
       {/* ── Mobile cards (xs only) ── */}
       <div className="sm:hidden">
         {visible.map(s => {
-          const netPnl = s.realized_pnl - Math.floor(s.total_volume * 12 / 100_000 * 100) / 100
+          const newFeeModel = s.stopped_at != null && s.stopped_at >= '2026-05-13'
+          const fees = newFeeModel ? s.builder_fees_usdc : s.paid_fees
+          const netPnl = s.realized_pnl - fees
           const cpm = s.total_volume > 0 ? (netPnl / s.total_volume) * 1_000_000 : null
           const cpmSign = cpm != null && cpm > 0 ? '+' : ''
           const isError = s.status === 'error'
@@ -223,7 +229,7 @@ export function HistoryTab() {
                 </div>
                 <div>
                   <div className="text-[8px] text-white/20 uppercase tracking-widest mb-0.5">Fees</div>
-                  <div className="text-[11px] font-mono text-white/25 tabular-nums">{fmtUsd(Math.floor(s.total_volume * 12 / 100_000 * 100) / 100)}</div>
+                  <div className="text-[11px] font-mono text-white/25 tabular-nums">{fmtUsd(fees)}</div>
                 </div>
                 <div>
                   <div className="text-[8px] text-white/20 uppercase tracking-widest mb-0.5">Net</div>

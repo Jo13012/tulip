@@ -102,6 +102,56 @@ async def force_replace_all(admin: AdminUser, db: DbSession):
     return {"ok": True, "triggered": triggered, "errors": errors}
 
 
+@router.get("/user/{user_id}/history")
+async def get_user_session_history(user_id: str, db: DbSession, admin: AdminUser, limit: int = 50):
+    from app.db.models import SessionSnapshot
+    sessions_q = await db.execute(
+        select(DBSession)
+        .where(DBSession.user_id == user_id)
+        .order_by(DBSession.created_at.desc())
+        .limit(limit)
+    )
+    sessions = sessions_q.scalars().all()
+    if not sessions:
+        return []
+
+    session_ids = [s.id for s in sessions]
+    snap_q = await db.execute(
+        select(SessionSnapshot)
+        .where(SessionSnapshot.session_id.in_(session_ids))
+        .order_by(SessionSnapshot.session_id, SessionSnapshot.snapshot_at.desc())
+        .distinct(SessionSnapshot.session_id)
+    )
+    snaps = {sn.session_id: sn for sn in snap_q.scalars().all()}
+
+    live_engines = {e.session_id: e for e in await session_registry.all()}
+
+    result = []
+    for s in sessions:
+        sn = snaps.get(s.id)
+        eng = live_engines.get(s.id)
+        rt = eng.summary if eng else None
+        result.append({
+            "session_id":     s.id,
+            "status":         s.status,
+            "gross_capital":  s.session_gross_capital,
+            "stop_mode":      s.stop_mode,
+            "stop_days":      s.stop_days,
+            "target_volume":  s.target_volume,
+            "started_at":     s.started_at.isoformat() if s.started_at else None,
+            "stopped_at":     s.stopped_at.isoformat() if s.stopped_at else None,
+            "stop_reason":    s.stop_reason,
+            "total_volume":   rt.total_volume if rt else (sn.total_volume if sn else 0.0),
+            "realized_pnl":   rt.realized_pnl if rt else (sn.realized_pnl if sn else 0.0),
+            "unrealized_pnl": rt.unrealized_pnl if rt else (sn.unrealized_pnl if sn else 0.0),
+            "builder_fees_usdc": rt.builder_fees_usdc if rt else (sn.builder_fees_usdc if sn else s.builder_fees_usdc),
+            "paid_fees":      sn.paid_fees if sn else 0.0,
+            "trade_count":    rt.trade_count if rt else 0,
+            "order_count":    rt.order_count if rt else 0,
+        })
+    return result
+
+
 @router.get("/{session_id}")
 async def get_session(session_id: str, db: DbSession, admin: AdminUser):
     session = await db.get(DBSession, session_id)

@@ -264,7 +264,7 @@ async def get_slot_volume_stats(db: DbSession, admin: AdminUser):
                     if slot_rt._session_slot_id in ss_id_set:
                         live_vol  += slot_rt._volume
                         live_pnl  += slot_rt._realized_pnl
-                        live_fees += slot_rt._paid_fees
+                        live_fees += eng.summary.builder_fees_usdc
 
         total_vol  = round(db_vol + live_vol, 2)
         total_pnl  = round(db_pnl + live_pnl, 2)

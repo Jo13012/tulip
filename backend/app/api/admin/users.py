@@ -161,10 +161,10 @@ router = APIRouter(prefix="/admin/users", tags=["admin:users"])
 
 
 class PatchUserRequest(BaseModel):
-    # fee_override_bps: >=0 to set override, -1 to clear
-    fee_override_bps: Optional[int] = Field(None, ge=-1, le=10_000)
+    # fee_override_bps: 0 = builder code OFF (permanent), -1 = clear (builder code ON)
+    fee_override_bps: Optional[int] = Field(None, ge=-1, le=0)
     display_name: Optional[str] = None
-    # free_fee_days: >0 to grant N days free fee from now, -1 to cancel
+    # free_fee_days: >0 = builder code OFF for N days, -1 = cancel
     free_fee_days: Optional[int] = Field(None, ge=-1, le=365)
 
 
@@ -241,7 +241,7 @@ async def list_users(
             "is_admin":            u.is_admin,
             "is_active":           u.is_active,
             "fee_override_bps":    u.fee_override_bps,
-            "effective_fee_bps":   u.effective_fee_bps,
+            "builder_code_enabled": u.fee_override_bps != 0,
             "trading_volume":      round(lb["volume"], 2),
             "bot_pnl":             round(lb["pnl"], 2),
             "wallet_address":      wallet.wallet_address if wallet else None,
@@ -280,42 +280,38 @@ async def patch_user(user_id: str, body: PatchUserRequest, db: DbSession, admin:
         raise HTTPException(404, "User not found")
 
     changed = []
-    new_fee_for_engine: Optional[int] = None
-    new_override_flag: Optional[bool] = None
-    clear_free_fee_ends_at: bool = False
+    new_builder_code_enabled: Optional[bool] = None
+    new_builder_code_expires_at = None
 
     if body.fee_override_bps is not None:
         if body.fee_override_bps == -1:
+            # Clear → builder code ON
             user.fee_override_bps = None
-            user.free_fee_ends_at = None  # cancel any pending auto-expiry
-            new_fee_for_engine = user.effective_fee_bps
-            new_override_flag  = False
-            clear_free_fee_ends_at = True
-            changed.append("fee_override_bps=cleared")
+            user.free_fee_ends_at = None
+            new_builder_code_enabled = True
+            changed.append("builder_code=ON")
         else:
-            user.fee_override_bps = body.fee_override_bps
-            new_fee_for_engine = body.fee_override_bps
-            new_override_flag  = True
-            changed.append(f"fee_override_bps={body.fee_override_bps}")
+            # 0 → builder code OFF permanent
+            user.fee_override_bps = 0
+            user.free_fee_ends_at = None
+            new_builder_code_enabled = False
+            changed.append("builder_code=OFF")
 
-    new_free_fee_ends_at = None  # for engine push
     if body.free_fee_days is not None:
         from datetime import datetime as _dt, timezone as _tz, timedelta as _td
         if body.free_fee_days == -1:
+            # Cancel free period → builder code ON
             user.free_fee_ends_at = None
             user.fee_override_bps = None
-            new_fee_for_engine = user.effective_fee_bps
-            new_override_flag  = False
-            clear_free_fee_ends_at = True
-            changed.append("free_fee=cancelled")
+            new_builder_code_enabled = True
+            changed.append("builder_code=ON (free cancelled)")
         else:
             ends_at = _dt.now(_tz.utc) + _td(days=body.free_fee_days)
             user.free_fee_ends_at = ends_at
             user.fee_override_bps = 0
-            new_free_fee_ends_at  = ends_at
-            new_fee_for_engine    = 0
-            new_override_flag     = True
-            changed.append(f"free_fee={body.free_fee_days}d")
+            new_builder_code_enabled = False
+            new_builder_code_expires_at = ends_at
+            changed.append(f"builder_code=OFF for {body.free_fee_days}d")
 
     if body.display_name is not None:
         user.display_name = body.display_name
@@ -331,8 +327,8 @@ async def patch_user(user_id: str, body: PatchUserRequest, db: DbSession, admin:
     ))
     await db.commit()
 
-    # Push fee change to live session engine immediately (zero restart)
-    if new_fee_for_engine is not None:
+    # Push builder code change to live session engine immediately
+    if new_builder_code_enabled is not None:
         s_q = await db.execute(
             select(DBSession).where(
                 DBSession.user_id == user_id,
@@ -343,12 +339,12 @@ async def patch_user(user_id: str, body: PatchUserRequest, db: DbSession, admin:
         if active:
             engine = await session_registry.get(active.id)
             if engine:
-                engine._user_fee_bps      = new_fee_for_engine
-                engine._fee_is_overridden = new_override_flag
-                if clear_free_fee_ends_at:
-                    engine._free_fee_ends_at = None
-                if new_free_fee_ends_at is not None:
-                    engine._free_fee_ends_at = new_free_fee_ends_at
+                engine._builder_code_enabled = new_builder_code_enabled
+                engine._builder_code_expires_at = new_builder_code_expires_at
+                try:
+                    await engine._client.reinitialize(new_builder_code_enabled)
+                except Exception:
+                    pass
 
     return {"ok": True, "changed": changed}
 
@@ -488,7 +484,7 @@ async def get_poly_state(user_id: str, db: DbSession, admin: AdminUser):
             )
             wallet_obj = wallet_row.scalar_one_or_none()
             if wallet_obj:
-                safe_address = wallet_obj.safe_address
+                safe_address = wallet_obj.proxy_address
         except Exception:
             pass
 
@@ -673,6 +669,62 @@ async def reregister_clob(user_id: str, db: DbSession, admin: AdminUser):
         return {"ok": True, "clob_api_key": creds["key"]}
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+@router.post("/{user_id}/fix-clob2")
+async def fix_clob2(user_id: str, db: DbSession, admin: AdminUser):
+    """
+    Fix 'maker address not allowed' on CLOB V2:
+    1. Recreate CLOB API key (delete + create)
+    2. Initialize Rust client and call update_collateral_allowance to index Safe with CLOB V2
+    """
+    from app.services.polymarket_onboarding_service import recreate_clob_creds
+
+    w_q = await db.execute(
+        select(Wallet).where(Wallet.user_id == user_id, Wallet.is_primary == True).limit(1)
+    )
+    wallet = w_q.scalars().first()
+    if not wallet or not wallet.privy_wallet_id or not wallet.wallet_address or not wallet.proxy_address:
+        raise HTTPException(400, "No primary wallet")
+
+    steps = []
+    try:
+        # Step 1: recreate CLOB API key
+        creds = await recreate_clob_creds(
+            privy_wallet_id=wallet.privy_wallet_id,
+            eoa_address=wallet.wallet_address,
+            safe_address=wallet.proxy_address,
+        )
+        wallet.clob_api_key = creds["key"]
+        wallet.clob_api_secret = creds["secret"]
+        wallet.clob_api_passphrase = creds["passphrase"]
+        steps.append("clob_key_recreated")
+        await db.flush()
+    except Exception as e:
+        raise HTTPException(500, f"CLOB key recreate failed: {e}")
+
+    try:
+        # Step 2: update_collateral_allowance via Rust client (indexes Safe pUSD with CLOB V2)
+        client = ExecutionClient(
+            privy_wallet_id=wallet.privy_wallet_id,
+            wallet_address=wallet.wallet_address,
+            proxy_address=wallet.proxy_address,
+        )
+        await client.initialize()
+        await client.update_collateral_allowance()
+        await client.close()
+        steps.append("collateral_indexed")
+    except Exception as e:
+        # Non-fatal — key was recreated, just log
+        steps.append(f"collateral_index_skipped:{str(e)[:60]}")
+
+    db.add(AuditLog(
+        actor_id=admin["sub"], actor_role="admin",
+        action="user.fix_clob2", entity_type="user", entity_id=user_id,
+        detail=f"safe={wallet.proxy_address[:12]} steps={','.join(steps)}",
+    ))
+    await db.commit()
+    return {"ok": True, "steps": steps, "clob_api_key": creds["key"]}
 
 
 @router.post("/{user_id}/migrate-v2")

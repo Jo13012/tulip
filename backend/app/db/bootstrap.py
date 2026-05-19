@@ -120,6 +120,17 @@ async def ensure_strategy_slot_version_columns() -> None:
     log.info("Ensured strategy_slot_versions columns are available")
 
 
+async def ensure_builder_fees_columns() -> None:
+    statements = [
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS builder_fees_usdc FLOAT NOT NULL DEFAULT 0.0",
+        "ALTER TABLE session_snapshots ADD COLUMN IF NOT EXISTS builder_fees_usdc FLOAT NOT NULL DEFAULT 0.0",
+    ]
+    async with engine.begin() as conn:
+        for stmt in statements:
+            await conn.execute(text(stmt))
+    log.info("Ensured builder_fees_usdc columns")
+
+
 async def ensure_fee_queue_table() -> None:
     """Persistent fee queue — 1 row per wallet, crash-safe."""
     statements = [

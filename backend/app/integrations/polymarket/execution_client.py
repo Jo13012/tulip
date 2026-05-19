@@ -27,6 +27,7 @@ class ExecutionClient:
         proxy_address: str = "",
         signature_type: int = DEFAULT_SIGNATURE_TYPE,
         display_name: str = "",
+        builder_code_enabled: bool = True,
     ):
         self._privy_wallet_id = privy_wallet_id
         self._wallet_address = wallet_address
@@ -34,6 +35,7 @@ class ExecutionClient:
         self._proxy_address = proxy_address
         self._signature_type = signature_type
         self._display_name = display_name
+        self._builder_code_enabled = builder_code_enabled
         self._client_id: Optional[str] = None
         self._http = httpx.AsyncClient(timeout=30.0, trust_env=False)
         self._initialized = False
@@ -53,7 +55,7 @@ class ExecutionClient:
                     "chain_id": self._chain_id,
                     "proxy_address": self._proxy_address or None,
                     "signature_type": self._signature_type,
-                    "builder_code": settings.POLYMARKET_BUILDER_CODE or None,
+                    "builder_code": settings.POLYMARKET_BUILDER_CODE if self._builder_code_enabled else None,
                     "display_name": self._display_name or None,
                 },
             )
@@ -67,6 +69,21 @@ class ExecutionClient:
             raise
         except Exception as e:
             raise ExecutionClientError(f"Rust execution init failed: {e}")
+
+    async def reinitialize(self, builder_code_enabled: bool) -> None:
+        """Update builder_code on the Rust client (close existing handle then reopen)."""
+        self._builder_code_enabled = builder_code_enabled
+        if self._client_id:
+            try:
+                await self._http.post(
+                    f"{settings.POLYMARKET_RUST_URL}/api/v1/client/close",
+                    json={"client_id": self._client_id},
+                )
+            except Exception:
+                pass
+        self._initialized = False
+        self._client_id = None
+        await self.initialize()
 
     async def close(self):
         if not self._client_id:
@@ -94,6 +111,18 @@ class ExecutionClient:
             resp.raise_for_status()
         except Exception as e:
             raise ExecutionClientError(f"CTF allowance failed for {token_id[:16]}...: {e}")
+
+    async def update_collateral_allowance(self):
+        """Tell the CLOB to re-index this account's pUSD balance. Must be called before first BUY."""
+        await self._ensure_ready()
+        try:
+            resp = await self._http.post(
+                f"{settings.POLYMARKET_RUST_URL}/api/v1/client/update-collateral-allowance",
+                json={"client_id": self._client_id},
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            raise ExecutionClientError(f"Collateral allowance update failed: {e}")
 
     async def get_cached_usdc(self) -> float:
         now = time.time()

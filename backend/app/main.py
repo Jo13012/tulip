@@ -39,6 +39,7 @@ from app.db.bootstrap import (
     ensure_funding_transactions_table,
     ensure_strategy_slot_version_columns,
     ensure_fee_queue_table,
+    ensure_builder_fees_columns,
     reset_stale_funding_states,
 )
 
@@ -48,7 +49,6 @@ from app.integrations.polymarket.bridge_client import bridge_client
 from app.services.recovery_service import recovery_service
 from app.services.privy_wallet_service import validate_authorization_config
 from app.services.balance_poller import balance_poller
-from app.services.fee_service import fee_service
 
 # ── API routers ───────────────────────────────────────────────────────────────
 from app.api.auth import router as auth_router
@@ -78,6 +78,7 @@ async def lifespan(app: FastAPI):
         await ensure_funding_transactions_table()
         await ensure_strategy_slot_version_columns()
         await ensure_fee_queue_table()
+        await ensure_builder_fees_columns()
         await ensure_global_strategy()
         await reset_stale_funding_states()
     except Exception as _e:
@@ -97,9 +98,6 @@ async def lifespan(app: FastAPI):
 
     # Start live wallet balance poller (30s TTL cache for admin/users)
     balance_poller.start()
-
-    # fee_service.start() intentionally not called — no app fees in new model
-    # Existing fee_queue rows are preserved for audit but no new payments are made.
 
     yield
 

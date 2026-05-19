@@ -167,7 +167,7 @@ async def get_referrals(user: CurrentUser, db: DbSession):
         snap_q = await db.execute(
             select(
                 SessionSnapshot.session_id,
-                _func.max(SessionSnapshot.paid_fees).label("fees"),
+                _func.max(SessionSnapshot.builder_fees_usdc).label("fees"),
             )
             .where(SessionSnapshot.session_id.in_(session_ids))
             .group_by(SessionSnapshot.session_id)
@@ -182,7 +182,7 @@ async def get_referrals(user: CurrentUser, db: DbSession):
         if status in ("running", "starting", "recovering"):
             engine = live_engines.get(sess_id)
             if engine:
-                reward_by_user[referred_user_id] += float(engine.summary.paid_fees or 0.0) * 0.10
+                reward_by_user[referred_user_id] += float(engine.summary.builder_fees_usdc or 0.0) * 0.10
                 continue
         reward_by_user[referred_user_id] += snap_by_session.get(sess_id, 0.0) * 0.10
 

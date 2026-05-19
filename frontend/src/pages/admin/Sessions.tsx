@@ -238,8 +238,8 @@ function SessionDetail({ id }: { id: string }) {
           <Stat label="Volume"      value={fmtUsd(rt.total_volume)} />
           <Stat label="Trades"      value={String(rt.trade_count)} />
           <Stat label="Gross PnL"   value={fmtUsd(grossPnl)}       color={pnlColor(grossPnl)} />
-          <Stat label="Net PnL"     value={fmtUsd(grossPnl - Math.floor(rt.total_volume * 40 / 100_000 * 100) / 100)} color={pnlColor(grossPnl - Math.floor(rt.total_volume * 40 / 100_000 * 100) / 100)} />
-          <Stat label="Fees"        value={fmtUsd(Math.floor(rt.total_volume * 40 / 100_000 * 100) / 100)}   color="text-white/30" />
+          <Stat label="Net PnL"     value={fmtUsd(grossPnl - (rt.builder_fees_usdc ?? 0))} color={pnlColor(grossPnl - (rt.builder_fees_usdc ?? 0))} />
+          <Stat label="Builder Fees" value={fmtUsd(rt.builder_fees_usdc ?? 0)} color={rt.builder_code_enabled ? "text-emerald-400/60" : "text-white/20"} />
           <Stat label="Slots"       value={`${rt.active_slot_count}/${rt.slot_count}`} />
         </div>
       )}

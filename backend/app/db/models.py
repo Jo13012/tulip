@@ -218,6 +218,7 @@ class Session(Base):
     session_gross_capital       = Column(Float, nullable=False)
     session_deployable_capital  = Column(Float, nullable=False)
     session_fee_reserve         = Column(Float, nullable=False)
+    builder_fees_usdc           = Column(Float, nullable=False, default=0.0)
 
     stop_mode                   = Column(String, nullable=False)   # days | volume
     stop_days                   = Column(Integer, nullable=True)
@@ -382,6 +383,7 @@ class SessionSnapshot(Base):
     realized_pnl      = Column(Float, nullable=False, default=0.0)
     unrealized_pnl    = Column(Float, nullable=False, default=0.0)
     paid_fees         = Column(Float, nullable=False, default=0.0)
+    builder_fees_usdc = Column(Float, nullable=False, default=0.0)
     health_state      = Column(String, nullable=False)
     created_at        = Column(DateTime(timezone=True), default=_now, nullable=False)
 

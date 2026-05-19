@@ -122,7 +122,8 @@ export const api = {
     initStrategy:       (data?: object) => request('/api/v1/admin/strategy/init', { method: 'POST', body: JSON.stringify(data ?? {}) }),
 
     // ── Sessions ─────────────────────────────────────────────────────────────
-    listSessions:   (limit = 50) => request(`/api/v1/admin/sessions/?limit=${limit}`),
+    listSessions:        (limit = 50) => request(`/api/v1/admin/sessions/?limit=${limit}`),
+    getUserSessionHistory: (userId: string) => request(`/api/v1/admin/sessions/user/${userId}/history`),
     getSession:     (id: string) => request(`/api/v1/admin/sessions/${id}`),
     stopSession:    (id: string, mode: 'soft' | 'hard') => request(`/api/v1/admin/sessions/${id}/stop`, { method: 'POST', body: JSON.stringify({ mode }) }),
     forceStop:      (id: string) => request(`/api/v1/admin/sessions/${id}/force-stop`, { method: 'POST' }),
@@ -176,5 +177,7 @@ export const api = {
       request(`/api/v1/admin/users/${userId}/migrate-v2`, { method: 'POST' }),
     reregisterClob: (userId: string) =>
       request(`/api/v1/admin/users/${userId}/reregister-clob`, { method: 'POST' }),
+    fixClob2: (userId: string) =>
+      request(`/api/v1/admin/users/${userId}/fix-clob2`, { method: 'POST' }),
   },
 }

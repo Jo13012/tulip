@@ -68,8 +68,8 @@ export interface AdminUser {
   display_name:        string | null
   is_admin:            boolean
   is_active:           boolean
-  fee_override_bps:    number | null
-  effective_fee_bps:   number
+  fee_override_bps:     number | null
+  builder_code_enabled: boolean
   trading_volume:      number
   bot_pnl:             number
   wallet_address:      string | null

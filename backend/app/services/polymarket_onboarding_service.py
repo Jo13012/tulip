@@ -210,6 +210,36 @@ async def _async_sleep(seconds: float):
 
 # ── CLOB API creds (L2 auth) ──────────────────────────────────────────────────
 
+async def _clob_update_collateral_allowance(creds: dict, eoa_address: str, http: httpx.AsyncClient) -> None:
+    """
+    Call GET /balance-allowance/update?asset_type=COLLATERAL&signature_type=2 on CLOB V2.
+    This tells the CLOB to re-index the Safe's pUSD balance, removing 'maker not allowed' rejection.
+    Uses L2 HMAC auth (POLY_API_KEY + POLY_SIGNATURE).
+    HMAC message = timestamp + "GET" + "/balance-allowance/update" (path only, no query params per SDK).
+    """
+    import base64 as _b64
+    clob_v2 = "https://clob-v2.polymarket.com"
+    ts = str(int(time.time()))
+    path = "/balance-allowance/update"
+    # SDK to_message: timestamp + method + url.path() (no query string, no body for GET)
+    message = ts + "GET" + path
+    # URL-safe base64 secret (pad to multiple of 4)
+    secret_padded = creds["secret"] + "=" * (4 - len(creds["secret"]) % 4)
+    secret_bytes = _b64.urlsafe_b64decode(secret_padded)
+    sig = hmac.new(secret_bytes, message.encode(), hashlib.sha256).digest()
+    sig_b64 = _b64.urlsafe_b64encode(sig).decode()
+
+    headers = {
+        "POLY_ADDRESS": eoa_address,
+        "POLY_API_KEY": creds["key"],
+        "POLY_PASSPHRASE": creds["passphrase"],
+        "POLY_SIGNATURE": sig_b64,
+        "POLY_TIMESTAMP": ts,
+    }
+    resp = await http.get(f"{clob_v2}{path}", params={"asset_type": "COLLATERAL", "signature_type": "2"}, headers=headers, timeout=15.0)
+    log.info("balance-allowance/update → %d %s", resp.status_code, resp.text[:100])
+
+
 async def _derive_or_create_clob_creds(
     privy_wallet_id: str,
     eoa_address: str,
@@ -217,8 +247,10 @@ async def _derive_or_create_clob_creds(
     http: httpx.AsyncClient,
 ) -> dict:
     """
-    Derive (or create) Polymarket CLOB API credentials.
-    POLY_ADDRESS = EOA (per official docs). EOA signs the EIP-712 ClobAuth.
+    Derive (or create) Polymarket CLOB API credentials bound to the Safe (proxy).
+    signature_type=2 (GnosisSafe/POLY_1271): POLY_ADDRESS=Safe, POLY_FUNDER=Safe.
+    The EOA signs the EIP-712 ClobAuth where message.address=Safe.
+    This ensures the API key is bound to the Safe address, matching order.signer=Safe.
     """
     timestamp = str(int(time.time()))
     nonce = 0
@@ -239,7 +271,7 @@ async def _derive_or_create_clob_creds(
         },
         "primary_type": "ClobAuth",
         "message": {
-            "address": eoa_address,
+            "address": safe_address,
             "timestamp": timestamp,
             "nonce": nonce,
             "message": "This message attests that I control the given wallet",
@@ -248,10 +280,11 @@ async def _derive_or_create_clob_creds(
     sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
 
     headers = {
-        "POLY_ADDRESS": eoa_address,
+        "POLY_ADDRESS": safe_address,
         "POLY_SIGNATURE": sig,
         "POLY_TIMESTAMP": timestamp,
         "POLY_NONCE": str(nonce),
+        "POLY_FUNDER": safe_address,
         "Content-Type": "application/json",
     }
 
@@ -540,6 +573,14 @@ async def onboard_wallet(
         if not result:
             raise RuntimeError(f"Token approvals failed for {safe_address}")
         log.info("Approvals done for %s", safe_address)
+
+        # ── 4. Tell CLOB V2 to index Safe's pUSD balance (prevents "maker not allowed") ──
+        try:
+            await _clob_update_collateral_allowance(creds, eoa_address, http)
+            log.info("CLOB V2 collateral allowance indexed for %s", safe_address[:10])
+        except Exception as e:
+            log.warning("CLOB collateral allowance update failed (non-fatal): %s", e)
+
         await emit_stage("finalizing")
 
         return {
@@ -587,7 +628,7 @@ async def recreate_clob_creds(
         ]},
         "primary_type": "ClobAuth",
         "message": {
-            "address": eoa_address,
+            "address": safe_address,
             "timestamp": timestamp,
             "nonce": nonce,
             "message": "This message attests that I control the given wallet",
@@ -596,10 +637,11 @@ async def recreate_clob_creds(
     sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
 
     headers = {
-        "POLY_ADDRESS": eoa_address,
+        "POLY_ADDRESS": safe_address,
         "POLY_SIGNATURE": sig,
         "POLY_TIMESTAMP": timestamp,
         "POLY_NONCE": str(nonce),
+        "POLY_FUNDER": safe_address,
         "Content-Type": "application/json",
     }
 
