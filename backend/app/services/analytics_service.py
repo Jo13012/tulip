@@ -53,7 +53,8 @@ class AnalyticsService:
                 total_pnl      += sm.total_pnl
                 total_fees     += (sm.total_volume or 0.0) * 20 / 10_000
 
-        # Today's volume/pnl: live total minus last snapshot before today (UTC)
+        # Today's volume/pnl — same logic as daily_volume chart:
+        # baseline = max cumulative snapshot before today, live adds incremental above that.
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         today_volume = 0.0
         today_pnl    = 0.0
@@ -65,15 +66,16 @@ class AnalyticsService:
             sm = engine.summary
             live_vol = sm.total_volume or 0.0
             live_pnl = sm.total_pnl    or 0.0
-            # Most recent snapshot before today (vol uses max to handle restart resets)
+            # Max snapshot before today (handles restarts — same as chart baseline)
             snap_q = await db.execute(
-                select(SessionSnapshot.total_volume, SessionSnapshot.realized_pnl)
+                select(
+                    func.max(SessionSnapshot.total_volume),
+                    func.max(SessionSnapshot.realized_pnl),
+                )
                 .where(
                     SessionSnapshot.session_id == s.id,
                     SessionSnapshot.snapshot_at < today_start,
                 )
-                .order_by(SessionSnapshot.snapshot_at.desc())
-                .limit(1)
             )
             row = snap_q.first()
             snap_vol = float(row[0] or 0.0) if row else 0.0
