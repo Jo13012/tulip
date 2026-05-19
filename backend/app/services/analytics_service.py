@@ -65,13 +65,15 @@ class AnalyticsService:
             sm = engine.summary
             live_vol = sm.total_volume or 0.0
             live_pnl = sm.total_pnl    or 0.0
-            # Last snapshot before today
+            # Most recent snapshot before today (vol uses max to handle restart resets)
             snap_q = await db.execute(
-                select(func.max(SessionSnapshot.total_volume), func.max(SessionSnapshot.realized_pnl))
+                select(SessionSnapshot.total_volume, SessionSnapshot.realized_pnl)
                 .where(
                     SessionSnapshot.session_id == s.id,
                     SessionSnapshot.snapshot_at < today_start,
                 )
+                .order_by(SessionSnapshot.snapshot_at.desc())
+                .limit(1)
             )
             row = snap_q.first()
             snap_vol = float(row[0] or 0.0) if row else 0.0

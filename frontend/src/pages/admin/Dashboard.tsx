@@ -765,13 +765,21 @@ function OverviewTab({ m, strat }: { m: Metrics; strat: StrategyData | null }) {
         </div>
       </Section>
 
-      {(m.today_volume > 0 || m.active_sessions > 0) && (
+      {((m.today_volume ?? 0) > 0 || m.active_sessions > 0) && (
         <Section title="Today (UTC)">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <Stat label="Volume"    value={fmtUsd(m.today_volume, 0)}                          accent="text-white/65" />
-            <Stat label="Gross PnL" value={fmtUsd(m.today_pnl)}                               accent={pnlColor(m.today_pnl)} />
-            <Stat label="Fees"      value={fmtUsd(m.today_fees)}                               accent="text-white/35" />
-            <Stat label="Net PnL"   value={fmtUsd(m.today_pnl - m.today_fees)}                accent={pnlColor(m.today_pnl - m.today_fees)} />
+            {(() => {
+              const vol  = m.today_volume ?? 0
+              const pnl  = m.today_pnl   ?? 0
+              const fees = m.today_fees  ?? 0
+              const net  = pnl - fees
+              return <>
+                <Stat label="Volume"    value={fmtUsd(vol, 0)} accent="text-white/65" />
+                <Stat label="Gross PnL" value={fmtUsd(pnl)}    accent={pnlColor(pnl)} />
+                <Stat label="Fees"      value={fmtUsd(fees)}    accent="text-white/35" />
+                <Stat label="Net PnL"   value={fmtUsd(net)}     accent={pnlColor(net)} />
+              </>
+            })()}
           </div>
         </Section>
       )}
