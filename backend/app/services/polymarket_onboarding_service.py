@@ -210,6 +210,43 @@ async def _async_sleep(seconds: float):
 
 # ── CLOB API creds (L2 auth) ──────────────────────────────────────────────────
 
+def _clob_eip712_hash(address: str, timestamp: str, nonce: int) -> str:
+    """EIP-712 hash for ClobAuth — matches polymarket-client-sdk-v2 auth::l1::create_headers."""
+    TYPEHASH = keccak(
+        b"ClobAuth(address address,string timestamp,uint256 nonce,string message)"
+    )
+    domain_sep = keccak(
+        keccak(b"EIP712Domain(string name,string version,uint256 chainId)")
+        + keccak(b"ClobAuthDomain")
+        + keccak(b"1")
+        + abi_encode(["uint256"], [CHAIN_ID])
+    )
+    struct_hash = keccak(
+        TYPEHASH
+        + abi_encode(["address"], [to_checksum_address(address)])
+        + keccak(timestamp.encode())
+        + abi_encode(["uint256"], [nonce])
+        + keccak(b"This message attests that I control the given wallet")
+    )
+    return "0x" + keccak(b"\x19\x01" + domain_sep + struct_hash).hex()
+
+
+def _normalize_sig_v(sig_hex: str) -> str:
+    """Normalize signature v to 27/28 (Ethereum convention). secp256k1_sign returns v=0/1."""
+    b = bytes.fromhex(sig_hex[2:] if sig_hex.startswith("0x") else sig_hex)
+    v = b[64]
+    if v in (0, 1):
+        v += 27
+    return "0x" + b[:64].hex() + v.to_bytes(1, "big").hex()
+
+
+async def _clob_l1_sig(privy_wallet_id: str, address: str, timestamp: str, nonce: int) -> str:
+    """Sign ClobAuth EIP-712 hash via secp256k1_sign, return sig with v=27/28."""
+    h = _clob_eip712_hash(address, timestamp, nonce)
+    raw = await privy_wallet_service.secp256k1_sign(privy_wallet_id, h)
+    return _normalize_sig_v(raw)
+
+
 async def _clob_update_collateral_allowance(creds: dict, eoa_address: str, http: httpx.AsyncClient) -> None:
     """
     Call GET /balance-allowance/update?asset_type=COLLATERAL&signature_type=2 on CLOB V2.
@@ -248,29 +285,12 @@ async def _derive_or_create_clob_creds(
 ) -> dict:
     """
     Derive (or create) Polymarket CLOB API credentials.
-    POLY_ADDRESS=EOA, signed with sign_typed_data — matches SDK l1::create_headers exactly.
-    The key is bound to EOA; order.signer=EOA (funder=Safe is only for order.maker).
+    POLY_ADDRESS=EOA. Uses secp256k1_sign on raw EIP-712 hash (v normalized to 27/28),
+    matching polymarket-client-sdk-v2 l1::create_headers / sign_hash exactly.
     """
-    timestamp = str(int(time.time()))
     nonce = 0
-
-    typed_data = {
-        "domain": {"name": "ClobAuthDomain", "version": "1", "chainId": CHAIN_ID},
-        "types": {"ClobAuth": [
-            {"name": "address", "type": "address"},
-            {"name": "timestamp", "type": "string"},
-            {"name": "nonce", "type": "uint256"},
-            {"name": "message", "type": "string"},
-        ]},
-        "primary_type": "ClobAuth",
-        "message": {
-            "address": eoa_address,
-            "timestamp": timestamp,
-            "nonce": nonce,
-            "message": "This message attests that I control the given wallet",
-        },
-    }
-    sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
+    timestamp = str(int(time.time()))
+    sig = await _clob_l1_sig(privy_wallet_id, eoa_address, timestamp, nonce)
 
     headers = {
         "POLY_ADDRESS": eoa_address,
@@ -288,8 +308,7 @@ async def _derive_or_create_clob_creds(
             log.info("CLOB creds attempt %d/6 — waiting %ds (CLOB indexing lag)...", attempt + 1, wait)
             await _async_sleep(wait)
             timestamp = str(int(time.time()))
-            typed_data["message"]["timestamp"] = timestamp
-            sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
+            sig = await _clob_l1_sig(privy_wallet_id, eoa_address, timestamp, nonce)
             headers["POLY_SIGNATURE"] = sig
             headers["POLY_TIMESTAMP"] = timestamp
 
@@ -604,28 +623,11 @@ async def recreate_clob_creds(
 ) -> dict:
     """
     Force-recreate CLOB API credentials: delete existing key then create new one.
-    POLY_ADDRESS=EOA, sign_typed_data — matches SDK l1::create_headers exactly.
+    POLY_ADDRESS=EOA. secp256k1_sign on raw EIP-712 hash (v=27/28), matching SDK sign_hash.
     """
-    timestamp = str(int(time.time()))
     nonce = 0
-
-    typed_data = {
-        "domain": {"name": "ClobAuthDomain", "version": "1", "chainId": CHAIN_ID},
-        "types": {"ClobAuth": [
-            {"name": "address", "type": "address"},
-            {"name": "timestamp", "type": "string"},
-            {"name": "nonce", "type": "uint256"},
-            {"name": "message", "type": "string"},
-        ]},
-        "primary_type": "ClobAuth",
-        "message": {
-            "address": eoa_address,
-            "timestamp": timestamp,
-            "nonce": nonce,
-            "message": "This message attests that I control the given wallet",
-        },
-    }
-    sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
+    timestamp = str(int(time.time()))
+    sig = await _clob_l1_sig(privy_wallet_id, eoa_address, timestamp, nonce)
 
     headers = {
         "POLY_ADDRESS": eoa_address,
@@ -642,8 +644,7 @@ async def recreate_clob_creds(
 
         # 2. Refresh signature after delete
         timestamp = str(int(time.time()))
-        typed_data["message"]["timestamp"] = timestamp
-        sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
+        sig = await _clob_l1_sig(privy_wallet_id, eoa_address, timestamp, nonce)
         headers["POLY_SIGNATURE"] = sig
         headers["POLY_TIMESTAMP"] = timestamp
 
@@ -654,8 +655,7 @@ async def recreate_clob_creds(
                 log.info("recreate_clob_creds attempt %d/5 — waiting %ds...", attempt + 1, wait)
                 await _async_sleep(wait)
                 timestamp = str(int(time.time()))
-                typed_data["message"]["timestamp"] = timestamp
-                sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
+                sig = await _clob_l1_sig(privy_wallet_id, eoa_address, timestamp, nonce)
                 headers["POLY_SIGNATURE"] = sig
                 headers["POLY_TIMESTAMP"] = timestamp
 
