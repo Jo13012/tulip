@@ -659,6 +659,22 @@ async def fix_clob2(user_id: str, db: DbSession, admin: AdminUser):
 
     steps = []
 
+    # Step 0: delete existing key so Rust create_or_derive makes a fresh one
+    import httpx as _httpx2
+    _ts = str(int(__import__("time").time()))
+    from app.services.polymarket_onboarding_service import _clob_l1_sig as _l1
+    _sig = await _l1(wallet.privy_wallet_id, wallet.wallet_address, _ts, 0)
+    _del_headers = {
+        "POLY_ADDRESS": wallet.wallet_address,
+        "POLY_SIGNATURE": _sig,
+        "POLY_TIMESTAMP": _ts,
+        "POLY_NONCE": "0",
+        "Content-Type": "application/json",
+    }
+    async with _httpx2.AsyncClient(timeout=15.0, trust_env=False) as _h:
+        _dr = await _h.delete("https://clob-v2.polymarket.com/auth/api-key", headers=_del_headers)
+        steps.append(f"delete:{_dr.status_code}")
+
     # Step 1: Rust client auth (GnosisSafe native) + collateral index
     client = ExecutionClient(
         privy_wallet_id=wallet.privy_wallet_id,
