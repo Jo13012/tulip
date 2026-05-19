@@ -822,6 +822,12 @@ function ActionsMenu({ user, onClose, onStop, onNuclear, onRedeem }: {
     else addToast({ type: 'error', message: r?.detail || 'Fix CLOB V2 failed' })
   })
 
+  const migrateV2 = () => run('migrateV2', async () => {
+    const r: any = await api.admin.migrateV2(user.id)
+    if (r?.ok) addToast({ type: 'success', message: `Migrate V2 ok · tx:${(r.tx_hash || '').slice(0, 10)}…` })
+    else addToast({ type: 'error', message: r?.detail || 'Migrate V2 failed' })
+  })
+
   const sep = <div className="my-1 border-t border-white/[0.06]" />
 
   const item = (label: string, sub: string, color: string, onClick: () => void, disabled = false) => (
@@ -861,6 +867,7 @@ function ActionsMenu({ user, onClose, onStop, onNuclear, onRedeem }: {
           {sep}
           {item('Bridge POL', 'Send $0.50 USDC (Arb) → POL on Polygon for gas', 'text-yellow-400/70', bridgePol)}
           {item('Fix CLOB V2', "Recreate API key + index Safe pUSD with CLOB V2", 'text-cyan-400/80', fixClob2)}
+          {item('Migrate V2', "Re-run pUSD + CTF token approvals on Safe", 'text-purple-400/80', migrateV2)}
         </div>
 
         {busy && (
