@@ -643,10 +643,12 @@ async def bridge_pol(user_id: str, db: DbSession, admin: AdminUser):
 async def fix_clob2(user_id: str, db: DbSession, admin: AdminUser):
     """
     Fix 'maker address not allowed' on CLOB V2:
-    1. Recreate CLOB API key (delete + create)
-    2. Initialize Rust client and call update_collateral_allowance to index Safe with CLOB V2
+    1. Rust client authenticate() — uses GnosisSafe+funder natively, creates/derives key
+    2. update_collateral_allowance — registers Safe as deposit wallet
+    3. Python derive to pull the key created by Rust and save to DB
     """
-    from app.services.polymarket_onboarding_service import recreate_clob_creds
+    from app.services.polymarket_onboarding_service import _clob_l1_sig
+    import httpx as _httpx
 
     w_q = await db.execute(
         select(Wallet).where(Wallet.user_id == user_id, Wallet.is_primary == True).limit(1)
@@ -656,35 +658,61 @@ async def fix_clob2(user_id: str, db: DbSession, admin: AdminUser):
         raise HTTPException(400, "No primary wallet")
 
     steps = []
+
+    # Step 1: Rust client auth (GnosisSafe native) + collateral index
+    client = ExecutionClient(
+        privy_wallet_id=wallet.privy_wallet_id,
+        wallet_address=wallet.wallet_address,
+        proxy_address=wallet.proxy_address,
+    )
     try:
-        # Step 1: recreate CLOB API key
-        creds = await recreate_clob_creds(
-            privy_wallet_id=wallet.privy_wallet_id,
-            eoa_address=wallet.wallet_address,
-            safe_address=wallet.proxy_address,
-        )
-        wallet.clob_api_key = creds["key"]
-        wallet.clob_api_secret = creds["secret"]
-        wallet.clob_api_passphrase = creds["passphrase"]
-        steps.append("clob_key_recreated")
-        await db.flush()
+        await client.initialize()
+        steps.append("rust_auth_ok")
     except Exception as e:
-        raise HTTPException(500, f"CLOB key recreate failed: {e}")
+        raise HTTPException(500, f"Rust auth failed: {e}")
 
     try:
-        # Step 2: update_collateral_allowance via Rust client (indexes Safe pUSD with CLOB V2)
-        client = ExecutionClient(
-            privy_wallet_id=wallet.privy_wallet_id,
-            wallet_address=wallet.wallet_address,
-            proxy_address=wallet.proxy_address,
-        )
-        await client.initialize()
         await client.update_collateral_allowance()
-        await client.close()
         steps.append("collateral_indexed")
     except Exception as e:
-        # Non-fatal — key was recreated, just log
-        steps.append(f"collateral_index_skipped:{str(e)[:60]}")
+        steps.append(f"collateral_skipped:{str(e)[:60]}")
+    finally:
+        await client.close()
+
+    # Step 2: Python derive to get the key Rust just created/derived
+    CLOB_URL = "https://clob-proxy.jolpmaker.workers.dev"
+    CLOB_V2  = "https://clob-v2.polymarket.com"
+    from app.core.config import settings as _s
+    nonce = 0
+    timestamp = str(int(__import__("time").time()))
+    sig = await _clob_l1_sig(wallet.privy_wallet_id, wallet.wallet_address, timestamp, nonce)
+    l1_headers = {
+        "POLY_ADDRESS": wallet.wallet_address,
+        "POLY_SIGNATURE": sig,
+        "POLY_TIMESTAMP": timestamp,
+        "POLY_NONCE": str(nonce),
+        "Content-Type": "application/json",
+    }
+    creds = None
+    for url in [CLOB_V2, CLOB_URL]:
+        try:
+            async with _httpx.AsyncClient(timeout=15.0, trust_env=False) as http:
+                resp = await http.get(f"{url}/auth/derive-api-key", headers=l1_headers)
+            if resp.is_success:
+                d = resp.json()
+                if d.get("apiKey") and d.get("secret") and d.get("passphrase"):
+                    creds = {"key": d["apiKey"], "secret": d["secret"], "passphrase": d["passphrase"]}
+                    steps.append(f"derived_from_{url.split('//')[1].split('.')[0]}")
+                    break
+        except Exception:
+            pass
+
+    if not creds:
+        raise HTTPException(500, f"Could not derive creds after Rust auth. steps={steps}")
+
+    wallet.clob_api_key = creds["key"]
+    wallet.clob_api_secret = creds["secret"]
+    wallet.clob_api_passphrase = creds["passphrase"]
 
     db.add(AuditLog(
         actor_id=admin["sub"], actor_role="admin",
