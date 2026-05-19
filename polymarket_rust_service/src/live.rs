@@ -15,7 +15,7 @@ use rust_decimal::Decimal;
 use serde_json::{json, Value};
 use std::str::FromStr as _;
 
-use crate::privy_signer::PrivySigner;
+use crate::privy_signer::{PrivySigner, SafeSignerWrapper};
 
 pub struct LiveClientHandle {
     client: Client<Authenticated<Normal>>,
@@ -45,7 +45,7 @@ pub async fn open_live_client(
         privy_app_secret.to_string(),
         privy_authorization_key.to_string(),
         privy_authorization_key_id.to_string(),
-        http,
+        http.clone(),
     )?;
     signer.set_chain_id(Some(chain_id));
 
@@ -70,23 +70,52 @@ pub async fn open_live_client(
         }
     };
 
-    let mut auth_builder = Client::new(clob_host, config)
-        .context("build clob v2 client")?
-        .authentication_builder(&signer)
-        .signature_type(sig_type);
+    // For GnosisSafe sig_type with a proxy address, bind the API key to the Safe by reporting
+    // the Safe as the signer address in L1 headers (POLY_ADDRESS=Safe).
+    // Order signing still uses the original EOA signer via client.sign(&self.signer, ...).
+    let safe_addr: Option<alloy::primitives::Address> = if sig_type == SignatureType::GnosisSafe {
+        proxy_address.filter(|s| !s.is_empty())
+            .and_then(|s| s.parse().ok())
+    } else {
+        None
+    };
 
-    if let Some(proxy) = proxy_address {
-        if !proxy.is_empty() {
-            if let Ok(addr) = proxy.parse::<alloy::primitives::Address>() {
-                auth_builder = auth_builder.funder(addr);
+    let client = if let Some(safe) = safe_addr {
+        let safe_signer = SafeSignerWrapper::new(
+            PrivySigner::new(
+                privy_wallet_id.to_string(),
+                wallet_address.to_string(),
+                chain_id,
+                privy_app_id.to_string(),
+                privy_app_secret.to_string(),
+                privy_authorization_key.to_string(),
+                privy_authorization_key_id.to_string(),
+                http.clone(),
+            )?,
+            safe,
+        );
+        Client::new(clob_host, config.clone())
+            .context("build clob v2 client")?
+            .authentication_builder(&safe_signer)
+            .signature_type(sig_type)
+            .funder(safe)
+            .authenticate()
+            .await
+            .context("CLOB V2 authentication failed (safe_signer)")?
+    } else {
+        let mut auth_builder = Client::new(clob_host, config)
+            .context("build clob v2 client")?
+            .authentication_builder(&signer)
+            .signature_type(sig_type);
+        if let Some(proxy) = proxy_address {
+            if !proxy.is_empty() {
+                if let Ok(addr) = proxy.parse::<alloy::primitives::Address>() {
+                    auth_builder = auth_builder.funder(addr);
+                }
             }
         }
-    }
-
-    let client = auth_builder
-        .authenticate()
-        .await
-        .context("CLOB V2 authentication failed")?;
+        auth_builder.authenticate().await.context("CLOB V2 authentication failed")?
+    };
 
     Ok(LiveClientHandle { client, signer, signature_type: sig_type })
 }

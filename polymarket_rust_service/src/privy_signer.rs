@@ -235,3 +235,50 @@ impl SignerSync for PrivySigner {
         self.chain_id
     }
 }
+
+/// Wraps PrivySigner but reports the Safe/proxy address as its own address.
+/// This makes the SDK bind the CLOB API key to the Safe (POLY_ADDRESS=Safe in L1 headers)
+/// while actual signing still goes through the EOA via Privy.
+pub struct SafeSignerWrapper {
+    inner: PrivySigner,
+    safe_address: Address,
+}
+
+impl SafeSignerWrapper {
+    pub fn new(inner: PrivySigner, safe_address: Address) -> Self {
+        Self { inner, safe_address }
+    }
+}
+
+#[cfg_attr(not(target_family = "wasm"), async_trait::async_trait)]
+impl Signer for SafeSignerWrapper {
+    async fn sign_hash(&self, hash: &B256) -> Result<Signature, SignerError> {
+        self.inner.sign_hash(hash).await
+    }
+
+    async fn sign_message(&self, message: &[u8]) -> Result<Signature, SignerError> {
+        self.inner.sign_message(message).await
+    }
+
+    fn address(&self) -> Address {
+        self.safe_address
+    }
+
+    fn chain_id(&self) -> Option<ChainId> {
+        self.inner.chain_id()
+    }
+
+    fn set_chain_id(&mut self, chain_id: Option<ChainId>) {
+        self.inner.set_chain_id(chain_id);
+    }
+}
+
+impl SignerSync for SafeSignerWrapper {
+    fn sign_hash_sync(&self, _hash: &B256) -> Result<Signature, SignerError> {
+        panic!("SafeSignerWrapper is async-only")
+    }
+
+    fn chain_id_sync(&self) -> Option<ChainId> {
+        self.inner.chain_id()
+    }
+}
