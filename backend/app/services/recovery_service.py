@@ -114,10 +114,27 @@ class RecoveryService:
         if not wallet.privy_wallet_id:
             raise RuntimeError("No Privy wallet linked — cannot recover session")
 
+        # Load builder code state for this user
+        if user:
+            builder_code_enabled = (user.fee_override_bps != 0)
+            if not builder_code_enabled and user.free_fee_ends_at:
+                from datetime import timezone as _tz
+                if datetime.now(_tz.utc) >= user.free_fee_ends_at:
+                    builder_code_enabled = True
+            builder_code_expires_at = (
+                user.free_fee_ends_at
+                if not builder_code_enabled and user.free_fee_ends_at
+                else None
+            )
+        else:
+            builder_code_enabled = True
+            builder_code_expires_at = None
+
         client = ExecutionClient(
             privy_wallet_id=wallet.privy_wallet_id,
             wallet_address=wallet.wallet_address,
             proxy_address=wallet.proxy_address or "",
+            builder_code_enabled=builder_code_enabled,
         )
         await client.initialize()
 
@@ -167,16 +184,6 @@ class RecoveryService:
             log.info("[recovery] session=%s status=%s → hard stopped", session_id[:8], original_status)
             return
 
-        # Reconstruct fee config for running sessions
-        if user:
-            fee_is_overridden = user.fee_override_bps is not None
-            user_fee_bps = user.fee_override_bps if fee_is_overridden else user.effective_fee_bps
-            user_trading_volume = user.trading_volume
-        else:
-            fee_is_overridden = False
-            user_fee_bps = 120
-            user_trading_volume = 0.0
-
         # Build engine (fully configured — matches session_manager._start_runtime)
         engine = SessionEngine(
             session_id=session_id,
@@ -193,9 +200,8 @@ class RecoveryService:
             strategy=strat,
             privy_wallet_id=wallet.privy_wallet_id or "",
             fee_wallet_address=wallet.wallet_address,
-            user_fee_bps=user_fee_bps,
-            fee_is_overridden=fee_is_overridden,
-            user_trading_volume=user_trading_volume,
+            builder_code_enabled=builder_code_enabled,
+            builder_code_expires_at=builder_code_expires_at,
             db_factory=async_session_factory,
         )
         engine.health_state_override = "recovering"
