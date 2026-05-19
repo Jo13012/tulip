@@ -61,7 +61,7 @@ export function ActiveSessionCard({ session, onStopped }: Props) {
   })()
 
   const grossPnl = rt ? rt.realized_pnl + rt.unrealized_pnl : 0
-  const fees     = Math.floor((rt?.total_volume ?? 0) * 40 / 10_000 * 100) / 100
+  const fees     = Math.floor((rt?.total_volume ?? 0) * 20 / 10_000 * 100) / 100
   const netPnl   = grossPnl - fees
   const canStop   = !['stopped', 'stopping', 'error'].includes(session.status)
 

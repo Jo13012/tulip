@@ -633,7 +633,7 @@ function ActiveSession({ session, onStopped, displayName }: { session: Session; 
   const realizedPnl   = rt?.realized_pnl ?? 0
   const unrealizedPnl = rt?.unrealized_pnl ?? 0
   const vol           = rt?.total_volume ?? 0
-  const fees          = Math.floor(vol * 40 / 10_000 * 100) / 100
+  const fees          = Math.floor(vol * 20 / 10_000 * 100) / 100
   const netPnl        = realizedPnl + unrealizedPnl - fees
   const isStopping    = ['stopping'].includes(liveStatus) || healthState === 'stopping'
   const canStop       = !['stopped', 'error'].includes(liveStatus)

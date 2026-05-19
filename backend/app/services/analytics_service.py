@@ -174,7 +174,7 @@ class AnalyticsService:
             live_vol = sm.total_volume or 0.0
             total_volume += live_vol
             total_pnl    += sm.realized_pnl or 0.0
-            total_fees   += live_vol * 40 / 10_000
+            total_fees   += live_vol * 20 / 10_000
 
         return {
             "strategy_id":     strategy_id,
@@ -327,7 +327,7 @@ class AnalyticsService:
                 live_vol = sm.total_volume or 0.0
                 total_volume += live_vol
                 total_pnl    += sm.realized_pnl or 0.0
-                total_fees   += live_vol * 40 / 10_000
+                total_fees   += live_vol * 20 / 10_000
 
             results.append({
                 "version_id":    v.id,
@@ -463,7 +463,7 @@ class AnalyticsService:
             out.append({
                 "date":   day_str,
                 "volume": vol,
-                "fees":   round(vol * 40 / 10_000, 2),
+                "fees":   round(vol * 20 / 10_000, 2),
             })
         return out
 
@@ -552,7 +552,7 @@ class AnalyticsService:
         out = []
         for day_str, d in sorted(day_data.items()):
             vol = d["vol"]
-            fees = vol * 40 / 10_000
+            fees = vol * 20 / 10_000
             gross_cpm = round(d["pnl"] / vol * 1_000_000, 1) if vol > 0 else None
             net_cpm   = round((d["pnl"] - fees) / vol * 1_000_000, 1) if vol > 0 else None
             out.append({
