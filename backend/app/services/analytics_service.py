@@ -53,35 +53,37 @@ class AnalyticsService:
                 total_pnl      += sm.total_pnl
                 total_fees     += (sm.total_volume or 0.0) * 20 / 10_000
 
-        # Today's volume/pnl — same logic as daily_volume chart:
-        # baseline = max cumulative snapshot before today, live adds incremental above that.
+        # Today's volume/pnl — direct from SessionLot rows, restart-proof.
+        # Closed lots: timestamp_exit >= today → full round-trip volume + pnl.
+        # Open lots entered today: timestamp_entry >= today → buy-side only (no sell yet).
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        today_volume = 0.0
-        today_pnl    = 0.0
-        today_fees   = 0.0
-        for s in active:
-            engine = live_by_session.get(s.id)
-            if not engine:
-                continue
-            sm = engine.summary
-            live_vol = sm.total_volume or 0.0
-            live_pnl = sm.total_pnl    or 0.0
-            # Max snapshot before today (handles restarts — same as chart baseline)
-            snap_q = await db.execute(
-                select(
-                    func.max(SessionSnapshot.total_volume),
-                    func.max(SessionSnapshot.realized_pnl),
-                )
-                .where(SessionSnapshot.session_id == s.id)
+
+        closed_q = await db.execute(
+            select(
+                func.sum(SessionLot.size_usdc + SessionLot.sell_price * SessionLot.tokens),
+                func.sum(SessionLot.pnl),
             )
-            row = snap_q.first()
-            snap_vol = float(row[0] or 0.0) if row else 0.0
-            snap_pnl = float(row[1] or 0.0) if row else 0.0
-            inc_vol = max(0.0, live_vol - snap_vol)
-            inc_pnl = live_pnl - snap_pnl
-            today_volume += inc_vol
-            today_pnl    += inc_pnl
-            today_fees   += inc_vol * 20 / 10_000
+            .join(SessionSlot, SessionLot.session_slot_id == SessionSlot.id)
+            .where(
+                SessionLot.timestamp_exit >= today_start,
+                SessionLot.status == "closed",
+            )
+        )
+        closed_row = closed_q.first()
+        today_volume = float(closed_row[0] or 0.0) if closed_row else 0.0
+        today_pnl    = float(closed_row[1] or 0.0) if closed_row else 0.0
+
+        open_q = await db.execute(
+            select(func.sum(SessionLot.size_usdc))
+            .join(SessionSlot, SessionLot.session_slot_id == SessionSlot.id)
+            .where(
+                SessionLot.timestamp_entry >= today_start,
+                SessionLot.status != "closed",
+            )
+        )
+        open_row = open_q.first()
+        today_volume += float(open_row[0] or 0.0) if open_row else 0.0
+        today_fees    = today_volume * 20 / 10_000
 
         # Sum ALL users' trading balances from in-memory cache (balance_poller, zero I/O)
         from app.services.balance_poller import balance_poller
@@ -402,59 +404,42 @@ class AnalyticsService:
 
     async def daily_volume(self, db: AsyncSession, days: int = 60) -> list[dict]:
         """
-        Daily volume + fees from snapshots (cumulative MAX per session per day → delta).
-        Live engines: add incremental above last snapshot to avoid restart double-count.
+        Daily volume + fees from SessionLot rows (restart-proof, no snapshot delta).
+        Closed lots: grouped by timestamp_exit date.
+        Open lots: grouped by timestamp_entry date (buy-side only, no sell yet).
         """
         since = datetime.now(timezone.utc) - timedelta(days=days)
-        today_str = datetime.now(timezone.utc).date().isoformat()
 
-        from app.runtime.session_registry import session_registry
-        engines = await session_registry.all()
-        live_session_ids = {e.session_id for e in engines}
-
-        # Per session per day: max cumulative volume/fees snapshot
-        sub = (
+        # Closed lots: full round-trip volume (buy + sell) grouped by exit date
+        closed_q = await db.execute(
             select(
-                cast(SessionSnapshot.snapshot_at, Date).label("day"),
-                SessionSnapshot.session_id,
-                func.max(SessionSnapshot.total_volume).label("vol"),
-                func.max(SessionSnapshot.paid_fees).label("fees"),
+                cast(SessionLot.timestamp_exit, Date).label("day"),
+                func.sum(SessionLot.size_usdc + SessionLot.sell_price * SessionLot.tokens).label("vol"),
             )
-            .where(SessionSnapshot.snapshot_at >= since)
-            .group_by(cast(SessionSnapshot.snapshot_at, Date), SessionSnapshot.session_id)
-            .subquery()
+            .where(
+                SessionLot.timestamp_exit >= since,
+                SessionLot.status == "closed",
+            )
+            .group_by(cast(SessionLot.timestamp_exit, Date))
         )
-        result = await db.execute(
-            select(sub.c.day, sub.c.session_id, sub.c.vol, sub.c.fees)
-            .order_by(sub.c.session_id, sub.c.day)
-        )
-        snapshot_rows = result.all()
-
-        # Compute daily incremental volume per session (delta from previous day's max)
-        from collections import defaultdict
-        session_days: dict[str, list[tuple]] = defaultdict(list)
-        for row in snapshot_rows:
-            session_days[row.session_id].append((
-                str(row.day), float(row.vol or 0), float(row.fees or 0)
-            ))
-
         vol_map: dict[str, float] = {}
+        for row in closed_q.all():
+            vol_map[str(row.day)] = vol_map.get(str(row.day), 0.0) + float(row.vol or 0)
 
-        for session_id, day_rows in session_days.items():
-            day_rows.sort(key=lambda x: x[0])
-            prev_vol = 0.0
-            for day_str, cum_vol, _cum_fees in day_rows:
-                inc_vol = max(0.0, cum_vol - prev_vol)
-                prev_vol = cum_vol
-                vol_map[day_str] = vol_map.get(day_str, 0.0) + inc_vol
-
-        # Live engines: add only what's above the last persisted snapshot (restart-safe)
-        for engine in engines:
-            sm = engine.summary
-            snap_rows = session_days.get(engine.session_id, [])
-            last_snap_vol = max((v for _, v, _ in snap_rows), default=0.0)
-            today_vol = max(0.0, (sm.total_volume or 0.0) - last_snap_vol)
-            vol_map[today_str] = vol_map.get(today_str, 0.0) + today_vol
+        # Open lots entered today: buy-side only
+        open_q = await db.execute(
+            select(
+                cast(SessionLot.timestamp_entry, Date).label("day"),
+                func.sum(SessionLot.size_usdc).label("vol"),
+            )
+            .where(
+                SessionLot.timestamp_entry >= since,
+                SessionLot.status != "closed",
+            )
+            .group_by(cast(SessionLot.timestamp_entry, Date))
+        )
+        for row in open_q.all():
+            vol_map[str(row.day)] = vol_map.get(str(row.day), 0.0) + float(row.vol or 0)
 
         out = []
         for day_str in sorted(vol_map):
