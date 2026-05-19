@@ -210,6 +210,33 @@ async def _async_sleep(seconds: float):
 
 # ── CLOB API creds (L2 auth) ──────────────────────────────────────────────────
 
+def _clob_auth_hash(address: str, timestamp: str, nonce: int) -> str:
+    """
+    Compute EIP-712 hash for ClobAuth, matching polymarket-client-sdk-v2 L1 auth.
+    Returns 0x-prefixed hex hash to sign with secp256k1_sign.
+
+    When POLY_ADDRESS=safe, the CLOB verifies via EIP-1271: safe.isValidSignature(hash, sig).
+    The Safe checks ecrecover(hash) == EOA_owner → passes.
+    So we sign the raw EIP-712 hash with secp256k1_sign (no extra prefix).
+    """
+    CLOB_AUTH_TYPEHASH = keccak(
+        b"ClobAuth(address address,string timestamp,uint256 nonce,string message)"
+    )
+    domain_separator = keccak(
+        keccak(b"EIP712Domain(string name,string version,uint256 chainId)")
+        + keccak(b"ClobAuthDomain")
+        + keccak(b"1")
+        + abi_encode(["uint256"], [CHAIN_ID])
+    )
+    struct_hash = keccak(
+        CLOB_AUTH_TYPEHASH
+        + abi_encode(["address"], [to_checksum_address(address)])
+        + keccak(timestamp.encode())
+        + abi_encode(["uint256"], [nonce])
+        + keccak(b"This message attests that I control the given wallet")
+    )
+    return "0x" + keccak(b"\x19\x01" + domain_separator + struct_hash).hex()
+
 async def _clob_update_collateral_allowance(creds: dict, eoa_address: str, http: httpx.AsyncClient) -> None:
     """
     Call GET /balance-allowance/update?asset_type=COLLATERAL&signature_type=2 on CLOB V2.
@@ -248,36 +275,14 @@ async def _derive_or_create_clob_creds(
 ) -> dict:
     """
     Derive (or create) Polymarket CLOB API credentials bound to the Safe (proxy).
-    signature_type=2 (GnosisSafe/POLY_1271): POLY_ADDRESS=Safe, POLY_FUNDER=Safe.
-    The EOA signs the EIP-712 ClobAuth where message.address=Safe.
-    This ensures the API key is bound to the Safe address, matching order.signer=Safe.
+    POLY_ADDRESS=safe, POLY_FUNDER=safe. EOA signs the EIP-712 hash via secp256k1_sign.
+    CLOB V2 verifies via EIP-1271: safe.isValidSignature(hash, sig) → ecrecover==EOA_owner.
     """
-    timestamp = str(int(time.time()))
     nonce = 0
-
-    typed_data = {
-        "domain": {
-            "name": "ClobAuthDomain",
-            "version": "1",
-            "chainId": CHAIN_ID,
-        },
-        "types": {
-            "ClobAuth": [
-                {"name": "address", "type": "address"},
-                {"name": "timestamp", "type": "string"},
-                {"name": "nonce", "type": "uint256"},
-                {"name": "message", "type": "string"},
-            ]
-        },
-        "primary_type": "ClobAuth",
-        "message": {
-            "address": safe_address,
-            "timestamp": timestamp,
-            "nonce": nonce,
-            "message": "This message attests that I control the given wallet",
-        },
-    }
-    sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
+    timestamp = str(int(time.time()))
+    sig = await privy_wallet_service.secp256k1_sign(
+        privy_wallet_id, _clob_auth_hash(safe_address, timestamp, nonce)
+    )
 
     headers = {
         "POLY_ADDRESS": safe_address,
@@ -295,10 +300,10 @@ async def _derive_or_create_clob_creds(
             wait = 5 * attempt
             log.info("CLOB creds attempt %d/6 — waiting %ds (CLOB indexing lag)...", attempt + 1, wait)
             await _async_sleep(wait)
-            # Refresh signature timestamp on each retry
             timestamp = str(int(time.time()))
-            typed_data["message"]["timestamp"] = timestamp
-            sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
+            sig = await privy_wallet_service.secp256k1_sign(
+                privy_wallet_id, _clob_auth_hash(safe_address, timestamp, nonce)
+            )
             headers["POLY_SIGNATURE"] = sig
             headers["POLY_TIMESTAMP"] = timestamp
 
@@ -613,28 +618,13 @@ async def recreate_clob_creds(
 ) -> dict:
     """
     Force-recreate CLOB API credentials: delete existing key then create new one.
-    Use when 'maker address not allowed' persists after onboarding.
+    Uses secp256k1_sign on EIP-712 hash + POLY_ADDRESS=safe for EIP-1271 verification.
     """
-    timestamp = str(int(time.time()))
     nonce = 0
-
-    typed_data = {
-        "domain": {"name": "ClobAuthDomain", "version": "1", "chainId": CHAIN_ID},
-        "types": {"ClobAuth": [
-            {"name": "address", "type": "address"},
-            {"name": "timestamp", "type": "string"},
-            {"name": "nonce", "type": "uint256"},
-            {"name": "message", "type": "string"},
-        ]},
-        "primary_type": "ClobAuth",
-        "message": {
-            "address": safe_address,
-            "timestamp": timestamp,
-            "nonce": nonce,
-            "message": "This message attests that I control the given wallet",
-        },
-    }
-    sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
+    timestamp = str(int(time.time()))
+    sig = await privy_wallet_service.secp256k1_sign(
+        privy_wallet_id, _clob_auth_hash(safe_address, timestamp, nonce)
+    )
 
     headers = {
         "POLY_ADDRESS": safe_address,
@@ -652,8 +642,9 @@ async def recreate_clob_creds(
 
         # 2. Refresh signature after delete
         timestamp = str(int(time.time()))
-        typed_data["message"]["timestamp"] = timestamp
-        sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
+        sig = await privy_wallet_service.secp256k1_sign(
+            privy_wallet_id, _clob_auth_hash(safe_address, timestamp, nonce)
+        )
         headers["POLY_SIGNATURE"] = sig
         headers["POLY_TIMESTAMP"] = timestamp
 
@@ -664,8 +655,9 @@ async def recreate_clob_creds(
                 log.info("recreate_clob_creds attempt %d/5 — waiting %ds...", attempt + 1, wait)
                 await _async_sleep(wait)
                 timestamp = str(int(time.time()))
-                typed_data["message"]["timestamp"] = timestamp
-                sig = await privy_wallet_service.sign_typed_data(privy_wallet_id, typed_data)
+                sig = await privy_wallet_service.secp256k1_sign(
+                    privy_wallet_id, _clob_auth_hash(safe_address, timestamp, nonce)
+                )
                 headers["POLY_SIGNATURE"] = sig
                 headers["POLY_TIMESTAMP"] = timestamp
 
