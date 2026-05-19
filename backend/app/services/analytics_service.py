@@ -72,10 +72,7 @@ class AnalyticsService:
                     func.max(SessionSnapshot.total_volume),
                     func.max(SessionSnapshot.realized_pnl),
                 )
-                .where(
-                    SessionSnapshot.session_id == s.id,
-                    SessionSnapshot.snapshot_at < today_start,
-                )
+                .where(SessionSnapshot.session_id == s.id)
             )
             row = snap_q.first()
             snap_vol = float(row[0] or 0.0) if row else 0.0
