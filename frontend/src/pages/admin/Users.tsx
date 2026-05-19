@@ -815,12 +815,6 @@ function ActionsMenu({ user, onClose, onStop, onNuclear, onRedeem }: {
     else addToast({ type: 'error', message: r?.error || 'Bridge failed' })
   })
 
-  const reregisterClob = () => run('clob', async () => {
-    const r: any = await api.admin.reregisterClob(user.id)
-    if (r?.ok) addToast({ type: 'success', message: `CLOB re-registered: ${r.clob_api_key?.slice(0, 8)}…` })
-    else addToast({ type: 'error', message: r?.detail || 'Re-register failed' })
-  })
-
   const fixClob2 = () => run('clob2', async () => {
     const r: any = await api.admin.fixClob2(user.id)
     if (r?.ok) addToast({ type: 'success', message: `CLOB V2 fixed: ${r.steps?.join(', ')}` })
@@ -872,7 +866,6 @@ function ActionsMenu({ user, onClose, onStop, onNuclear, onRedeem }: {
           {sep}
           {item('Bridge POL', 'Send $0.50 USDC (Arb) → POL on Polygon for gas', 'text-yellow-400/70', bridgePol)}
           {item('Fix CLOB V2', "Recreate API key + index Safe pUSD with CLOB V2", 'text-cyan-400/80', fixClob2)}
-          {item('Re-register CLOB', "Delete + recreate API key only (no allowance update)", 'text-blue-400/70', reregisterClob)}
           {item('Migrate V2', 'Re-run pUSD + CTF × 3 approval txs on Safe', 'text-purple-400/60', migrateV2)}
         </div>
 

@@ -175,8 +175,6 @@ export const api = {
       request(`/api/v1/admin/users/${userId}/bridge-pol`, { method: 'POST' }),
     migrateV2: (userId: string) =>
       request(`/api/v1/admin/users/${userId}/migrate-v2`, { method: 'POST' }),
-    reregisterClob: (userId: string) =>
-      request(`/api/v1/admin/users/${userId}/reregister-clob`, { method: 'POST' }),
     fixClob2: (userId: string) =>
       request(`/api/v1/admin/users/${userId}/fix-clob2`, { method: 'POST' }),
   },

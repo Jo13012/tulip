@@ -639,38 +639,6 @@ async def bridge_pol(user_id: str, db: DbSession, admin: AdminUser):
     return result
 
 
-@router.post("/{user_id}/reregister-clob")
-async def reregister_clob(user_id: str, db: DbSession, admin: AdminUser):
-    """Delete + recreate CLOB API key to fix 'maker address not allowed' errors."""
-    from app.services.polymarket_onboarding_service import recreate_clob_creds
-
-    w_q = await db.execute(
-        select(Wallet).where(Wallet.user_id == user_id, Wallet.is_primary == True).limit(1)
-    )
-    wallet = w_q.scalars().first()
-    if not wallet or not wallet.privy_wallet_id or not wallet.wallet_address or not wallet.proxy_address:
-        raise HTTPException(400, "No primary wallet")
-
-    try:
-        creds = await recreate_clob_creds(
-            privy_wallet_id=wallet.privy_wallet_id,
-            eoa_address=wallet.wallet_address,
-            safe_address=wallet.proxy_address,
-        )
-        wallet.clob_api_key = creds["key"]
-        wallet.clob_api_secret = creds["secret"]
-        wallet.clob_api_passphrase = creds["passphrase"]
-        db.add(AuditLog(
-            actor_id=admin["sub"], actor_role="admin",
-            action="user.reregister_clob", entity_type="user", entity_id=user_id,
-            detail=f"safe={wallet.proxy_address[:12]} new_key={creds['key'][:8]}",
-        ))
-        await db.commit()
-        return {"ok": True, "clob_api_key": creds["key"]}
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
 @router.post("/{user_id}/fix-clob2")
 async def fix_clob2(user_id: str, db: DbSession, admin: AdminUser):
     """
