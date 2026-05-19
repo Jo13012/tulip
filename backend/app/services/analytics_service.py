@@ -53,42 +53,45 @@ class AnalyticsService:
                 total_pnl      += sm.total_pnl
                 total_fees     += (sm.total_volume or 0.0) * 20 / 10_000
 
-        # Today's volume/pnl — snapshot baseline before midnight + live increment.
-        # If restart happened today (live_vol < baseline), fall back to live_vol as full today increment.
+        # Today's volume/pnl — same logic as daily_volume chart for current day.
+        today_str = datetime.now(timezone.utc).date().isoformat()
+        daily = await self.daily_volume(db, days=2)
+        today_entry = next((d for d in daily if d["date"] == today_str), None)
+        today_volume = today_entry["volume"] if today_entry else 0.0
+        today_fees   = today_entry["fees"]   if today_entry else 0.0
+
+        # PnL: snapshot delta same approach
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        today_volume = 0.0
-        today_pnl    = 0.0
-        today_fees   = 0.0
+        today_pnl = 0.0
         for s in active:
             engine = live_by_session.get(s.id)
             if not engine:
                 continue
             sm = engine.summary
-            live_vol = sm.total_volume or 0.0
-            live_pnl = sm.total_pnl    or 0.0
+            live_pnl = sm.total_pnl or 0.0
             snap_q = await db.execute(
-                select(
-                    func.max(SessionSnapshot.total_volume),
-                    func.max(SessionSnapshot.realized_pnl),
-                )
+                select(func.max(SessionSnapshot.realized_pnl))
                 .where(
                     SessionSnapshot.session_id == s.id,
                     SessionSnapshot.snapshot_at < today_start,
                 )
             )
             row = snap_q.first()
-            snap_vol = float(row[0] or 0.0) if row else 0.0
-            snap_pnl = float(row[1] or 0.0) if row else 0.0
-            # If live_vol < snap_vol the engine restarted today — take full live_vol as today
+            snap_pnl = float(row[0] or 0.0) if row else 0.0
+            live_vol = sm.total_volume or 0.0
+            snap_vol_q = await db.execute(
+                select(func.max(SessionSnapshot.total_volume))
+                .where(
+                    SessionSnapshot.session_id == s.id,
+                    SessionSnapshot.snapshot_at < today_start,
+                )
+            )
+            snap_vol_row = snap_vol_q.first()
+            snap_vol = float(snap_vol_row[0] or 0.0) if snap_vol_row else 0.0
             if live_vol >= snap_vol:
-                inc_vol = live_vol - snap_vol
-                inc_pnl = live_pnl - snap_pnl
+                today_pnl += live_pnl - snap_pnl
             else:
-                inc_vol = live_vol
-                inc_pnl = live_pnl
-            today_volume += inc_vol
-            today_pnl    += inc_pnl
-            today_fees   += inc_vol * 20 / 10_000
+                today_pnl += live_pnl
 
         # Sum ALL users' trading balances from in-memory cache (balance_poller, zero I/O)
         from app.services.balance_poller import balance_poller
