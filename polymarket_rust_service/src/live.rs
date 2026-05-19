@@ -127,6 +127,10 @@ impl LiveClientHandle {
         Ok(())
     }
 
+    pub async fn delete_api_key(&self) -> Result<serde_json::Value> {
+        self.client.delete_api_key().await.context("delete_api_key")
+    }
+
     pub async fn update_collateral_allowance(&self) -> Result<()> {
         use polymarket_client_sdk_v2::clob::types::request::UpdateBalanceAllowanceRequest;
         let req = UpdateBalanceAllowanceRequest::builder()

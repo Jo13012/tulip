@@ -659,23 +659,7 @@ async def fix_clob2(user_id: str, db: DbSession, admin: AdminUser):
 
     steps = []
 
-    # Step 0: delete existing key so Rust create_or_derive makes a fresh one
-    import httpx as _httpx2
-    _ts = str(int(__import__("time").time()))
-    from app.services.polymarket_onboarding_service import _clob_l1_sig as _l1
-    _sig = await _l1(wallet.privy_wallet_id, wallet.wallet_address, _ts, 0)
-    _del_headers = {
-        "POLY_ADDRESS": wallet.wallet_address,
-        "POLY_SIGNATURE": _sig,
-        "POLY_TIMESTAMP": _ts,
-        "POLY_NONCE": "0",
-        "Content-Type": "application/json",
-    }
-    async with _httpx2.AsyncClient(timeout=15.0, trust_env=False, follow_redirects=True) as _h:
-        _dr = await _h.delete("https://clob-proxy.jolpmaker.workers.dev/auth/api-key", headers=_del_headers)
-        steps.append(f"delete:{_dr.status_code}:{_dr.text[:60]}")
-
-    # Step 1: Rust client auth (GnosisSafe native) + collateral index
+    # Step 1: open Rust client (derives existing key with GnosisSafe context)
     client = ExecutionClient(
         privy_wallet_id=wallet.privy_wallet_id,
         wallet_address=wallet.wallet_address,
@@ -687,13 +671,35 @@ async def fix_clob2(user_id: str, db: DbSession, admin: AdminUser):
     except Exception as e:
         raise HTTPException(500, f"Rust auth failed: {e}")
 
+    # Step 2: delete via Rust (uses L2 creds it just derived — correct auth context)
     try:
-        await client.update_collateral_allowance()
+        await client.delete_api_key()
+        steps.append("key_deleted")
+    except Exception as e:
+        steps.append(f"delete_skipped:{str(e)[:60]}")
+    finally:
+        await client.close()
+
+    # Step 3: reopen — now create_or_derive will create a fresh key (old one deleted)
+    client2 = ExecutionClient(
+        privy_wallet_id=wallet.privy_wallet_id,
+        wallet_address=wallet.wallet_address,
+        proxy_address=wallet.proxy_address,
+    )
+    try:
+        await client2.initialize()
+        steps.append("rust_reauth_ok")
+    except Exception as e:
+        raise HTTPException(500, f"Rust reauth failed: {e}")
+
+    # Step 4: collateral index with new key
+    try:
+        await client2.update_collateral_allowance()
         steps.append("collateral_indexed")
     except Exception as e:
         steps.append(f"collateral_skipped:{str(e)[:60]}")
     finally:
-        await client.close()
+        await client2.close()
 
     # Step 2: Python derive to get the key Rust just created/derived
     CLOB_URL = "https://clob-proxy.jolpmaker.workers.dev"

@@ -112,6 +112,18 @@ class ExecutionClient:
         except Exception as e:
             raise ExecutionClientError(f"CTF allowance failed for {token_id[:16]}...: {e}")
 
+    async def delete_api_key(self):
+        """Delete the current CLOB API key (via Rust, using L2 auth). Use before reinitializing."""
+        await self._ensure_ready()
+        try:
+            resp = await self._http.post(
+                f"{settings.POLYMARKET_RUST_URL}/api/v1/client/delete-api-key",
+                json={"client_id": self._client_id},
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            raise ExecutionClientError(f"delete_api_key failed: {e}")
+
     async def update_collateral_allowance(self):
         """Tell the CLOB to re-index this account's pUSD balance. Must be called before first BUY."""
         await self._ensure_ready()
