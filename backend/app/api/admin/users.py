@@ -671,9 +671,9 @@ async def fix_clob2(user_id: str, db: DbSession, admin: AdminUser):
         "POLY_NONCE": "0",
         "Content-Type": "application/json",
     }
-    async with _httpx2.AsyncClient(timeout=15.0, trust_env=False) as _h:
-        _dr = await _h.delete("https://clob-v2.polymarket.com/auth/api-key", headers=_del_headers)
-        steps.append(f"delete:{_dr.status_code}")
+    async with _httpx2.AsyncClient(timeout=15.0, trust_env=False, follow_redirects=True) as _h:
+        _dr = await _h.delete("https://clob-proxy.jolpmaker.workers.dev/auth/api-key", headers=_del_headers)
+        steps.append(f"delete:{_dr.status_code}:{_dr.text[:60]}")
 
     # Step 1: Rust client auth (GnosisSafe native) + collateral index
     client = ExecutionClient(
