@@ -103,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/client/ensure-sell-allowance", post(client_ensure_sell_allowance))
         .route("/api/v1/client/update-collateral-allowance", post(client_update_collateral_allowance))
         .route("/api/v1/client/delete-api-key", post(client_delete_api_key))
+        .route("/api/v1/client/credentials", post(client_get_credentials))
         .route("/api/v1/client/place-limit-order", post(client_place_limit_order))
         .route("/api/v1/client/open-orders", post(client_open_orders))
         .route("/api/v1/client/order-status", post(client_order_status))
@@ -356,6 +357,11 @@ async fn client_delete_api_key(State(state): State<AppState>, Json(body): Json<C
         .delete_api_key().await
         .map_err(|e| AppError::Internal(format!("delete_api_key failed: {e}")))?;
     Ok(Json(result))
+}
+
+async fn client_get_credentials(State(state): State<AppState>, Json(body): Json<ClientIdRequest>) -> AppResult<Json<Value>> {
+    let creds = get_client(&state, &body.client_id)?.get_credentials();
+    Ok(Json(creds))
 }
 
 async fn client_place_limit_order(State(state): State<AppState>, Json(body): Json<PlaceLimitOrderRequest>) -> AppResult<Json<Value>> {

@@ -817,7 +817,7 @@ function ActionsMenu({ user, onClose, onStop, onNuclear, onRedeem }: {
 
   const fixClob2 = () => run('clob2', async () => {
     const r: any = await api.admin.fixClob2(user.id)
-    if (r?.ok) addToast({ type: 'success', message: `CLOB V2 fixed: ${r.steps?.join(', ')}` })
+    if (r?.ok) addToast({ type: 'success', message: `CLOB V2 fixed: ${r.steps?.join(', ')} | before:${r.key_before} after:${r.key_after}` })
     else addToast({ type: 'error', message: r?.detail || 'Fix CLOB V2 failed' })
   })
 

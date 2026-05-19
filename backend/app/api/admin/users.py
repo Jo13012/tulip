@@ -641,15 +641,7 @@ async def bridge_pol(user_id: str, db: DbSession, admin: AdminUser):
 
 @router.post("/{user_id}/fix-clob2")
 async def fix_clob2(user_id: str, db: DbSession, admin: AdminUser):
-    """
-    Fix 'maker address not allowed' on CLOB V2:
-    1. Rust client authenticate() — uses GnosisSafe+funder natively, creates/derives key
-    2. update_collateral_allowance — registers Safe as deposit wallet
-    3. Python derive to pull the key created by Rust and save to DB
-    """
-    from app.services.polymarket_onboarding_service import _clob_l1_sig
-    import httpx as _httpx
-
+    """Fix 'maker address not allowed': delete key via Rust L2, reopen to force-create new key, save to DB."""
     w_q = await db.execute(
         select(Wallet).where(Wallet.user_id == user_id, Wallet.is_primary == True).limit(1)
     )
@@ -658,6 +650,7 @@ async def fix_clob2(user_id: str, db: DbSession, admin: AdminUser):
         raise HTTPException(400, "No primary wallet")
 
     steps = []
+    key_before = (wallet.clob_api_key or "")[:8]
 
     # Step 1: open Rust client (derives existing key with GnosisSafe context)
     client = ExecutionClient(
@@ -692,45 +685,27 @@ async def fix_clob2(user_id: str, db: DbSession, admin: AdminUser):
     except Exception as e:
         raise HTTPException(500, f"Rust reauth failed: {e}")
 
-    # Step 4: collateral index with new key
+    # Step 4: collateral index + get credentials, then close
+    creds = None
     try:
-        await client2.update_collateral_allowance()
-        steps.append("collateral_indexed")
+        try:
+            await client2.update_collateral_allowance()
+            steps.append("collateral_indexed")
+        except Exception as e:
+            steps.append(f"collateral_skipped:{str(e)[:60]}")
+
+        # Step 5: get credentials directly from Rust handle (the key it just created)
+        raw = await client2.get_credentials()
+        if raw.get("apiKey") and raw.get("secret") and raw.get("passphrase"):
+            creds = {"key": raw["apiKey"], "secret": raw["secret"], "passphrase": raw["passphrase"]}
+            steps.append(f"creds_from_rust:{creds['key'][:8]}")
     except Exception as e:
-        steps.append(f"collateral_skipped:{str(e)[:60]}")
+        steps.append(f"creds_error:{str(e)[:40]}")
     finally:
         await client2.close()
 
-    # Step 2: Python derive to get the key Rust just created/derived
-    CLOB_URL = "https://clob-proxy.jolpmaker.workers.dev"
-    CLOB_V2  = "https://clob-v2.polymarket.com"
-    from app.core.config import settings as _s
-    nonce = 0
-    timestamp = str(int(__import__("time").time()))
-    sig = await _clob_l1_sig(wallet.privy_wallet_id, wallet.wallet_address, timestamp, nonce)
-    l1_headers = {
-        "POLY_ADDRESS": wallet.wallet_address,
-        "POLY_SIGNATURE": sig,
-        "POLY_TIMESTAMP": timestamp,
-        "POLY_NONCE": str(nonce),
-        "Content-Type": "application/json",
-    }
-    creds = None
-    for url in [CLOB_V2, CLOB_URL]:
-        try:
-            async with _httpx.AsyncClient(timeout=15.0, trust_env=False) as http:
-                resp = await http.get(f"{url}/auth/derive-api-key", headers=l1_headers)
-            if resp.is_success:
-                d = resp.json()
-                if d.get("apiKey") and d.get("secret") and d.get("passphrase"):
-                    creds = {"key": d["apiKey"], "secret": d["secret"], "passphrase": d["passphrase"]}
-                    steps.append(f"derived_from_{url.split('//')[1].split('.')[0]}")
-                    break
-        except Exception:
-            pass
-
     if not creds:
-        raise HTTPException(500, f"Could not derive creds after Rust auth. steps={steps}")
+        raise HTTPException(500, f"Could not get creds from Rust. steps={steps}")
 
     wallet.clob_api_key = creds["key"]
     wallet.clob_api_secret = creds["secret"]
@@ -742,7 +717,8 @@ async def fix_clob2(user_id: str, db: DbSession, admin: AdminUser):
         detail=f"safe={wallet.proxy_address[:12]} steps={','.join(steps)}",
     ))
     await db.commit()
-    return {"ok": True, "steps": steps, "clob_api_key": creds["key"]}
+    key_after = (creds["key"] or "")[:8]
+    return {"ok": True, "steps": steps, "key_before": key_before, "key_after": key_after}
 
 
 @router.post("/{user_id}/migrate-v2")

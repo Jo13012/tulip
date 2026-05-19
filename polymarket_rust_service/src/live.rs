@@ -131,6 +131,16 @@ impl LiveClientHandle {
         self.client.delete_api_key().await.context("delete_api_key")
     }
 
+    pub fn get_credentials(&self) -> serde_json::Value {
+        use polymarket_client_sdk_v2::auth::ExposeSecret as _;
+        let creds = self.client.credentials();
+        json!({
+            "apiKey": creds.key().to_string(),
+            "secret": creds.secret().expose_secret(),
+            "passphrase": creds.passphrase().expose_secret(),
+        })
+    }
+
     pub async fn update_collateral_allowance(&self) -> Result<()> {
         use polymarket_client_sdk_v2::clob::types::request::UpdateBalanceAllowanceRequest;
         let req = UpdateBalanceAllowanceRequest::builder()

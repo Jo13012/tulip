@@ -124,6 +124,19 @@ class ExecutionClient:
         except Exception as e:
             raise ExecutionClientError(f"delete_api_key failed: {e}")
 
+    async def get_credentials(self) -> dict:
+        """Return the API key/secret/passphrase held by the Rust client handle."""
+        await self._ensure_ready()
+        try:
+            resp = await self._http.post(
+                f"{settings.POLYMARKET_RUST_URL}/api/v1/client/credentials",
+                json={"client_id": self._client_id},
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            raise ExecutionClientError(f"get_credentials failed: {e}")
+
     async def update_collateral_allowance(self):
         """Tell the CLOB to re-index this account's pUSD balance. Must be called before first BUY."""
         await self._ensure_ready()
