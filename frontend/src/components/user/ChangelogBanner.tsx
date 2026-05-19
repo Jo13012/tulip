@@ -12,7 +12,9 @@ export const CHANGELOG: PatchEntry[] = [
     version: '1.3.1',
     date: 'May 20, 2025',
     notes: [
-      'Builder fees reduced from 0.40% to 0.20% per trade — your net PnL is now higher on every session.',
+      'Builder fees cut in half — from 0.40% to 0.20% per trade. Same strategy, better returns. No action needed on your end.',
+      'Session recovery is now smarter. If the engine restarts mid-session, all fills that happened while it was offline are recovered and counted toward your volume and PnL. Nothing gets lost.',
+      'Reliability improvements across the board — faster reconnections, cleaner state after restarts, and fewer edge cases that could cause a session to stall.',
     ],
   },
   {
